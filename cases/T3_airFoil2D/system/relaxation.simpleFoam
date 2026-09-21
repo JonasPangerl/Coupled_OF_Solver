@@ -1,0 +1,15 @@
+// Relaxation for the simpleFoam reference: airFoil2D tutorial values
+// (tutorial: p 0.3, U and the turbulence equation 0.7); SIMPLEC per spec 13
+
+relaxationFactors
+{
+    fields
+    {
+        p               0.3;
+    }
+    equations
+    {
+        U               0.7;
+        ".*"            0.7;
+    }
+}

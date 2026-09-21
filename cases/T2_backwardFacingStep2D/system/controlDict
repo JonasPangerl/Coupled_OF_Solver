@@ -1,0 +1,78 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T2 - backwardFacingStep2D, k-omega SST (spec 13)
+  Reattachment length from the wall shear stress on lowerWall.
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+// Set by Allrun: coupledFoam or simpleFoam
+application     coupledFoam;
+
+startFrom       latestTime;
+
+startTime       0;
+
+stopAt          endTime;
+
+endTime         20000;
+
+deltaT          1;
+
+writeControl    timeStep;
+
+writeInterval   20000;
+
+purgeWrite      0;
+
+writeFormat     binary;
+
+writePrecision  12;
+
+writeCompression off;
+
+timeFormat      general;
+
+timePrecision   8;
+
+runTimeModifiable false;
+
+functions
+{
+    // Wall shear stress on the lower wall (reattachment, spec 13 T2)
+    wallShearStress
+    {
+        type            wallShearStress;
+        libs            (fieldFunctionObjects);
+        patches         (lowerWall);
+        executeControl  writeTime;
+        writeControl    writeTime;
+        log             false;
+    }
+
+    lowerWallShear
+    {
+        type            surfaces;
+        libs            (sampling);
+        writeControl    writeTime;
+        surfaceFormat   raw;
+        interpolationScheme cell;
+        fields          (wallShearStress);
+
+        surfaces
+        {
+            lowerWall
+            {
+                type        patch;
+                patches     (lowerWall);
+                interpolate false;
+            }
+        }
+    }
+}
+
+// ************************************************************************* //

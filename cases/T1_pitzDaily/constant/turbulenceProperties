@@ -1,0 +1,22 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T1 - k-omega SST (spec 13); Allrun -turbulence
+  overrides the model (e.g. GEKO)
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      turbulenceProperties;
+}
+
+simulationType  RAS;
+
+RAS
+{
+    RASModel        kOmegaSST;
+    turbulence      on;
+    printCoeffs     on;
+}
+
+// ************************************************************************* //

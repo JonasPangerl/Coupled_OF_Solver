@@ -51,3 +51,4 @@ venv/
 
 # Case runs made by the test suite and the benchmark harness
 run/
+cases/**/system/relaxation

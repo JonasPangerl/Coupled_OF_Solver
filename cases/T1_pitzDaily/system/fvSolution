@@ -1,0 +1,172 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T1 - pitzDaily
+  solvers.coupled : block linear solver (spec 6.1)
+  coupled         : outer iteration controls (spec 11)
+  k, omega        : native segregated turbulence solve (spec 5.8)
+  SIMPLE, p, U    : native simpleFoam reference (SIMPLEC, spec 13/14)
+  relaxationFactors: from system/relaxation, which Allrun copies from
+                     relaxation.coupledFoam (k, omega 0.7, spec 5.8) or
+                     relaxation.simpleFoam (tutorial values)
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSolution;
+}
+
+solvers
+{
+    coupled
+    {
+        solver          blockBiCGStab;
+        preconditioner  blockGAMG;
+        tolerance       1e-8;
+        relTol          0.05;
+        maxIter         200;
+        gmresRestart    10;
+        blockGAMG
+        {
+            agglomerator          faceAreaPair;
+            nCellsInCoarsestLevel 500;
+            mergeLevels           1;
+            smoother              blockGaussSeidel;
+            nPreSweeps            1;
+            nPostSweeps           2;
+            nFinestSweeps         2;
+            coarsestSolver        blockBiCGStab;
+            coarsestTolerance     1e-3;
+            maxOperatorComplexity 1.5;
+            cacheAgglomeration    true;
+        }
+    }
+
+    p
+    {
+        solver          GAMG;
+        smoother        GaussSeidel;
+        tolerance       1e-10;
+        relTol          0.1;
+    }
+
+    Phi
+    {
+        $p;
+    }
+
+    "(U|k|omega)"
+    {
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-10;
+        relTol          0.1;
+    }
+}
+
+coupled
+{
+    maxIter             400;
+    potentialInit       yes;
+    startupUpwindIters  50;
+    nonOrthLimiter      0.5;
+
+    ptc
+    {
+        cflStrategy     mRDM;
+        CFL0            5;
+        CFLmin          1;
+        CFLmax          500;
+        gamma           1;
+        betaMax         1.5;
+        betaExp         1.1;
+        nHold           10;
+    }
+
+    lineSearch
+    {
+        fU              0.3;
+        fp              0.5;
+        omegaMin        0.1;
+        kappa           0.5;
+        maxCflCuts      3;
+    }
+
+    localLimit
+    {
+        enabled         yes;
+        fLoc            0.5;
+    }
+
+    remediation
+    {
+        static
+        {
+            enabled             yes;
+            nonOrthThreshold    70;
+            skewThreshold       4;
+            volRatioThreshold   20;
+            aspectThreshold     1000;
+            beta                0;
+            nonOrthLimiter      0.2;
+            cflFactor           0.5;
+        }
+        dynamic
+        {
+            enabled             yes;
+            cU                  2;
+            cp                  5;
+            cSpike              0.5;
+            nLayers             1;
+            nQuietIters         20;
+            cflFactor           0.1;
+            clipToNeighbourMean yes;
+        }
+    }
+
+    sentinel
+    {
+        maxRollbacks    5;
+    }
+
+    bounds
+    {
+        kMin            1e-12;
+        omegaMin        1e-6;
+        nutMaxFactor    1e5;
+    }
+
+    convergence
+    {
+        mode                any;
+        forceCoeffsWindow   100;
+        forceCoeffsTol      0.002;
+        residualTol         1e-6;   // T1 pass criterion R < 1e-6
+    }
+
+    ftz             yes;
+    writeState      yes;
+}
+
+SIMPLE
+{
+    nNonOrthogonalCorrectors 0;
+    consistent      yes;
+
+    // Reference converged to 1e-8 (spec 13)
+    residualControl
+    {
+        p               1e-8;
+        U               1e-8;
+        "(k|omega)"     1e-8;
+    }
+}
+
+potentialFlow
+{
+    nNonOrthogonalCorrectors 3;
+}
+
+#include "relaxation"
+
+// ************************************************************************* //

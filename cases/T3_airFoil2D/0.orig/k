@@ -1,0 +1,38 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T3 - airFoil2D (SST/GEKO; the tutorial uses SA)
+  Freestream: I = 1 %, |U| = 26.003 m/s -> k = 1.5 (I |U|)^2 = 0.1014
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      k;
+}
+
+dimensions      [0 2 -2 0 0 0 0];
+
+internalField   uniform 0.1014;
+
+boundaryField
+{
+    inlet
+    {
+        type            freestream;
+        freestreamValue $internalField;
+    }
+    outlet
+    {
+        type            freestream;
+        freestreamValue $internalField;
+    }
+    walls
+    {
+        type            kqRWallFunction;
+        value           $internalField;
+    }
+
+    #includeEtc "caseDicts/setConstraintTypes"
+}
+
+// ************************************************************************* //

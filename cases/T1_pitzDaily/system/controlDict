@@ -1,0 +1,67 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T1 - pitzDaily, k-omega SST (spec 13)
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+// Set by Allrun: coupledFoam or simpleFoam
+application     coupledFoam;
+
+startFrom       latestTime;
+
+startTime       0;
+
+stopAt          endTime;
+
+// Upper bound; both solvers stop on their own convergence criterion
+endTime         20000;
+
+deltaT          1;
+
+writeControl    timeStep;
+
+writeInterval   20000;
+
+purgeWrite      0;
+
+writeFormat     binary;
+
+writePrecision  12;
+
+writeCompression off;
+
+timeFormat      general;
+
+timePrecision   8;
+
+runTimeModifiable false;
+
+functions
+{
+    // Pressure drop inlet -> outlet (spec 13 T1): area-averaged p
+    inletP
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            inlet;
+        operation       areaAverage;
+        fields          (p);
+    }
+    outletP
+    {
+        $inletP;
+        name            outlet;
+    }
+}
+
+// ************************************************************************* //

@@ -1,0 +1,68 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T3 - airFoil2D, kOmegaSST and GEKO (spec 13)
+  Force coefficients: chord 35.049 m, span 0.05 m, |U_inf| = 26.003 m/s
+  (freestream (25.75 3.62 0)), drag along U_inf, lift normal to it.
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+// Set by Allrun: coupledFoam or simpleFoam
+application     coupledFoam;
+
+startFrom       latestTime;
+
+startTime       0;
+
+stopAt          endTime;
+
+endTime         20000;
+
+deltaT          1;
+
+writeControl    timeStep;
+
+writeInterval   20000;
+
+purgeWrite      0;
+
+writeFormat     binary;
+
+writePrecision  12;
+
+writeCompression off;
+
+timeFormat      general;
+
+timePrecision   8;
+
+runTimeModifiable false;
+
+functions
+{
+    forceCoeffs
+    {
+        type            forceCoeffs;
+        libs            (forces);
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+
+        patches         (walls);
+        rho             rhoInf;
+        rhoInf          1;
+        CofR            (0 0 0);
+        liftDir         (-0.139214 0.990263 0);
+        dragDir         (0.990263 0.139214 0);
+        pitchAxis       (0 0 1);
+        magUInf         26.0032;
+        lRef            35.0492;
+        Aref            1.75246;
+    }
+}
+
+// ************************************************************************* //

@@ -1,0 +1,11 @@
+// Relaxation for the simpleFoam reference: pitzDaily tutorial values
+// (SIMPLEC, consistent yes)
+
+relaxationFactors
+{
+    equations
+    {
+        U               0.9;
+        ".*"            0.9;
+    }
+}

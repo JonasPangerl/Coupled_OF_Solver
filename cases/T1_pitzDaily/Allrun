@@ -1,0 +1,102 @@
+#!/bin/sh
+#------------------------------------------------------------------------------
+# T1 - pitzDaily, k-omega SST (spec 13)
+#
+#   ./Allrun [-solver coupledFoam|simpleFoam] [-np N] [-turbulence MODEL]
+#            [-mesh-only] [-restart]
+#
+#   -restart     continue from the latest time (T-restart); no mesh, no
+#                potentialFoam, log goes to log.<solver>.restart
+#
+# coupledFoam with coupled.potentialInit yes: potentialFoam -writePhi
+# -writep initialises U, p, phi first (spec 7.4).
+# Parallel: scotch, mpirun with core binding (CF_MPI_BIND=none on a shared
+# machine).
+#------------------------------------------------------------------------------
+cd "${0%/*}" || exit 1
+. "${WM_PROJECT_DIR:?}"/bin/tools/RunFunctions
+
+solver=coupledFoam
+np=1
+model=""
+meshOnly=false
+restart=false
+
+while [ "$#" -gt 0 ]
+do
+    case "$1" in
+        -solver) solver="$2"; shift 2 ;;
+        -np) np="$2"; shift 2 ;;
+        -turbulence) model="$2"; shift 2 ;;
+        -mesh-only) meshOnly=true; shift ;;
+        -restart) restart=true; shift ;;
+        *) echo "Unknown option $1" 1>&2; exit 1 ;;
+    esac
+done
+
+# Case-specific mesh generation
+mesh()
+{
+    runApplication blockMesh
+}
+
+bind="${CF_MPI_BIND:-core}"
+if [ "$bind" = core ]
+then
+    mpiOpts="--bind-to core --map-by core"
+else
+    mpiOpts="--bind-to $bind"
+fi
+
+# Run an application serial or parallel; log name as $2
+runApp()
+{
+    app="$1"; log="$2"; shift 2
+    if [ "$np" -gt 1 ]
+    then
+        mpirun $mpiOpts -np "$np" "$app" -parallel "$@" > "$log" 2>&1
+    else
+        "$app" "$@" > "$log" 2>&1
+    fi
+}
+
+foamDictionary -entry application -set "$solver" system/controlDict > /dev/null
+cp "system/relaxation.$solver" system/relaxation
+if [ -n "$model" ]
+then
+    foamDictionary -entry RAS.RASModel -set "$model" \
+        constant/turbulenceProperties > /dev/null
+fi
+
+if [ "$restart" = true ]
+then
+    runApp "$solver" "log.$solver.restart"
+    exit $?
+fi
+
+restore0Dir
+mesh
+
+[ "$meshOnly" = true ] && exit 0
+
+if [ "$np" -gt 1 ]
+then
+    foamDictionary -entry numberOfSubdomains -set "$np" \
+        system/decomposeParDict > /dev/null
+    runApplication decomposePar -force
+fi
+
+if [ "$solver" = coupledFoam ]
+then
+    potential=$(foamDictionary -entry coupled.potentialInit -value \
+        system/fvSolution 2>/dev/null)
+    case "$potential" in
+        yes|on|true)
+            runApp potentialFoam log.potentialFoam -writePhi -writep || exit 1
+            ;;
+    esac
+fi
+
+runApp "$solver" "log.$solver"
+
+#------------------------------------------------------------------------------
