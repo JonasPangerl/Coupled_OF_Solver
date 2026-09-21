@@ -10,7 +10,7 @@
 #   -mesh coarse boxes at levels 1 2 2 3 4, ~1-2 M cells (development mesh);
 #                body surface, features and layers as fine. Realised by
 #                foamDictionary edits of system/snappyHexMeshDict
-#   -np N        ranks for meshing and solving (default 16, scotch)
+#   -np N        ranks for meshing and solving (default 10, scotch)
 #   -mesh-only   mesh and checkMesh only (or reuse and re-decompose an
 #                existing mesh for -np); writes mesh_cells.txt and mesh.info
 #   -remesh      mesh again even if the case already holds a mesh of the
@@ -37,7 +37,7 @@ cd "${0%/*}" || exit 1
 . "${WM_PROJECT_DIR:?}"/bin/tools/RunFunctions
 
 solver=coupledFoam
-np=16
+np=10
 model=""
 variant=fine
 meshOnly=false

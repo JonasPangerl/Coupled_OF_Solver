@@ -3,7 +3,8 @@
 
   Mesh variants (Allrun -mesh, set with foamDictionary before meshing):
     a  tutorial: motorBike level (5 6), features 6, refinementBox 4
-    b  +1:       motorBike level (6 7), features 7, refinementBox 5
+    b  finer:    motorBike level (6 6), features 7, refinementBox 5
+                 (target 1-2 M cells, D-031)
   The values below are those of variant a.
 
   Deviations from the tutorial (none changes the final mesh of variant a):

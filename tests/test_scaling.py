@@ -1,6 +1,8 @@
 """T-scaling - strong scaling on T4b (spec 13). Heavy.
 
-Ranks 1, 2, 4, 8, 16 (CF_SCALING_RANKS overrides), 300 iterations each,
+Ranks 1, 2, 4, 8 and NP = CF_HEAVY_NP (default 10; the spec's 16 is
+capped by the 10-core user directive D-031; CF_SCALING_RANKS overrides),
+300 iterations each,
 coupledFoam and simpleFoam (SIMPLEC), same mesh and decomposition method
 (scotch). Time per iteration is measured inside the solver loop from the
 logs (coupledFoam: CF| tWall, or the sum of tIter; simpleFoam: ClockTime),
@@ -10,9 +12,9 @@ wall time, CPU-hours and peak RSS of every run come from the per-rank
 
 Parallel efficiency E(N) = t(N0) * N0 / (t(N) * N) with N0 the smallest rank
 count (1 in the spec run).
-Pass: E_coupledFoam(16) >= 0.8 * E_simpleFoam(16).
+Pass: E_coupledFoam(N) >= 0.8 * E_simpleFoam(N), N the largest rank count.
 
-The T4b mesh is built once with 16 ranks into run/T4b_mesh and reused; the
+The T4b mesh is built once with NP ranks into run/T4b_mesh and reused; the
 other rank counts are derived from it (run/T4b_mesh_np<N>, see
 test_T4_motorBike.mesh_dir).
 """
@@ -35,8 +37,10 @@ MIN_RELATIVE_EFFICIENCY = 0.8
 
 
 def ranks() -> list[int]:
-    r = os.environ.get("CF_SCALING_RANKS", "1,2,4,8,16")
-    return sorted({int(x) for x in r.split(",") if x.strip()})
+    r = os.environ.get("CF_SCALING_RANKS")
+    if r:
+        return sorted({int(x) for x in r.split(",") if x.strip()})
+    return sorted({n for n in (1, 2, 4, 8, 16) if n < NP} | {NP})
 
 
 def fixed_iterations(solver: str) -> dict:

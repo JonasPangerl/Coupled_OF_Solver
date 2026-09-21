@@ -17,6 +17,9 @@ ranks are not bound to cores (CF_MPI_BIND=none) and heavy tests are skipped
 unless CF_FORCE_HEAVY=1. With CF_MPI_CPUSET=10-15 (a core set disjoint from
 the other job, which must itself run with --cpu-set) ranks are pinned there
 and heavy tests run; use --ranks / case np not larger than the set.
+
+Heavy cases run with CF_HEAVY_NP ranks (default 10: the user caps this
+machine at 10 cores, D-031); on a free machine ranks are bound to cores.
 """
 
 from __future__ import annotations

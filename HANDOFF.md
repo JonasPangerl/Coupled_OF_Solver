@@ -28,14 +28,11 @@ then `PLAN.md`, `DECISIONS.md` (D-001..D-029), `SPEC_amendment_B.md`,
 
 ## 2. Uncommitted work at handoff time
 
-- `src/blockSolvers/blockGAMG.{H,C}`, new `blockGAMGProcAgglomeration.H`:
-  processor agglomeration (spec amendment 6.3.4), being written by a
-  background subagent when the session was compacted. Its report will
-  arrive as a task notification. After it: rebuild, check the diff,
-  verify serial unchanged and 4-rank on/off identical, then commit.
-- `cases/*/Allrun`, `tests/cflib/env.py`, `tests/conftest.py`,
-  `tests/test_T4_motorBike.py`: `CF_MPI_CPUSET` (disjoint core set next to
-  another job), `CF_HEAVY_NP` (ranks of heavy cases). Ready to commit.
+Nothing any more: the processor agglomeration (6.3.4, D-030) is committed
+and verified (serial bit-identical, 4-rank on/off <= 2e-6 for V/F/W and
+dense LU), as is the CF_MPI_CPUSET / CF_HEAVY_NP plumbing. New since the
+handoff: amendment B11 (hot-loop performance rules, SPEC_amendment_B11.md,
+still to implement) and the user directives in D-031.
 
 ## 3. Results so far (all 1 rank unless stated)
 
@@ -66,6 +63,11 @@ FGMRES+K+Eisenstat-Walker: 58 its / 18 s (GS) or 69 its / 6 s (ILU0).
    simultaneous exchanges on different levels). Reproduce with
    `mpirun --bind-to none -np 4 Test-blockGAMG -parallel -cycle K` on
    `run/unit_cavity`, then coupledFoam on `run/T0_Re100_np4`.
+   New evidence (D-030 verification): the K cycle stalls just above the
+   1e-9 tolerance (final 1.8e-8) on unit_cavity in the *pre-change
+   baseline* as well, at 4 ranks with agglomeration off - so there is a
+   pre-existing K-cycle/FGMRES defect (or a float-precision stall of the
+   K-step GCR) independent of 6.3.4. V/F/W are fine on the same system.
 2. **Formal ILU0 decision** (spec 6.3: Gate B2, >= 15 % wall-clock gain on
    T2): run T2 with blockGaussSeidel vs blockILU0 (FGMRES+K), record in
    DECISIONS and set the case default. T0 data already strongly favour ILU0.
@@ -129,11 +131,14 @@ Correctness-critical, worth a careful independent read:
 - System OpenFOAM stays untouched; coupledFoam is an add-on.
 - Machine shared with F1 runs: check load before any build/run; tiny
   tests only while F1 runs; heavy tests only after the user says so.
-  Next to F1: `CF_MPI_CPUSET=10-15 CF_HEAVY_NP=6` (F1 itself pinned with
-  `mpirun --cpu-set 0-9 --bind-to core`).
+  Since 2026-09-21 evening (D-031): the F1 job is being stopped; heavy
+  runs use at most 10 cores (`CF_HEAVY_NP=10`, now the default) with core
+  binding; `CF_MPI_CPUSET` is no longer needed once F1 is gone.
 - Every performance result with wall-clock AND CPU-hours; the goal is the
   fastest solver, not the fewest iterations.
 - Everything in git in English; final English LaTeX paper with vector
-  figures, regenerable from `results/`.
+  figures, regenerable from `results/`. The paper is delivered as a
+  compiled PDF, with intermediate PDF builds so the user can inspect
+  drafts (LaTeX is installed).
 - Parallel subagents are welcome to speed up work (give them exclusive
   files; the lead integrates, builds and commits).

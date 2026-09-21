@@ -6,10 +6,10 @@
 #            [-turbulence MODEL] [-mesh-only] [-remesh] [-restart]
 #
 #   -mesh a      tutorial refinement (~350 k cells)                  [default]
-#   -mesh b      refinement levels +1 on the motorBike surface, its feature
-#                edges and the refinement box (target 3-5 M cells); realised
-#                by foamDictionary edits of system/snappyHexMeshDict
-#   -np N        ranks for meshing and solving (default 16, scotch)
+#   -mesh b      motorBike surface level (6 6), features 7, refinementBox 5
+#                (target 1-2 M cells, D-031: a presentable case for the
+#                user's post-processing tool); foamDictionary edits
+#   -np N        ranks for meshing and solving (default 10, scotch)
 #   -mesh-only   mesh and checkMesh only (or reuse and re-decompose an
 #                existing mesh for -np); writes mesh_cells.txt and mesh.info
 #   -remesh      mesh again even if the case already holds a mesh of the
@@ -34,7 +34,7 @@ cd "${0%/*}" || exit 1
 . "${WM_PROJECT_DIR:?}"/bin/tools/RunFunctions
 
 solver=coupledFoam
-np=16
+np=10
 model=""
 variant=a
 meshOnly=false
@@ -147,7 +147,7 @@ setMeshLevels()
 {
     case "$variant" in
         a) surf="(5 6)"; feat=6; box=4 ;;
-        b) surf="(6 7)"; feat=7; box=5 ;;
+        b) surf="(6 6)"; feat=7; box=5 ;;
     esac
     shm=system/snappyHexMeshDict
     cmc=castellatedMeshControls

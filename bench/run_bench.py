@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import json
 import re
 import statistics
@@ -53,6 +54,9 @@ from cflib import logs, post, results     # noqa: E402
 
 WRAPPER = REPO / "bench" / "rank_wrapper.sh"
 
+# Ranks of the heavy benchmark cases (user cap: 10 cores, D-031)
+HEAVY_NP = int(os.environ.get("CF_HEAVY_NP", "10"))
+
 # Case table: template, extra Allrun args, monitor, iteration budgets, ranks
 CASES = {
     "T1": {"template": "T1_pitzDaily", "args": [], "monitor": "dp",
@@ -67,12 +71,12 @@ CASES = {
                 "iters": {"simpleFoam": 6000, "coupledFoam": 2000}, "np": 1},
     "T4a": {"template": "T4_motorBike", "args": ["-mesh", "a"],
             "monitor": "forces",
-            "iters": {"simpleFoam": 3000, "coupledFoam": 1500}, "np": 16},
+            "iters": {"simpleFoam": 3000, "coupledFoam": 1500}, "np": HEAVY_NP},
     "T4b": {"template": "T4_motorBike", "args": ["-mesh", "b"],
             "monitor": "forces",
-            "iters": {"simpleFoam": 4000, "coupledFoam": 2000}, "np": 16},
+            "iters": {"simpleFoam": 4000, "coupledFoam": 2000}, "np": HEAVY_NP},
     "T5": {"template": "T5_ahmed", "args": [], "monitor": "forces",
-           "iters": {"simpleFoam": 5000, "coupledFoam": 2500}, "np": 16},
+           "iters": {"simpleFoam": 5000, "coupledFoam": 2500}, "np": HEAVY_NP},
 }
 
 WINDOW = 100
