@@ -68,6 +68,10 @@ class rhieChow
         //- True once D has been set
         bool valid_;
 
+        //- Static-remediation cells: cellLimited 1 gradient of p (8.1)
+        boolList isStatic_;
+        bool anyStatic_;
+
 
 public:
 
@@ -77,6 +81,10 @@ public:
 
 
     // Member Functions
+
+        //- Static remediation cells (8.1): the pressure gradient of the
+        //  Rhie-Chow terms uses "cellLimited Gauss linear 1" there
+        void setStaticCells(const boolList& isStatic);
 
         //- Set D from abar (per cell) and build D_f with the boundary policy
         void updateD(const scalarField& abar, const volScalarField& p);

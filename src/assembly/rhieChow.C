@@ -8,6 +8,9 @@
 #include "fvcGrad.H"
 #include "calculatedFvPatchFields.H"
 #include "calculatedFvsPatchFields.H"
+#include "gradScheme.H"
+#include "IStringStream.H"
+#include "PstreamReduceOps.H"
 
 using namespace Foam::boundaryCoupling;
 
@@ -77,7 +80,9 @@ Foam::rhieChow::rhieChow(const fvMesh& mesh)
         dimensionedScalar(dimVolume/dimTime, Zero),
         calculatedFvsPatchScalarField::typeName
     ),
-    valid_(false)
+    valid_(false),
+    isStatic_(mesh.nCells(), false),
+    anyStatic_(false)
 {}
 
 
@@ -154,6 +159,18 @@ void Foam::rhieChow::updateD
 }
 
 
+void Foam::rhieChow::setStaticCells(const boolList& isStatic)
+{
+    isStatic_ = isStatic;
+    bool any = false;
+    forAll(isStatic_, celli)
+    {
+        any = any || isStatic_[celli];
+    }
+    anyStatic_ = returnReduceOr(any);
+}
+
+
 Foam::scalar Foam::rhieChow::Dref() const
 {
     return gAverage(D_.primitiveField());
@@ -184,6 +201,25 @@ void Foam::rhieChow::updateExplicit
 )
 {
     gradp_ = fvc::grad(p);
+
+    if (anyStatic_)
+    {
+        // Static remediation cells: limited gradient (spec 8.1, D-018)
+        IStringStream schemeData("cellLimited Gauss linear 1");
+        tmp<fv::gradScheme<scalar>> tscheme =
+            fv::gradScheme<scalar>::New(mesh_, schemeData);
+        const tmp<volVectorField> tgl = tscheme().grad(p, "grad(p)Limited");
+        const vectorField& gl = tgl().primitiveField();
+        vectorField& g = gradp_.primitiveFieldRef();
+        forAll(g, celli)
+        {
+            if (isStatic_[celli])
+            {
+                g[celli] = gl[celli];
+            }
+        }
+    }
+
     gradp_.correctBoundaryConditions();
 
     const tmp<surfaceScalarField> tcorr = noc.correction(p);

@@ -18,7 +18,7 @@ solvers
     {
         solver          blockBiCGStab;
         preconditioner  blockGAMG;
-        tolerance       1e-8;
+        tolerance       1e-12;  // below the outer target R < 1e-8 (D-022)
         relTol          0.05;
         maxIter         200;
         gmresRestart    10;

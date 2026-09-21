@@ -179,3 +179,97 @@ per-face-limited correction (native `limitedSnGrad` correction, the stronger
 limit on faces touching a static cell), plus the explicit transpose term
 `-fvc::div(nuEff dev2(T(grad U)))` exactly as native `linearViscousStress`.
 The same limiter treatment is applied to the p-p Laplacian.
+
+**Addendum (implementation):** the flux convention follows native
+simpleFoam: `phi` is stored *relative* in MRF zones (`MRF.makeRelative`
+after the flux update), because the turbulence model convects with the same
+`phi` object. Spec 5.3(e) "makeAbsolute after the flux update" would make the
+turbulence transport inconsistent in MRF zones.
+
+## D-015 - blockILU0 is the block DILU form
+
+"LDU-native incomplete block factorization with 4x4 block pivots" (6.3) is
+implemented as the block analogue of native `DILUPreconditioner`: the
+off-diagonal blocks of A are kept, only the diagonal blocks are modified,
+`D*_u = D_u - L_f D*_l^-1 U_f`. For LDU (face-based) sparsity this is the
+factorisation whose fill stays inside the LDU pattern; full ILU(0) would also
+update off-diagonal blocks between two neighbours of a common cell, which
+are not faces in LDU addressing and hence not stored.
+
+## D-016 - Residual definitions used in the log
+
+- `R` (7.1, CFL control) uses the L2 norm of 6.1: `||b - A x||_2 / normFactor`
+  of the scaled system, divided by its value at iteration 1.
+- `rU`, `rp` in the `CF|` line are L1-normalised like native OpenFOAM initial
+  residuals: `sum|r_i| / sum(|Ax_i| + |b_i|)` over rows 0-2 and row 3. This
+  keeps them directly comparable with the `Initial residual` of simpleFoam in
+  the report plots.
+
+## D-017 - Atomic write at file level
+
+Spec 10 asks for fields to be written to `<time>.tmp` and renamed. A
+directory rename conflicts with native Time bookkeeping: `uniform/time`
+stores the directory name, and function objects keep state in the time
+directory. Implemented instead: native field write, then `coupledState`
+is written as `coupledState.tmp` and renamed (atomic `rename(2)`) per
+processor directory. Because it is written last, its presence marks a
+complete time directory, and restart reads only a directory that has it.
+With the collated file handler the rename is skipped (logged); the case
+templates use the uncollated handler.
+
+## D-018 - "gradient limiter forced to cellLimited 1" in static cells
+
+Implemented for the pressure gradient of the Rhie-Chow terms (native
+`cellLimited Gauss linear 1` gradient selected per static cell). The
+velocity gradient inside the high-order convection scheme comes from the
+user's `div(phi,U)` scheme and cannot be overridden per cell without a
+custom scheme. With the default `remediation.static.beta 0` static cells
+use pure upwind convection, so that gradient does not enter there. If a user
+sets `static.beta > 0`, the unlimited gradient is used in those cells. This
+is logged as a limitation.
+
+## D-019 - Outflow through a fixedValue velocity face
+
+The 5.5 table (as far as legible) gives `a_P += max(phi_f, 0)` for fixedValue
+faces. The implementation uses the native `fvm::div` boundary treatment,
+which takes the boundary value for both flow directions (`b -= phi_f U_b`).
+The two differ only if the flux through a fixedValue face points against the
+prescribed velocity, which does not occur in the test cases.
+
+## D-020 - A diverged linear solve is a failed step
+
+Observed on T0 at CFL 500 (2026-09-21): near the float floor block-BiCGStab
+can diverge (final linear residual 9e4 after 200 iterations). The spec's
+rule "after maxCflCuts accept the step with omegaMin" then applies 10 % of a
+garbage increment and destroys a converged state. Two changes:
+1. blockBiCGStab returns the iterate with the smallest residual if it does
+   not converge (Krylov output never worse than the initial guess).
+2. A solve that does not reduce the residual, or yields non-finite values,
+   is treated like `omega < omegaMin`: CFL cut by kappa and the step is
+   repeated. If the cuts are exhausted, the step is skipped (no field
+   update) and CFL is cut by the sentinel factor. The line-search rule of 7.2
+   is unchanged for successful solves.
+
+## D-021 - Strong pressure reference in closed domains
+
+For a closed domain (`p.needReference()`), the native weak reference
+(doubling the diagonal of the reference cell) leaves a near-null space. After
+the right-hand side is rounded to float, its compatibility condition is
+violated slightly and the float Krylov solve drifts along the
+constant-pressure mode. Observed on T0: dp-limited line search, then
+divergence. Instead, the continuity row of the reference cell is replaced by
+`d (p_ref - pRefValue) = 0`. This is exact, not an approximation: in a
+closed incompressible domain the continuity equations sum to zero
+identically, so one of them is redundant. Result on T0: stable convergence to
+R = 7e-8.
+
+## D-022 - Linear tolerance vs. the outer residual target
+
+Spec 6.1 sets the linear `tolerance 1e-8` (absolute, on ||r||/normFactor);
+T0 requires the outer `R < 1e-8`, where R is normalised by the iteration-1
+value (||r_1||/normFactor = 0.088 on T0). Once ||r||/normFactor < 1e-8 the
+linear solver does zero iterations, the increment is zero and the outer
+iteration stalls (observed: R frozen at 7.0e-8). The T0 case therefore uses
+`tolerance 1e-12` (a tightening, allowed by rule 0.2). The default stays at
+1e-8; cases with a tighter outer target set the linear tolerance
+accordingly.

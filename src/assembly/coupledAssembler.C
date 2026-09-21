@@ -114,6 +114,7 @@ Foam::coupledAssembler::coupledAssembler
 void Foam::coupledAssembler::setStaticCells(const boolList& isStatic)
 {
     noc_.setStaticCells(isStatic);
+    rc_.setStaticCells(isStatic);
 }
 
 
@@ -568,14 +569,58 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
         }
     }
 
-    // --- Pressure reference (native setReference: diag doubled, the
-    //     residual drives p_ref towards pRefValue)
+    // --- Pressure reference for closed domains (DECISIONS.md D-021):
+    //     the continuity row of the reference cell is replaced by
+    //     d (p_ref - pRefValue) = 0. Exact, because in a closed domain the
+    //     continuity equations sum to zero and one of them is redundant;
+    //     it removes the near-null space that the native weak reference
+    //     (diagonal doubling) leaves for a float Krylov solve.
     if (needRef_ && pRefCell_ >= 0)
     {
-        const doubleScalar d = Dd_[di(pRefCell_, blockP, blockP)];
-        Dd_[di(pRefCell_, blockP, blockP)] += d;
-        Ax_[pRefCell_*blockDim + blockP] += d*pi[pRefCell_];
-        b_[pRefCell_*blockDim + blockP] += d*pRefValue_;
+        const label c = pRefCell_;
+        const doubleScalar d = Dd_[di(c, blockP, blockP)];
+
+        for (label k = 0; k < blockDim; ++k)
+        {
+            Dd_[di(c, blockP, k)] = 0;
+        }
+        Dd_[di(c, blockP, blockP)] = d;
+
+        const label nInternal = mesh_.nInternalFaces();
+        for (const label facei : mesh_.cells()[c])
+        {
+            if (facei < nInternal)
+            {
+                blockScalar* blk =
+                    (own[facei] == c ? Aup : Alo) + facei*blockSize;
+                for (label k = 0; k < blockDim; ++k)
+                {
+                    blk[blockP*blockDim + k] = 0;
+                }
+            }
+            else
+            {
+                const label patchi =
+                    mesh_.boundaryMesh().whichPatch(facei);
+                if (kinds_[patchi] == patchKind::processor)
+                {
+                    const label pf =
+                        facei - mesh_.boundaryMesh()[patchi].start();
+                    blockScalar* blk =
+                        A_.interfaceCoeffs(blockIndex_[patchi]).data()
+                      + pf*blockSize;
+                    for (label k = 0; k < blockDim; ++k)
+                    {
+                        blk[blockP*blockDim + k] = 0;
+                    }
+                }
+            }
+        }
+
+        // Row residual d (pRefValue - p_ref); the diagonal loop below adds
+        // d p_ref to A x
+        Ax_[c*blockDim + blockP] = 0;
+        b_[c*blockDim + blockP] = d*pRefValue_;
     }
 
     // --- Row 3 diagonal contribution to A x

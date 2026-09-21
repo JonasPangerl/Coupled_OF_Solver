@@ -41,6 +41,7 @@ Description
 #include "coupledDefaults.H"
 #include "blockScalar.H"
 #include "blockSolver.H"
+#include "doubleReduce.H"
 #include "blockGAMGPrecon.H"
 #include "coupledAssembler.H"
 #include "MRFCoupling.H"
@@ -367,6 +368,7 @@ int main(int argc, char *argv[])
         label cuts = 0;
         label nLocLim = 0;
         scalar Rraw = 0;
+        bool skipStep = false;
 
         // --- Assemble, solve, line search with CFL cuts (7.2)
         while (true)
@@ -402,16 +404,35 @@ int main(int argc, char *argv[])
                 }
             }
 
-            omega = ls.omega(dx);
+            // A linear solve that did not reduce the residual (or produced
+            // non-finite values) is a failed step, like a line-search
+            // failure (DECISIONS.md D-020)
+            const bool solveFailed =
+                (!perf.converged
+             && !(perf.finalResidual < perf.initialResidual))
+             || !std::isfinite(doubleReduce::sumSqr(dx));
 
-            if (omega < ls.omegaMin() && cuts < ls.maxCflCuts())
+            omega = (solveFailed ? 0 : ls.omega(dx));
+
+            if
+            (
+                (solveFailed || omega < ls.omegaMin())
+             && cuts < ls.maxCflCuts()
+            )
             {
                 ptc.decrease(ls.kappa());
                 ++cuts;
                 ++nCflCutsTotal;
                 continue;
             }
-            if (omega < ls.omegaMin())
+            if (solveFailed)
+            {
+                // No update from a failed solve: skip the step
+                skipStep = true;
+                dx = Zero;
+                omega = 0;
+            }
+            else if (omega < ls.omegaMin())
             {
                 omega = ls.omegaMin();
                 rem.markDynamic(ls.offendingCells(dx));
@@ -433,8 +454,19 @@ int main(int argc, char *argv[])
                 << coupledDefaults::clampValue << " (spec 9.2)" << endl;
         }
 
+        if (skipStep)
+        {
+            ptc.decrease(sen.cflFactor());
+            Info<< "coupledFoam: linear solve failed after " << cuts
+                << " CFL cuts at iteration " << iter
+                << ", step skipped, CFL -> " << ptc.CFL() << endl;
+        }
+
         // --- Field update
-        rem.clipIncrement(dx, U, omega, ls.Uref());
+        if (!skipStep)
+        {
+            rem.clipIncrement(dx, U, omega, ls.Uref());
+        }
         sen.store(U, p, phi, kPtr, omegaPtr, nutPtr);
 
         {
@@ -571,17 +603,19 @@ int main(int argc, char *argv[])
             converged = true;
             Info<< "coupledFoam: converged at iteration " << iter
                 << " (R " << R << ")" << endl;
-            runTime.writeNow();
+            // As native solvers: write, end, and let runTime.loop() run the
+            // function objects for the final state
+            runTime.writeAndEnd();
             writeOutputs();
-            break;
+            continue;
         }
 
         if (iter >= maxIter)
         {
             Info<< "coupledFoam: maxIter " << maxIter << " reached" << endl;
-            runTime.writeNow();
+            runTime.writeAndEnd();
             writeOutputs();
-            break;
+            continue;
         }
 
         if (runTime.writeTime())

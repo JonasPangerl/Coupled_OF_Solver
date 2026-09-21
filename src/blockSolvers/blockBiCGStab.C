@@ -71,6 +71,31 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
         return perf;
     }
 
+    // Best iterate: BiCGStab convergence is not monotone; near the float
+    // floor it can diverge. The iterate with the smallest residual is kept
+    // and returned if the solve does not converge.
+    blockScalarList xBest(x);
+    reduceScalar bestRes = perf.initialResidual;
+
+    auto keepBest = [&](const reduceScalar res)
+    {
+        if (res < bestRes)
+        {
+            bestRes = res;
+            xBest = x;
+        }
+    };
+
+    auto finish = [&]() -> blockSolverPerformance&
+    {
+        if (!perf.converged && bestRes < perf.finalResidual)
+        {
+            x.deepCopy(xBest);
+            perf.finalResidual = bestRes;
+        }
+        return perf;
+    };
+
     // Start (and restart) state
     auto restart = [&]()
     {
@@ -208,6 +233,8 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
             return perf;
         }
 
+        keepBest(perf.finalResidual);
+
         // GUARD: omega breakdown (spec 6.2)
         if (std::abs(omega) < doubleScalarVSMALL)
         {
@@ -227,7 +254,7 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
         }
     }
 
-    return perf;
+    return finish();
 }
 
 
