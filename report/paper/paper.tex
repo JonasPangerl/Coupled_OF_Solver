@@ -20,8 +20,10 @@
 \IfFileExists{siunitx.sty}%
   {\usepackage{siunitx}}%
   {\providecommand{\num}[1]{#1}\providecommand{\SI}[2]{#1\,#2}}
-\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,
-            urlcolor=blue!50!black]{hyperref}
+\usepackage{xcolor}
+\definecolor{cflink}{rgb}{0.10,0.10,0.45}
+\usepackage[colorlinks=true,linkcolor=cflink,citecolor=cflink,
+            urlcolor=cflink]{hyperref}
 
 % ---------------------------------------------------------------------------
 %  Generated numbers and helpers
