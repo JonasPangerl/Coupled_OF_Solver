@@ -76,6 +76,11 @@ struct solveResult
     FixedList<doubleScalar, 4> intX2 = FixedList<doubleScalar, 4>(Zero);
     doubleScalar maxErr = 0;
     doubleScalar seconds = 0;
+
+    //- ||b - A x||/normFactor of the returned x, evaluated independently of
+    //  the solver (informational: a solver may report a recursively updated
+    //  residual instead of the true one)
+    doubleScalar trueResidual = 0;
 };
 
 
@@ -123,6 +128,21 @@ static solveResult runSolve
     }
 
     res.x = x;
+
+    // True residual of the returned x, accumulated in double, with the
+    // solver's normFactor for the zero initial guess (sum |A 0| + |b| + SMALL)
+    {
+        List<reduceScalar> xd(x.size());
+        forAll(x, i)
+        {
+            xd[i] = toDouble(x[i]);
+        }
+        blockScalarList r(B.nRows());
+        B.residualDouble(r, xd, b);
+        const doubleScalar nf =
+            doubleReduce::sumMag(b, B.comm()) + doubleScalarSMALL;
+        res.trueResidual = doubleReduce::norm2(r, B.comm())/nf;
+    }
 
     const scalarField& V = mesh.V();
     res.intX = Zero;
@@ -331,6 +351,7 @@ int main(int argc, char *argv[])
         << "int x      " << rG.intX << nl
         << "int x^2    " << rG.intX2 << nl
         << "max |x - x_exact| " << rG.maxErr << nl
+        << "true residual of the returned x " << rG.trueResidual << nl
         << "wall GAMG " << rG.seconds << " s, diagonal " << rD.seconds
         << " s" << nl
         << (pass ? "PASS" : "FAIL") << endl;

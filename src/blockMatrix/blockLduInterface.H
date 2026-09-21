@@ -145,6 +145,14 @@ public:
             const blockScalarUList& nbr
         ) const;
 
+        //- As subtractCoupled, accumulated in double (residual, D-012)
+        void subtractCoupledDouble
+        (
+            UList<reduceScalar>& result,
+            const blockScalarUList& coeffs,
+            const blockScalarUList& nbr
+        ) const;
+
         //- Exchange an arbitrary per-face list of blockScalar (n per face),
         //  blocking. Used at setup time only (e.g. diagnostics).
         void exchange

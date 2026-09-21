@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "nonOrthCorrection.H"
+#include "coupledDefaults.H"
 #include "PstreamReduceOps.H"
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
@@ -28,15 +29,32 @@ Foam::nonOrthCorrection::nonOrthCorrection
         staticPatchFace_[patchi].resize(mesh.boundary()[patchi].size(), false);
     }
 
-    // Exact test, no threshold: the native correction vectors vanish
-    // identically on an orthogonal mesh
+    // Largest native correction vector (dimensionless, |k| = tan of the
+    // non-orthogonality angle) over the internal and all patch faces of
+    // this rank, then ONE global reduction. No collective may sit inside the
+    // patch loop: the number of patches differs between ranks (processor
+    // patches), and a collective called a rank-dependent number of times
+    // shifts the collective sequence - the next collective with a different
+    // message size then fails with MPI_ERR_TRUNCATE (T0 at 4 ranks).
     const surfaceVectorField& k = mesh.nonOrthCorrectionVectors();
-    scalar kMax = gMax(mag(k.primitiveField())());
-    forAll(k.boundaryField(), patchi)
+    scalar kMax = 0;
+    for (const vector& kf : k.primitiveField())
     {
-        kMax = max(kMax, gMax(mag(k.boundaryField()[patchi])()));
+        kMax = max(kMax, mag(kf));
+    }
+    for (const fvsPatchVectorField& kp : k.boundaryField())
+    {
+        for (const vector& kf : kp)
+        {
+            kMax = max(kMax, mag(kf));
+        }
     }
     reduce(kMax, maxOp<scalar>());
+
+    // Exact test kept deliberately (FABLE_REVIEW.md item 1): the tolerance
+    // coupledDefaults::orthogonalityTolerance switches the correction off on
+    // the T0 cavity (round-off 7.1e-14) and, unexpectedly, changes T0
+    // Re 1000 np1 from 58 to 106 outer iterations - to be understood first
     orthogonal_ = (kMax == 0);
 }
 

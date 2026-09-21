@@ -24,6 +24,18 @@ Description
     with the processor exchange posted before the local work and completed
     after it (native initMatrixInterfaces/updateMatrixInterfaces pattern).
 
+    residual (r = b - A x) runs in blockScalar like Amul: fast, and accurate
+    enough inside smoothers and multigrid cycles. Its absolute error is of
+    order eps_float*|A||x| per row, which for a diffusion-dominated operator
+    is orders of magnitude larger than |b - A x| near convergence, so it must
+    not decide the convergence of a Krylov solver. residualDouble evaluates
+    b - A x for a double iterate with every row accumulated in double and
+    only the result narrowed (D-012): the products of two blockScalar values
+    are exact in double, so r is the residual of the stored system up to one
+    rounding of r itself. blockFGMRES uses it for its true residual (with a
+    blockScalar residual its restarts stalled at ~2e-8 on the Test-blockGAMG
+    system, tolerance 1e-9).
+
     The same class is used for every GAMG level; coarse levels are built on
     the native lduPrimitiveMesh levels of GAMGAgglomeration.
 
@@ -79,6 +91,28 @@ class blockLduMatrix4
 
         //- Coefficients per block interface (same order as interfaces_)
         List<blockScalarList> interfaceCoeffs_;
+
+        //- Double accumulator of residualDouble(), 4*nCells, allocated on
+        //  first use
+        mutable List<reduceScalar> residualAcc_;
+
+        //- High and low blockScalar parts of the double x of
+        //  residualDouble(), allocated on first use
+        mutable blockScalarList residualHi_;
+        mutable blockScalarList residualLo_;
+
+
+    // Private Member Functions
+
+        //- Size residualAcc_ and set it to b (in double)
+        void initResidualAcc(const blockScalarUList& b) const;
+
+        //- residualAcc_ -= A x, every product and sum in double, processor
+        //  interfaces included (posts and completes their exchange)
+        void subtractAmulDouble(const blockScalarUList& x) const;
+
+        //- r = narrow(residualAcc_)
+        void narrowResidualAcc(blockScalarUList& r) const;
 
 
 public:
@@ -185,11 +219,26 @@ public:
             //- Ax = A x (processor interfaces included)
             void Amul(blockScalarUList& Ax, const blockScalarUList& x) const;
 
-            //- r = b - A x
+            //- r = b - A x in blockScalar (smoothers, multigrid cycles; not
+            //  accurate enough for a Krylov convergence test, see
+            //  residualDouble)
             void residual
             (
                 blockScalarUList& r,
                 const blockScalarUList& x,
+                const blockScalarUList& b
+            ) const;
+
+            //- r = b - A x for a double iterate x, rows accumulated in double
+            //  (D-012; mixed-precision iterative refinement in blockFGMRES).
+            //  x is applied as x_hi + x_lo, x_hi = narrow(x), x_lo = narrow(x
+            //  - x_hi): two blockScalar vectors that represent x to about
+            //  eps_float^2 relative, so the processor exchange stays in
+            //  blockScalar (two exchanges per call).
+            void residualDouble
+            (
+                blockScalarUList& r,
+                const UList<reduceScalar>& x,
                 const blockScalarUList& b
             ) const;
 

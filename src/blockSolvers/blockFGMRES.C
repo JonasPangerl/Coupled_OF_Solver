@@ -84,7 +84,18 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
     reduceScalarList g(m + 1, Zero);
     reduceScalarList yv(m, Zero);
 
-    matrix_.residual(r, x, b);
+    // Iterate in double (iterative refinement, see class description)
+    reduceScalarList xd(n);
+    {
+        const blockScalar* __restrict__ xp = x.cdata();
+        reduceScalar* __restrict__ xdp = xd.data();
+        for (label k = 0; k < n; ++k)
+        {
+            xdp[k] = toDouble(xp[k]);
+        }
+    }
+
+    matrix_.residualDouble(r, xd, b);
     reduceScalar beta = doubleReduce::norm2(r, comm);
     const reduceScalar beta0 = beta;
 
@@ -191,6 +202,12 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
             ++perf.nIterations;
             perf.finalResidual = std::abs(g[j + 1])/nf;
 
+            if (debug)
+            {
+                Info<< typeName << ": iteration " << perf.nIterations
+                    << " Arnoldi estimate " << perf.finalResidual << endl;
+            }
+
             if
             (
                 converged
@@ -224,22 +241,30 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
                  ? hii : doubleScalarVSMALL);
         }
 
-        // x += Z y
+        // x += Z y, in double (the products of a double and a blockScalar
+        // value are formed in double)
         for (label i = 0; i < j; ++i)
         {
-            const blockScalar yi = narrow(yv[i]);
-            blockScalar* __restrict__ xp = x.data();
+            const reduceScalar yi = yv[i];
+            reduceScalar* __restrict__ xdp = xd.data();
             const blockScalar* __restrict__ zi = Z[i].cdata();
             for (label k = 0; k < n; ++k)
             {
-                xp[k] += yi*zi[k];
+                xdp[k] += yi*toDouble(zi[k]);
             }
         }
 
-        // True residual for the restart (and as the reported value)
-        matrix_.residual(r, x, b);
+        // True residual of the double iterate, evaluated in double: seeds the
+        // restart and is the reported value
+        matrix_.residualDouble(r, xd, b);
         beta = doubleReduce::norm2(r, comm);
         perf.finalResidual = beta/nf;
+
+        if (debug)
+        {
+            Info<< typeName << ": cycle end after " << j << " steps, true "
+                << "residual " << perf.finalResidual << endl;
+        }
 
         // Only the true residual decides: the Givens estimate |g_j+1| can be
         // optimistic in float arithmetic. A cycle that ended early ("done")
@@ -257,6 +282,16 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
         }
 
         ++perf.nRestarts;
+    }
+
+    // Return the double iterate rounded to blockScalar
+    {
+        const reduceScalar* __restrict__ xdp = xd.cdata();
+        blockScalar* __restrict__ xp = x.data();
+        for (label k = 0; k < n; ++k)
+        {
+            xp[k] = narrow(xdp[k]);
+        }
     }
 
     return perf;

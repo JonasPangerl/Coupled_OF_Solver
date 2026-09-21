@@ -87,6 +87,15 @@ constexpr label startupUpwindIters = 50;
 constexpr doubleScalar startupSwitchR = 1e-2;    // 7.4, D-008
 constexpr doubleScalar nonOrthLimiter = 0.5;
 
+// Orthogonal-mesh shortcut of nonOrthCorrection: the mesh counts as
+// orthogonal if max |k_f| <= this value, k_f the native (dimensionless)
+// non-orthogonal correction vector, |k_f| = tan(non-orthogonality angle).
+// Far above the double round-off of an orthogonal mesh (7.1e-14 measured on
+// the T0 blockMesh cavity, on which the former exact test kMax == 0 failed)
+// and far below any correction the float block matrix could represent
+// (eps_float ~1e-7).
+constexpr doubleScalar orthogonalityTolerance = 1e-10;
+
 // PTC (spec 7.1)
 constexpr doubleScalar CFL0 = 5;
 constexpr doubleScalar CFLmin = 1;

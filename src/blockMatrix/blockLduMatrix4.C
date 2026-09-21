@@ -28,7 +28,10 @@ Foam::blockLduMatrix4::blockLduMatrix4
     lower_(blockSize*nFaces_, Zero),
     source_(blockDim*nCells_, Zero),
     interfaces_(),
-    interfaceCoeffs_()
+    interfaceCoeffs_(),
+    residualAcc_(),
+    residualHi_(),
+    residualLo_()
 {
     label nBlock = 0;
     forAll(interfaces, i)
@@ -227,6 +230,95 @@ void Foam::blockLduMatrix4::Amul
 }
 
 
+void Foam::blockLduMatrix4::initResidualAcc(const blockScalarUList& b) const
+{
+    const label n = nRows();
+    if (residualAcc_.size() != n)
+    {
+        residualAcc_.resize_nocopy(n);
+    }
+
+    const blockScalar* __restrict__ bPtr = b.cdata();
+    reduceScalar* __restrict__ accPtr = residualAcc_.data();
+    for (label i = 0; i < n; ++i)
+    {
+        accPtr[i] = toDouble(bPtr[i]);
+    }
+}
+
+
+void Foam::blockLduMatrix4::subtractAmulDouble
+(
+    const blockScalarUList& x
+) const
+{
+    // Same pattern as Amul (exchange posted before the local work, completed
+    // after it), but subtracting from the double accumulator
+    initInterfaces(x);
+
+    const blockScalar* __restrict__ dPtr = diag_.cdata();
+    const blockScalar* __restrict__ uPtr = upper_.cdata();
+    const blockScalar* __restrict__ lPtr = lower_.cdata();
+    const blockScalar* __restrict__ xPtr = x.cdata();
+    reduceScalar* __restrict__ accPtr = residualAcc_.data();
+
+    const label* const __restrict__ lAddr = addr_.lowerAddr().cdata();
+    const label* const __restrict__ uAddr = addr_.upperAddr().cdata();
+
+    for (label celli = 0; celli < nCells_; ++celli)
+    {
+        block4Ops::matVecSubDouble
+        (
+            dPtr + celli*blockSize,
+            xPtr + celli*blockDim,
+            accPtr + celli*blockDim
+        );
+    }
+
+    for (label facei = 0; facei < nFaces_; ++facei)
+    {
+        const label own = lAddr[facei];
+        const label nei = uAddr[facei];
+
+        block4Ops::matVecSubDouble
+        (
+            lPtr + facei*blockSize,
+            xPtr + own*blockDim,
+            accPtr + nei*blockDim
+        );
+        block4Ops::matVecSubDouble
+        (
+            uPtr + facei*blockSize,
+            xPtr + nei*blockDim,
+            accPtr + own*blockDim
+        );
+    }
+
+    forAll(interfaces_, i)
+    {
+        const blockScalarList& nbr = interfaces_[i].completeExchange();
+        interfaces_[i].subtractCoupledDouble
+        (
+            residualAcc_,
+            interfaceCoeffs_[i],
+            nbr
+        );
+    }
+}
+
+
+void Foam::blockLduMatrix4::narrowResidualAcc(blockScalarUList& r) const
+{
+    const label n = nRows();
+    const reduceScalar* __restrict__ accPtr = residualAcc_.cdata();
+    blockScalar* __restrict__ rPtr = r.data();
+    for (label i = 0; i < n; ++i)
+    {
+        rPtr[i] = narrow(accPtr[i]);
+    }
+}
+
+
 void Foam::blockLduMatrix4::residual
 (
     blockScalarUList& r,
@@ -243,6 +335,40 @@ void Foam::blockLduMatrix4::residual
     {
         rPtr[i] = bPtr[i] - rPtr[i];
     }
+}
+
+
+void Foam::blockLduMatrix4::residualDouble
+(
+    blockScalarUList& r,
+    const UList<reduceScalar>& x,
+    const blockScalarUList& b
+) const
+{
+    const label n = nRows();
+    if (residualHi_.size() != n)
+    {
+        residualHi_.resize_nocopy(n);
+        residualLo_.resize_nocopy(n);
+    }
+
+    // x = x_hi + x_lo up to O(eps_float^2 |x|)
+    {
+        const reduceScalar* __restrict__ xPtr = x.cdata();
+        blockScalar* __restrict__ hiPtr = residualHi_.data();
+        blockScalar* __restrict__ loPtr = residualLo_.data();
+        for (label i = 0; i < n; ++i)
+        {
+            const blockScalar hi = narrow(xPtr[i]);
+            hiPtr[i] = hi;
+            loPtr[i] = narrow(xPtr[i] - toDouble(hi));
+        }
+    }
+
+    initResidualAcc(b);
+    subtractAmulDouble(residualHi_);
+    subtractAmulDouble(residualLo_);
+    narrowResidualAcc(r);
 }
 
 

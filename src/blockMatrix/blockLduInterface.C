@@ -155,6 +155,28 @@ void Foam::blockLduInterface::subtractCoupled
 }
 
 
+void Foam::blockLduInterface::subtractCoupledDouble
+(
+    UList<reduceScalar>& result,
+    const blockScalarUList& coeffs,
+    const blockScalarUList& nbr
+) const
+{
+    const labelUList& fc = faceCells();
+    const label nFaces = fc.size();
+
+    for (label i = 0; i < nFaces; ++i)
+    {
+        block4Ops::matVecSubDouble
+        (
+            coeffs.cdata() + i*blockSize,
+            nbr.cdata() + i*blockDim,
+            result.data() + fc[i]*blockDim
+        );
+    }
+}
+
+
 void Foam::blockLduInterface::exchange
 (
     const blockScalarUList& send,

@@ -9,7 +9,9 @@ Description
     Inline dense 4x4 operations on row-major blocks (index r*4 + c) stored as
     blockScalar. Arithmetic that feeds a stored result accumulates in double
     where the extra cost is negligible (inversion, block products); the
-    matrix-vector kernels used inside Krylov/smoother loops run in float.
+    matrix-vector kernels used inside Krylov/smoother loops run in float,
+    except matVecSubDouble, the kernel of blockLduMatrix4::residualDouble
+    (the true residual b - A x of a Krylov solver, D-012).
 
     invert() uses LU with partial pivoting in double. Pivot guard (spec 6.3):
     a pivot with |pivot| < pivotGuard gets pivotGuard added (with the sign of
@@ -75,6 +77,32 @@ inline void matVecSub
     {
         const blockScalar* a = A + r*blockDim;
         y[r] -= a[0]*x[0] + a[1]*x[1] + a[2]*x[2] + a[3]*x[3];
+    }
+}
+
+
+//- y -= A x with y in double. The products of two blockScalar values are
+//  exact in double and the row sum is accumulated in double, so no
+//  cancellation error of the order eps_float*|A||x| enters y. Kernel of
+//  blockLduMatrix4::residualDouble (D-012), whose accuracy decides Krylov
+//  convergence.
+inline void matVecSubDouble
+(
+    const blockScalar* __restrict__ A,
+    const blockScalar* __restrict__ x,
+    reduceScalar* __restrict__ y
+)
+{
+    const reduceScalar x0 = toDouble(x[0]);
+    const reduceScalar x1 = toDouble(x[1]);
+    const reduceScalar x2 = toDouble(x[2]);
+    const reduceScalar x3 = toDouble(x[3]);
+    for (label r = 0; r < blockDim; ++r)
+    {
+        const blockScalar* a = A + r*blockDim;
+        y[r] -=
+            toDouble(a[0])*x0 + toDouble(a[1])*x1
+          + toDouble(a[2])*x2 + toDouble(a[3])*x3;
     }
 }
 
