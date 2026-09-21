@@ -5,6 +5,24 @@ hand-copied results: every number, table and figure of the verification and
 performance sections is generated from the JSON records in `results/` by
 `bench/make_report.py`.
 
+## Two versions (D-032)
+
+Two documents are built from the same generated data:
+
+| Source | PDF | Reader |
+|---|---|---|
+| `paper.tex` | `paper.pdf` | CFD numerics specialists: the professional paper |
+| `paper_tutorial.tex` | `paper_tutorial.pdf` | engineers without a numerics background: every concept explained from intuition, with "Intuition", "Why it matters", "Pitfall" and "Building block" boxes, TikZ sketches, a guide to reading each figure and table, and a glossary |
+
+Both `\input{numbers.tex}` and include the same `tables/*.tex` and
+`figures/*.pdf` through the same `\cffigure`/`\cftable`/`\cfnum`/`\cfsci`
+helpers (defined identically in both preambles), so neither can drift from
+the measured data. Neither file contains a hand-typed measured number. When
+a technical statement changes in `paper.tex`, check the corresponding
+section of `paper_tutorial.tex` as well. The tutorial additionally needs the
+LaTeX packages `tcolorbox` (libraries `breakable`, `skins`), `tikz` and
+`array`.
+
 ## Files
 
 | File | Written by | Content |
@@ -42,9 +60,10 @@ if installed and replaced by simple fallbacks otherwise.
 
 ```
 cd report/paper
-make            # latexmk -pdf paper.tex
-make clean      # remove intermediate files
-make distclean  # also remove paper.pdf
+make            # builds paper.pdf and paper_tutorial.pdf (latexmk -pdf)
+make paper_tutorial.pdf   # only one of them
+make clean      # remove intermediate files of both
+make distclean  # also remove both PDFs
 ```
 
 ## Contract with the report generator

@@ -1,0 +1,2225 @@
+% =============================================================================
+%  coupledFoam - tutorial version of the paper (DECISIONS.md D-032)
+%  Build: make   (latexmk -pdf paper_tutorial.tex; the Makefile builds both
+%  paper.pdf and paper_tutorial.pdf)
+%  This document uses exactly the same generated data as paper.tex:
+%  numbers.tex, tables/*.tex and figures/*.pdf, written by
+%  bench/make_report.py. Every generated item is guarded, so the document
+%  compiles at every stage of the project and shows a boxed "results
+%  pending" placeholder for anything that is not there yet. No measured
+%  number is typed by hand in this file.
+% =============================================================================
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\IfFileExists{lmodern.sty}{\usepackage{lmodern}}{}
+\usepackage[margin=25mm]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[numbers,sort&compress]{natbib}
+\IfFileExists{siunitx.sty}%
+  {\usepackage{siunitx}}%
+  {\providecommand{\num}[1]{#1}\providecommand{\SI}[2]{#1\,#2}}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,decorations.pathreplacing}
+\usepackage[breakable,skins]{tcolorbox}
+\definecolor{cflink}{rgb}{0.10,0.10,0.45}
+\definecolor{cfintu}{rgb}{0.16,0.32,0.62}
+\definecolor{cfintubg}{rgb}{0.95,0.97,1.00}
+\definecolor{cfwhy}{rgb}{0.15,0.45,0.20}
+\definecolor{cfwhybg}{rgb}{0.95,0.99,0.95}
+\definecolor{cfpit}{rgb}{0.65,0.25,0.10}
+\definecolor{cfpitbg}{rgb}{1.00,0.96,0.93}
+\definecolor{cfblk}{rgb}{0.30,0.30,0.30}
+\definecolor{cfblkbg}{rgb}{0.97,0.97,0.97}
+\definecolor{cfcoupled}{rgb}{0.12,0.47,0.71}
+\definecolor{cfnative}{rgb}{0.55,0.55,0.55}
+\usepackage[colorlinks=true,linkcolor=cflink,citecolor=cflink,
+            urlcolor=cflink]{hyperref}
+
+% ---------------------------------------------------------------------------
+%  Generated numbers and helpers (identical to paper.tex)
+% ---------------------------------------------------------------------------
+\IfFileExists{numbers.tex}{\input{numbers.tex}}{}
+
+% \cfnum{Name}: value of the generated macro \cfName, or a pending mark
+\newcommand{\cfpendingmark}{\fbox{\scriptsize pending}}
+\newcommand{\cfnum}[1]{%
+  \ifcsname cf#1\endcsname\csname cf#1\endcsname\else\cfpendingmark\fi}
+% \cfsci{Name}: as \cfnum, typeset through siunitx \num (e.g. 2.9e-06)
+\makeatletter
+\def\cf@na{n/a}
+\newcommand{\cfsci}[1]{%
+  \ifcsname cf#1\endcsname
+    \edef\cf@tmp{\csname cf#1\endcsname}%
+    \ifx\cf@tmp\cf@na n/a\else\expandafter\num\expandafter{\cf@tmp}\fi
+  \else\cfpendingmark\fi}
+\makeatother
+
+% Boxed placeholder
+\newcommand{\pending}[1]{%
+  \par\noindent\fbox{\parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}{%
+    \centering\small\rule{0pt}{2.2ex}\textit{Results pending.} #1\par
+    \rule{0pt}{1.5ex}}}\par}
+
+% \cffigure[width]{file stem}{caption}{label}
+\newcommand{\cffigure}[4][0.95]{%
+  \begin{figure}[tbp]
+    \centering
+    \IfFileExists{figures/#2.pdf}%
+      {\includegraphics[width=#1\linewidth]{figures/#2.pdf}}%
+      {\pending{Figure \texttt{figures/\detokenize{#2}.pdf} is written by
+        \texttt{bench/make\_report.py} once its data exist.}}
+    \caption{#3}\label{#4}
+  \end{figure}}
+
+% \cftable{file stem}{caption of the placeholder}{label}
+% (a generated table carries its own caption and label)
+\newcommand{\cftable}[3]{%
+  \IfFileExists{tables/#1.tex}%
+    {\input{tables/#1.tex}}%
+    {\begin{table}[tbp]
+       \centering\caption{#2}\label{#3}
+       \pending{Table \texttt{tables/\detokenize{#1}.tex} is written by
+         \texttt{bench/make\_report.py} once its data exist.}
+     \end{table}}}
+
+% Notation
+\newcommand{\vect}[1]{\mathbf{#1}}
+\newcommand{\Uv}{\vect{U}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+% ---------------------------------------------------------------------------
+%  Tutorial boxes
+% ---------------------------------------------------------------------------
+\tcbset{cfbase/.style={breakable, enhanced, arc=1.5mm, boxrule=0.6pt,
+  left=2mm, right=2mm, top=1mm, bottom=1mm, fonttitle=\bfseries\small,
+  before skip=8pt, after skip=8pt}}
+\newtcolorbox{intuition}[1]{cfbase, colback=cfintubg, colframe=cfintu,
+  title={Intuition: #1}}
+\newtcolorbox{whyitmatters}[1]{cfbase, colback=cfwhybg, colframe=cfwhy,
+  title={Why it matters: #1}}
+\newtcolorbox{pitfall}[1]{cfbase, colback=cfpitbg, colframe=cfpit,
+  title={Pitfall: #1}}
+\newtcolorbox{bblock}[1]{cfbase, colback=cfblkbg, colframe=cfblk,
+  title={Building block: #1}}
+\newcommand{\bbwhat}{\par\smallskip\noindent\textbf{What is it?}\ }
+\newcommand{\bbwhy}{\par\smallskip\noindent\textbf{Why do we need it?}\ }
+\newcommand{\bbwithout}{\par\smallskip\noindent\textbf{What would go wrong
+  without it?}\ }
+
+% pointer to a section of the professional paper, by title
+\newcommand{\pro}[1]{\ {\small[P:~\textit{#1}]}}
+
+\setlength{\parskip}{3pt}
+\setlength{\emergencystretch}{2.5em}
+
+% ---------------------------------------------------------------------------
+\title{\textbf{coupledFoam explained}\\[4pt]
+  \large A tutorial companion to the paper ``coupledFoam: a block-coupled
+  pressure--velocity solver with single-precision block-multigrid linear
+  algebra for steady incompressible RANS in OpenFOAM''}
+\author{The coupledFoam project}
+\date{Generated at commit \texttt{\cfnum{Commit}}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This is the plain-language version of the coupledFoam paper. It is written
+for an engineer who runs OpenFOAM simulations and wants to understand what
+the new solver does differently from \code{simpleFoam}, why each of its
+parts is there, and how to read its results. Every concept is introduced
+from intuition first; equations appear only where they make an idea
+sharper. The document uses exactly the same measured numbers, tables and
+figures as the professional paper: they are generated automatically from
+the result files, and anything that has not been measured yet appears as a
+boxed ``pending'' placeholder rather than as a guess.
+\end{abstract}
+
+\tableofcontents
+
+% =============================================================================
+\section*{How to use this document}
+\addcontentsline{toc}{section}{How to use this document}
+% =============================================================================
+
+The professional paper (\code{paper.pdf}) is written for CFD numerics
+specialists. This tutorial follows the same path in more steps. You can
+read it front to back, or jump to the building block you are curious about:
+each one in Section~\ref{sec:blocks} is self-contained.
+
+Four kinds of boxes appear throughout:
+\begin{intuition}{the blue box}
+  An everyday picture of an idea. It is deliberately imprecise; the text
+  next to it says what is actually done.
+\end{intuition}
+\begin{whyitmatters}{the green box}
+  The practical consequence for you as a user: what you will see in a run,
+  which setting it affects, or which result it explains.
+\end{whyitmatters}
+\begin{pitfall}{the orange box}
+  Something that went wrong during development or that easily goes wrong in
+  practice, and what was done about it.
+\end{pitfall}
+\begin{bblock}{the grey box}
+  \bbwhat A short definition.
+  \bbwhy Its job inside coupledFoam.
+  \bbwithout The failure you would see if it were missing.
+\end{bblock}
+
+\paragraph{Numbers.} All measured values in this document are inserted
+automatically from the file \code{numbers.tex}, which the report generator
+\code{bench/make\_report.py} writes from the JSON result records in
+\code{results/}. A small box \cfpendingmark{} marks a number that has not
+been measured yet; a large box marked \emph{Results pending} stands for a
+whole figure or table. Numbers that are \emph{settings} (for example the
+default maximum CFL number) or \emph{acceptance thresholds} (for example
+``within 1\,\%'') are part of the design, not measurements, and are written
+directly.
+
+\paragraph{Cross references.} Where a statement is documented in detail in
+the professional paper or in the project's decision log
+\code{DECISIONS.md}, the item is named in the text, e.g.\ ``(D-028)'', and a small superscript
+such as\pro{Residual norms} names the section of the professional paper
+where the full details are.
+The decision log records every point where the implementation deviates
+from, or had to interpret, the original specification.
+
+% =============================================================================
+\section{What problem are we solving?}\label{sec:problem}
+% =============================================================================
+
+\subsection{The flow equations in words}
+
+For a steady, incompressible flow of air around a car two physical laws have
+to hold in every small piece of the fluid:
+\begin{enumerate}
+\item \textbf{Momentum balance (Newton's second law).} The change of
+  momentum of a fluid parcel equals the forces acting on it. The forces are
+  the pressure pushing on it from all sides and the friction (viscous and
+  turbulent stresses) exerted by the neighbouring fluid. In a steady flow
+  the ``change of momentum'' is purely the momentum carried in and out by
+  the flow itself, which is called \emph{convection}.
+\item \textbf{Mass balance (continuity).} Air at car speeds is practically
+  incompressible, so whatever volume flows into a region must flow out
+  again. Mathematically: the divergence of the velocity is zero,
+  $\nabla\cdot\Uv=0$.
+\end{enumerate}
+Written out, these are the incompressible Navier--Stokes equations: three
+momentum equations (one for each velocity component $u$, $v$, $w$) and one
+continuity equation, for four unknowns $u,v,w,p$ in every point.
+
+\paragraph{RANS and the turbulence model.}
+The real flow around a car is turbulent: it contains eddies over a huge
+range of sizes that fluctuate in time. A steady simulation does not resolve
+them. Instead it solves for the \emph{time-averaged} flow (Reynolds-averaged
+Navier--Stokes, RANS) and represents the effect of the eddies by an extra
+``turbulent viscosity'' $\nu_t$ that a turbulence model such as
+$k$-$\omega$~SST~\cite{Menter1994} computes from its own transport
+equations. For the purpose of this document, the turbulence model is a
+separate module that delivers $\nu_t$; coupledFoam leaves it exactly as it
+is in OpenFOAM (Section~\ref{sec:turb}).
+
+\subsection{Why pressure is the awkward one}\label{sec:pressurehard}
+
+Look at the list of equations again. Each velocity component has ``its''
+equation: the $u$-momentum equation. But which equation belongs to the
+pressure? The continuity equation $\nabla\cdot\Uv=0$ does not contain $p$
+at all. Pressure has \emph{no equation of its own}.
+
+Pressure is instead whatever it has to be so that the velocity field that
+comes out of the momentum equations satisfies continuity. If too much fluid
+is heading into a region, the pressure there rises, pushes back, and
+diverts the flow until the mass balance holds. Mathematically, the pressure
+acts as a \emph{constraint force} (a Lagrange multiplier) that enforces
+$\nabla\cdot\Uv=0$.
+
+\begin{intuition}{pressure as the enforcer}
+  Think of a crowd walking through a building with fixed doors. Each person
+  (fluid parcel) wants to keep going in their direction (momentum). The
+  building cannot store people (continuity). Where the crowd would pile up,
+  people start pushing back: that pushing is the pressure. Nobody decides
+  the pressure in advance; it is simply whatever push is needed so that the
+  number of people entering a room equals the number leaving it.
+\end{intuition}
+
+This is why incompressible solvers need a special strategy for pressure:
+there is no equation that you could simply ``solve for $p$''. The two
+strategies, segregated (Section~\ref{sec:simple}) and coupled
+(Section~\ref{sec:coupled}), differ precisely in how they deal with this.
+
+\subsection{From equations to numbers: finite volumes}\label{sec:fv}
+
+OpenFOAM is a \emph{finite-volume} code. The domain is divided into cells
+(the mesh). For each cell the conservation laws are written as a balance
+over the cell: what enters through its faces minus what leaves equals the
+sources inside. Every face is shared by exactly two cells, the
+\emph{owner} and the \emph{neighbour} (Figure~\ref{fig:fv}), or lies on the
+boundary. The quantity that crosses a face per second is the \emph{face
+flux}; for mass it is the volume flux $\phi_f$ in m$^3$/s, the famous
+\code{phi} field of OpenFOAM.
+
+\begin{figure}[tbp]
+\centering
+\begin{tikzpicture}[scale=1.0, >=Stealth]
+  \draw[thick] (0,0) rectangle (3.4,2.4);
+  \draw[thick] (3.4,0) rectangle (6.8,2.4);
+  \fill (1.7,1.2) circle (2pt);
+  \fill (5.1,1.2) circle (2pt);
+  \node[font=\small] at (1.7,0.45) {$P$ (owner)};
+  \node[font=\small] at (5.1,0.45) {$N$ (neighbour)};
+  \draw[very thick, cfcoupled] (3.4,0) -- (3.4,2.4);
+  \node[cfcoupled, above] at (3.4,2.4) {face $f$};
+  \draw[->, thick, cfcoupled] (3.4,1.2) -- (4.3,1.2);
+  \node[cfcoupled, font=\small] at (4.2,0.9) {$\vect{S}_f$};
+  \draw[->, dashed] (1.7,1.3) to[bend left=30] (5.1,1.3);
+  \node[font=\small] at (2.6,2.05) {$\vect d_f$};
+  \node[font=\small, align=left, anchor=west] at (7.1,1.7)
+    {$\phi_f$: volume flux through $f$\\ (positive from $P$ to $N$)};
+  \node[font=\small, align=left, anchor=west] at (7.1,0.7)
+    {$\vect S_f$: face area vector,\\ normal to the face, length = area};
+\end{tikzpicture}
+\caption{Two finite-volume cells sharing one face. Every balance in the
+solver is a sum of face contributions like this one.}
+\label{fig:fv}
+\end{figure}
+
+\begin{bblock}{finite volumes and faces}
+\bbwhat The domain is split into cells; each conservation law becomes ``sum
+of what flows through the faces of a cell $=$ sources in the cell''. Values
+live at cell centres, fluxes live on faces.
+\bbwhy Face fluxes shared by two cells are counted once as outflow of one
+cell and once as inflow of the other, so mass is conserved exactly at the
+discrete level, whatever the mesh looks like. This is what makes the
+method robust on the unstructured \code{snappyHexMesh} meshes of real cars.
+\bbwithout Every quantity that coupledFoam builds, from the matrix to the
+Rhie--Chow flux, is a loop over faces. Nothing in this document works
+without this picture.
+\end{bblock}
+
+After discretisation the equations of all cells together form a big system
+of algebraic equations, one set of four equations per cell. Because each
+cell only talks to its face neighbours, most entries of the corresponding
+matrix are zero: the matrix is \emph{sparse}. OpenFOAM stores such a matrix
+in its ``LDU'' format: a diagonal entry per cell and one ``upper'' and one
+``lower'' entry per internal face.
+
+\subsection{Residuals: how far are we from the answer?}\label{sec:residual}
+
+A steady solver cannot compute the answer in one go, because the equations
+are \emph{nonlinear}: the velocity convects itself, so the coefficients of
+the equations depend on the solution. It iterates instead: guess, improve,
+improve again. After every iteration one plugs the current fields into the
+discrete equations and measures how badly they are violated. That
+imbalance, cell by cell, is the \emph{residual}. At the exact discrete
+solution it is zero.
+
+coupledFoam summarises the residual in one number $R$: the size of the
+imbalance of all four equations in all cells, normalised in the same way
+OpenFOAM normalises its residuals, and divided by its value in the first
+iteration. $R=10^{-6}$ therefore means ``the imbalance is a millionth of
+what it was at the start''. For comparison with \code{simpleFoam}, the log
+additionally prints $r_U$ and $r_p$, computed exactly like the ``Initial
+residual'' that \code{simpleFoam} prints for $U$ and $p$
+(D-016)\pro{Residual norms}.
+
+\begin{pitfall}{residuals of different solvers are not directly comparable}
+  $R$ of coupledFoam and the initial residuals of \code{simpleFoam} are
+  normalised differently. A residual plot with both solvers shows the
+  \emph{trend} of each, not which solver is ``more converged''. That is why
+  all timing comparisons in this project use a solver-independent
+  criterion: the force coefficients (or the pressure drop) must stop
+  changing (Section~\ref{sec:protocol}).
+\end{pitfall}
+
+% =============================================================================
+\section{The standard approach: SIMPLE and simpleFoam}\label{sec:simple}
+% =============================================================================
+
+\subsection{Guess and correct}
+
+The workhorse of OpenFOAM for steady incompressible flow is
+\code{simpleFoam}, based on the SIMPLE algorithm of Patankar and
+Spalding~\cite{Patankar1972} or its variant SIMPLEC~\cite{VanDoormaal1984}.
+It is \emph{segregated}: it never solves for velocity and pressure at the
+same time. One SIMPLE iteration does the following
+(Figure~\ref{fig:loops}, left):
+\begin{enumerate}
+\item Take the current pressure as if it were correct, and solve the three
+  momentum equations for a new velocity.
+\item This velocity generally violates continuity. Derive, from the
+  continuity equation and a simplified form of the momentum equations, a
+  \emph{pressure equation} (a Poisson-like equation) and solve it.
+\item Correct the face fluxes and the velocity with the new pressure
+  gradient, so that the fluxes conserve mass.
+\item Blend the new values with the old ones (under-relaxation), solve the
+  turbulence equations, and start again.
+\end{enumerate}
+
+\begin{figure}[tbp]
+\centering
+\begin{tikzpicture}[
+  box/.style={draw, rounded corners=2pt, align=center, font=\small,
+    minimum width=4.9cm, minimum height=0.75cm, fill=white},
+  cbox/.style={box, fill=cfcoupled!10, draw=cfcoupled},
+  >=Stealth, node distance=4.5mm]
+  % segregated
+  \node[font=\bfseries] (sT) at (0,0.2) {segregated (SIMPLE)};
+  \node[box, below=4mm of sT] (s1) {solve momentum $u$, $v$, $w$\\ with frozen $p$};
+  \node[box, below=of s1] (s2) {solve pressure equation};
+  \node[box, below=of s2] (s3) {correct fluxes and $\Uv$};
+  \node[box, below=of s3] (s4) {under-relax $\Uv$, $p$};
+  \node[box, below=of s4] (s5) {solve turbulence $k$, $\omega$};
+  \foreach \a/\b in {s1/s2,s2/s3,s3/s4,s4/s5} \draw[->] (\a) -- (\b);
+  \draw[->] (s5.west) -- ++(-0.5,0) |- (s1.west);
+  \node[font=\scriptsize, align=center, rotate=90] at (-3.3,-2.9)
+    {repeat: many iterations};
+  % coupled
+  \node[font=\bfseries] (cT) at (7.2,0.2) {coupled (coupledFoam)};
+  \node[cbox, below=4mm of cT] (c1) {assemble one block system\\ for $u,v,w,p$ together};
+  \node[cbox, below=of c1] (c2) {solve it (FGMRES + block AMG)};
+  \node[cbox, below=of c2] (c3) {safety: line search, checks};
+  \node[cbox, below=of c3] (c4) {update $\Uv$, $p$, fluxes};
+  \node[cbox, below=of c4] (c5) {solve turbulence $k$, $\omega$};
+  \foreach \a/\b in {c1/c2,c2/c3,c3/c4,c4/c5} \draw[->, cfcoupled] (\a) -- (\b);
+  \draw[->, cfcoupled] (c5.east) -- ++(0.5,0) |- (c1.east);
+  \node[font=\scriptsize, align=center, rotate=-90] at (10.5,-2.9)
+    {repeat: far fewer iterations};
+\end{tikzpicture}
+\caption{One outer iteration of the segregated SIMPLE algorithm (left) and
+of the coupled solver (right). In SIMPLE, velocity and pressure take turns;
+in coupledFoam they are solved together, and each iteration is more
+expensive but achieves much more.}
+\label{fig:loops}
+\end{figure}
+
+\subsection{Why SIMPLE needs under-relaxation}
+
+In step 2 the pressure equation is derived from a \emph{simplified}
+momentum equation: the influence of the neighbouring velocities is
+neglected (SIMPLE) or approximated (SIMPLEC). The correction it produces is
+therefore too large or pointed in a slightly wrong direction. Applied at
+full strength it overshoots, the next iteration overshoots back, and the
+run oscillates or diverges. The cure is \emph{under-relaxation}: accept
+only a fraction of the change (for example 0.3 for pressure and 0.7 for
+velocity in classical SIMPLE; SIMPLEC allows larger factors). The price is
+that every iteration makes only a fraction of the progress it could make.
+
+\begin{intuition}{two people at one shower}
+  Imagine two people adjusting the same shower: one controls the hot tap
+  (velocity), the other the cold tap (pressure). They take turns, and each
+  only feels the water temperature after the other has already turned his
+  tap. If both turn boldly, the temperature swings back and forth. If both
+  turn only a little each time (under-relaxation), the temperature settles,
+  but it takes many rounds. A coupled solver is one person with both hands
+  on both taps.
+\end{intuition}
+
+\subsection{Why it takes so many iterations}
+
+In the segregated loop, information between pressure and velocity is
+exchanged only once per iteration, and only in relaxed doses. On a fine
+mesh, a pressure disturbance also has to travel across many cells, and the
+pressure equation is solved to a loose tolerance in each iteration. All
+this makes each iteration cheap but the number of iterations large, and it
+grows with the size of the mesh.
+
+A concrete example from the test suite: on the lid-driven cavity at $Re=100$
+(test T0, Section~\ref{sec:t0}), \code{simpleFoam} (SIMPLEC) needed
+\cfnum{TZeroReOneZeroZeroNativeIterations} iterations to reach its residual
+tolerance, while coupledFoam needed \cfnum{TZeroReOneZeroZeroIterations}.
+(The two residuals are normalised differently, so this is an illustration of
+the order of magnitude, not a race; see Section~\ref{sec:residual}.)
+
+\begin{whyitmatters}{relaxation factors are case-specific}
+  With \code{simpleFoam} you have probably spent time choosing relaxation
+  factors: too small and the run crawls, too large and it diverges. The
+  benchmark in this project therefore compares against two native settings:
+  the tutorial's own, and a tuned SIMPLEC setting with factors 1.0 for $p$
+  and 0.9 for $\Uv$, $k$, $\omega$ (Section~\ref{sec:protocol}).
+  coupledFoam has no relaxation factors; its step size is controlled
+  automatically by the pseudo-time step and the line search
+  (Sections~\ref{sec:ptc} and~\ref{sec:ls}).
+\end{whyitmatters}
+
+% =============================================================================
+\section{The coupled idea}\label{sec:coupled}
+% =============================================================================
+
+\subsection{Solve everything together}
+
+A \emph{coupled} solver discretises the three momentum equations and the
+continuity equation into \emph{one} linear system and solves for $u$, $v$,
+$w$ and $p$ in all cells simultaneously. There is no pressure equation
+derived from a simplified momentum equation, and hence no need to
+under-relax the pressure: the pressure--velocity interaction is represented
+exactly (for the current linearisation) inside the matrix. This approach
+goes back to Vanka~\cite{Vanka1986} and was developed for unstructured
+finite volumes by Darwish, Sraj and Moukalled~\cite{Darwish2007,Darwish2009}
+and brought to OpenFOAM by Mangani, Buchmayr and
+Darwish~\cite{Mangani2014a,Mangani2014b}. coupledFoam is a new,
+independent implementation of this idea for OpenFOAM v2606.
+
+\subsection{The \texorpdfstring{$4\times4$}{4x4} block structure}\label{sec:blocks44}
+
+Because every cell has four unknowns $(u,v,w,p)$, the matrix is naturally
+organised in small $4\times4$ \emph{blocks}: one block on the diagonal for
+each cell (how the cell's four equations depend on its own four unknowns)
+and one block for each face (how they depend on the neighbour's four
+unknowns). Figure~\ref{fig:block} shows what is inside a block.
+
+\begin{figure}[tbp]
+\centering
+\begin{tikzpicture}[>=Stealth, font=\small]
+  % big sparse matrix sketch
+  \begin{scope}
+    \draw[thick] (0,0) rectangle (4,4);
+    \foreach \i in {0,...,4} {
+      \fill[cfcoupled!70] (\i*0.8,4-\i*0.8-0.8) rectangle ++(0.8,0.8);
+    }
+    % face blocks (r,c) and (c,r): the pattern is symmetric
+    \foreach \r/\c in {0/1,1/0,0/4,4/0,1/3,3/1,2/3,3/2,2/4,4/2} {
+      \fill[cfcoupled!30] (\c*0.8,4-\r*0.8-0.8) rectangle ++(0.8,0.8);
+    }
+    \foreach \i in {1,...,4} {
+      \draw[gray!60] (\i*0.8,0) -- (\i*0.8,4);
+      \draw[gray!60] (0,\i*0.8) -- (4,\i*0.8);
+    }
+    \node[below] at (2,-0.1) {whole matrix: mostly empty};
+    \node[align=center, font=\scriptsize] at (2,-0.85)
+      {dark: cell (diagonal) blocks\\ light: face blocks};
+  \end{scope}
+  \draw[->, thick] (4.3,2.0) -- (5.3,2.0);
+  % one block
+  \begin{scope}[shift={(5.8,0.4)}]
+    \def\s{0.8}
+    \foreach \r in {0,...,3} \foreach \c in {0,...,3} {
+      \draw (\c*\s, 3*\s-\r*\s) rectangle ++(\s,\s);
+    }
+    \fill[cfcoupled!25] (0,0.8) rectangle (2.4,3.2);
+    \fill[orange!35] (2.4,0.8) rectangle (3.2,3.2);
+    \fill[green!30] (0,0) rectangle (2.4,0.8);
+    \fill[red!30] (2.4,0) rectangle (3.2,0.8);
+    \foreach \r in {0,...,3} \foreach \c in {0,...,3} {
+      \draw (\c*\s, 3*\s-\r*\s) rectangle ++(\s,\s);
+    }
+    \node at (0.4,2.8) {$a$}; \node at (1.2,2.0) {$a$}; \node at (2.0,1.2) {$a$};
+    \node at (1.2,2.8) {$0$}; \node at (2.0,2.8) {$0$};
+    \node at (0.4,2.0) {$0$}; \node at (2.0,2.0) {$0$};
+    \node at (0.4,1.2) {$0$}; \node at (1.2,1.2) {$0$};
+    \foreach \y in {2.8,2.0,1.2} \node at (2.8,\y) {$S$};
+    \foreach \x in {0.4,1.2,2.0} \node at (\x,0.4) {$S$};
+    \node at (2.8,0.4) {$g$};
+    \node[anchor=east] at (-0.1,2.8) {$u$-mom.};
+    \node[anchor=east] at (-0.1,2.0) {$v$-mom.};
+    \node[anchor=east] at (-0.1,1.2) {$w$-mom.};
+    \node[anchor=east] at (-0.1,0.4) {continuity};
+    \node[above] at (0.4,3.2) {$u$}; \node[above] at (1.2,3.2) {$v$};
+    \node[above] at (2.0,3.2) {$w$}; \node[above] at (2.8,3.2) {$p$};
+  \end{scope}
+  \node[align=left, anchor=west, font=\scriptsize] at (9.4,2.6)
+    {$a$: convection + diffusion\\ \phantom{$a$: }(+ pseudo-time)};
+  \node[align=left, anchor=west, font=\scriptsize] at (9.4,1.7)
+    {$S$ in column $p$: pressure\\ \phantom{$S$: }gradient (face area)};
+  \node[align=left, anchor=west, font=\scriptsize] at (9.4,0.9)
+    {$S$ in row 4: divergence\\ \phantom{$S$: }of velocity};
+  \node[align=left, anchor=west, font=\scriptsize] at (9.4,0.2)
+    {$g$: Rhie--Chow pressure\\ \phantom{$g$: }term (Sec.~\ref{sec:rc})};
+\end{tikzpicture}
+\caption{Left: the coupled matrix is sparse; each small square is a
+$4\times4$ block. Right: what a block contains. Rows 1--3 are the momentum
+equations, row 4 is continuity; columns are the unknowns $u,v,w,p$. The
+pressure column of the momentum rows (orange) and the velocity part of the
+continuity row (green) are mirror images: the pressure gradient and the
+velocity divergence are ``transposes'' of each other. The bottom-right entry
+(red) exists only because of the Rhie--Chow interpolation. (In rotating MRF
+zones the momentum part of the diagonal block also gets off-diagonal
+entries, Section~\ref{sec:turb}.)}
+\label{fig:block}
+\end{figure}
+
+Two things about this structure are worth remembering.
+
+First, the bottom-right entry $g$ (``pressure--pressure'') would be
+\emph{zero} in a naive discretisation, because the continuity equation does
+not contain the pressure. A matrix with a zero block on the diagonal is
+called a \emph{saddle-point} system; it is notoriously hard for iterative
+solvers. The Rhie--Chow interpolation (Section~\ref{sec:rc}) is what fills
+this entry and stabilises the system.
+
+Second, each block holds 16 numbers, where a segregated solver stores one
+number per cell and per face for each of its scalar equations. That is the
+memory price of coupling; Section~\ref{sec:precision} explains how
+coupledFoam reduces it by storing the blocks in single precision.
+
+\subsection{Outer and inner iterations}
+
+Even though velocity and pressure are solved together, coupledFoam still
+iterates, because the equations are nonlinear. There are two nested loops,
+and it helps to keep them apart:
+\begin{itemize}
+\item The \textbf{outer iteration} (also called nonlinear iteration): build
+  the linear system from the current fields (convection uses the flux of
+  the previous iteration), solve it, update the fields, update turbulence.
+  This is the loop of Figure~\ref{fig:loops}, and the ``iterations'' in the
+  log are outer iterations.
+\item The \textbf{inner iteration} (linear solve): inside each outer
+  iteration, the big linear system itself is solved iteratively, by a
+  Krylov method with a multigrid preconditioner
+  (Sections~\ref{sec:krylov}--\ref{sec:smoothers}). These are the ``linear
+  iterations'' in the log.
+\end{itemize}
+
+\subsection{The trade-off, and the only fair comparison}\label{sec:fair}
+
+A coupled outer iteration does much more than a SIMPLE iteration, so far
+fewer of them are needed. But each one is more expensive: every coupling
+between two cells is a $4\times4$ block of 16 numbers instead of the single
+coefficients of SIMPLE's scalar equations, the system is harder to solve
+than those separate scalar systems, and it needs more memory. Whether the coupled
+solver is \emph{faster} in the end is therefore not obvious, and it can
+depend on the case.
+
+\begin{whyitmatters}{wall-clock time and CPU-hours, not iterations}
+  An iteration count says nothing about how long you wait or how much
+  machine you use. A solver that needs 50 iterations of one minute each is
+  slower than one that needs 2000 iterations of one second each. The
+  project's explicit requirement (D-025) is therefore: the fastest solver
+  wins, measured as
+  \begin{itemize}
+  \item \textbf{wall-clock time} to a converged answer (how long you wait),
+    and
+  \item \textbf{CPU-hours} to a converged answer (how much computing you
+    pay for: the CPU time of all ranks added up),
+  \end{itemize}
+  with the \emph{same} convergence criterion for both solvers. Iteration
+  counts are shown only for completeness.
+\end{whyitmatters}
+
+\subsection{A map of one outer iteration}\label{sec:map}
+
+Here is what coupledFoam does in every outer iteration, in plain words. Each
+step points to the building block that explains it.
+\begin{enumerate}
+\item Decide, for every cell, how large a pseudo-time step it may take
+  (Section~\ref{sec:ptc}).
+\item Assemble the momentum rows, including the convection scheme via
+  deferred correction (Section~\ref{sec:dc}) and the boundary conditions
+  (Section~\ref{sec:bc}); limit the time step in cells where the step would
+  change too much.
+\item Assemble the continuity row with the Rhie--Chow flux
+  (Section~\ref{sec:rc}); fix the pressure level in closed domains
+  (Section~\ref{sec:pref}).
+\item Compute the residual in double precision, store the matrix in single
+  precision (Section~\ref{sec:precision}).
+\item Solve the linear system for the \emph{change} of the fields with
+  FGMRES and block multigrid (Sections~\ref{sec:krylov}--\ref{sec:smoothers}),
+  to a tolerance chosen by Eisenstat--Walker (Section~\ref{sec:ew}).
+\item Check the proposed change: line search, cut the CFL number and
+  repeat if the step is too wild or the solve failed (Section~\ref{sec:ls}).
+\item Apply the change (optionally accelerated by Anderson mixing,
+  Section~\ref{sec:anderson}), update the face fluxes, check that nothing
+  exploded, and roll back if it did (Section~\ref{sec:sentinel}).
+\item Update the problem-cell sets (Section~\ref{sec:remediation}), solve
+  the turbulence model (Section~\ref{sec:turb}), adapt the CFL number, write
+  results and restart data (Section~\ref{sec:restart}), test for
+  convergence.
+\end{enumerate}
+
+% =============================================================================
+\section{The building blocks}\label{sec:blocks}
+% =============================================================================
+
+This section takes the solver apart. The order follows the map above:
+first how the equations are built, then how the nonlinear iteration is kept
+safe, then how the linear system is solved, and finally how single
+precision is made to work.
+
+% -----------------------------------------------------------------------------
+\subsection{Boundary conditions and parallel interfaces}\label{sec:bc}
+
+Every OpenFOAM boundary condition can express the boundary value as a
+linear function of the adjacent cell value: ``boundary value $=$ (some
+factor) $\times$ (cell value) $+$ (some constant)''. For a fixed value the
+factor is zero; for zero gradient the factor is one and the constant zero.
+OpenFOAM computes these two coefficients for every patch type anyway.
+coupledFoam uses exactly these native coefficients to put every boundary
+condition \emph{implicitly} into the block matrix (D-002). That is why
+\code{fixedValue}, \code{zeroGradient}, \code{slip}, \code{symmetry},
+\code{inletOutlet}, \code{totalPressure} and conditions derived from them
+work without special code. For \code{inletOutlet} and \code{totalPressure},
+the part that depends on the current flow direction or dynamic head is
+taken from the previous outer iteration. Wall functions act, as usual,
+through $\nu_t$ on the wall face.
+
+When a case runs in parallel, the mesh is split into pieces
+(\code{decomposePar}); the cut faces become \emph{processor} patches.
+In coupledFoam these are treated fully implicitly: the matrix entries
+across the cut are stored like any other face block and the neighbour
+values are exchanged during every matrix--vector product. Periodic
+(\code{cyclic}) and \code{cyclicAMI} patches are, in this version, coupled
+\emph{explicitly}: the neighbour value from the previous outer iteration is
+used as a known source. That works, but converges more slowly across such
+patches; implicit coupling there is planned for Phase~2.
+
+% -----------------------------------------------------------------------------
+\subsection{Convection schemes and deferred correction}\label{sec:dc}
+
+Convection (the flow carrying momentum along) needs the velocity on the
+faces, but the unknowns live at cell centres. The simplest choice,
+\emph{upwind}, takes the value of the upstream cell. It is very robust,
+because it gives the matrix a strong diagonal, but it smears the solution
+(numerical diffusion). Higher-order schemes such as \code{linearUpwind}
+extrapolate from the upstream cell with its gradient; they are much more
+accurate but make the matrix less well behaved.
+
+coupledFoam uses the standard trick of \emph{deferred
+correction}~\cite{Khosla1974,Ferziger2002}: the matrix always contains the
+robust upwind operator, and the difference between your chosen scheme (from
+\code{fvSchemes}, key \code{div(phi,U)}) and upwind is added as a known
+source computed from the current fields. At convergence the source is exact,
+so the converged solution is that of your high-order scheme. A per-cell
+blending factor $\beta$ between 0 (pure upwind) and 1 (full scheme) allows
+switching the correction off locally.
+
+\begin{bblock}{deferred correction and the upwind start-up}
+\bbwhat Matrix $=$ upwind; right-hand side $=$ $\beta\times$(high-order
+minus upwind), evaluated with the current fields.
+\bbwhy It keeps the linear system easy to solve while delivering the
+accuracy of the high-order scheme at convergence. For fresh runs, the first
+50 iterations (or until $R<10^{-2}$) use pure upwind ($\beta=0$
+everywhere), because the initial fields from \code{potentialFoam} are far
+from the answer and a high-order correction would only add noise. Cells
+with bad mesh quality or misbehaving values keep $\beta=0$
+(Section~\ref{sec:remediation}).
+\bbwithout Putting the high-order scheme directly into the matrix makes it
+much harder for the smoother and the Krylov solver; dropping the correction
+altogether gives an inaccurate, overly diffusive answer.
+\end{bblock}
+
+\begin{pitfall}{deferred correction at very large time steps}
+  The correction is ``one step behind'', and the pseudo-time term
+  (Section~\ref{sec:ptc}) is what damps this lag. As the CFL number becomes
+  very large, that damping disappears. A simple analysis in the
+  professional paper\pro{Deferred correction at high CFL} shows the iteration is still stable in
+  idealised conditions, but with a small margin for high cell P\'eclet
+  numbers. An inaccurate inner linear solve can use up that margin. This is
+  part of the smoother story of Section~\ref{sec:smoothers}.
+\end{pitfall}
+
+% -----------------------------------------------------------------------------
+\subsection{Rhie--Chow interpolation and the checkerboard problem}\label{sec:rc}
+
+On a mesh where velocity and pressure are stored at the same place (cell
+centres, as in OpenFOAM), a naive discretisation has a famous blind spot.
+Consider the pressure along a row of cells alternating between high and low:
+$100, 0, 100, 0, \dots$ (Figure~\ref{fig:checker}). The pressure gradient
+in a cell is computed from the face values, which are averages of the two
+neighbouring cells, so every face value is 50 and the gradient in every
+cell is zero. The momentum equations do not feel this wildly oscillating
+pressure at all, and nothing in the equations removes it. The resulting
+solutions show a ``checkerboard'' pattern in the pressure.
+
+\begin{figure}[tbp]
+\centering
+\begin{tikzpicture}[font=\small]
+  \foreach \i in {0,...,5} \foreach \j in {0,...,3} {
+    \pgfmathparse{mod(\i+\j,2)==0 ? "cfcoupled!55" : "white"}
+    \edef\col{\pgfmathresult}
+    \fill[\col] (\i*0.7,\j*0.7) rectangle ++(0.7,0.7);
+    \draw (\i*0.7,\j*0.7) rectangle ++(0.7,0.7);
+  }
+  \node[below] at (2.1,-0.05) {checkerboard pressure: 100 (dark), 0 (light)};
+  \begin{scope}[shift={(5.9,0.4)}]
+    \foreach \i/\v in {0/100,1/0,2/100,3/0,4/100} {
+      \draw (\i*1.1,0) rectangle ++(1.1,1.0);
+      \node at (\i*1.1+0.55,0.5) {$\v$};
+    }
+    \foreach \i in {1,...,4} \node[cfcoupled, above] at (\i*1.1,1.0) {\scriptsize 50};
+    \node[align=left, anchor=west, font=\scriptsize] at (0,-0.55)
+      {face values (blue) are averages: all 50\\ $\Rightarrow$ averaged gradient in every cell $=0$\\
+       $\Rightarrow$ momentum does not ``see'' the oscillation};
+  \end{scope}
+\end{tikzpicture}
+\caption{The checkerboard problem. With cell-centred storage and averaged
+face values, an alternating pressure field produces zero pressure force in
+every cell. The Rhie--Chow term compares the direct difference across each
+face ($100-0$) with the averaged gradient ($0$) and damps the mismatch.}
+\label{fig:checker}
+\end{figure}
+
+Rhie and Chow~\cite{RhieChow1983} fixed this in the definition of the face
+flux. The flux through a face is the interpolated velocity dotted with the
+face area, \emph{plus} a correction proportional to
+\begin{equation*}
+  \underbrace{(p_N-p_P)\text{ measured directly across the face}}_{\text{sees the checkerboard}}
+  \;-\;
+  \underbrace{\text{average of the two cell pressure gradients}}_{\text{blind to it}} .
+\end{equation*}
+For a smooth pressure field the two terms are almost equal and the
+correction is tiny; for a checkerboard they differ strongly, and the
+correction creates a flux that drives the oscillation away. The size of the
+correction is set by a coefficient $D=V/\bar a$ (cell volume over the
+average momentum diagonal), which has the meaning ``how easily does the
+velocity in this cell respond to a pressure difference''.
+
+In coupledFoam the direct-difference part is implicit and appears in the
+matrix as the pressure--pressure entry $g$ of Figure~\ref{fig:block}; the
+averaged-gradient part is explicit. The continuity row \emph{is} the sum of
+these Rhie--Chow fluxes over the faces of the cell, and after the solve the
+new face fluxes are computed with \emph{exactly} the same face formula
+(D-003)\pro{Continuity row and Rhie--Chow interpolation}. As a result, the mass imbalance of the fluxes that
+coupledFoam writes out is exactly the continuity part of its residual, and
+it vanishes as the solver converges.
+
+\begin{bblock}{Rhie--Chow interpolation}
+\bbwhat A correction of the face flux that compares the pressure difference
+across a face with the interpolated cell pressure gradients.
+\bbwhy It suppresses the checkerboard pressure mode and fills the empty
+pressure--pressure block of the coupled system, turning an unsolvable
+saddle point into a system that multigrid can handle.
+\bbwithout Oscillating, meaningless pressure fields, and a linear system
+with zeros on part of its diagonal that standard smoothers cannot even
+start on.
+\end{bblock}
+
+On boundaries the Rhie--Chow term is only used where the pressure is fixed
+(e.g.\ an outlet); on walls and velocity inlets it is switched off, since
+it would otherwise create an artificial flux through the wall (D-013).
+
+\begin{pitfall}{the pseudo-time step is inside $D$}
+  $D=V/\bar a$ includes the pseudo-time term of the next section. The
+  converged solution therefore depends slightly on the final local time
+  step through the Rhie--Chow term, in the same way a SIMPLE solution
+  depends slightly on its relaxation factor. At the large CFL numbers
+  reached at convergence the effect is small, and the cavity comparison
+  with \code{simpleFoam} (Section~\ref{sec:t0}) bounds it for that case.
+\end{pitfall}
+
+% -----------------------------------------------------------------------------
+\subsection{Pseudo-transient continuation and the local CFL number}\label{sec:ptc}
+
+The steady problem is solved as if it were a time-dependent problem that
+is marched towards its steady state, but with a \emph{fake} (``pseudo'')
+time step that is chosen for speed and robustness, not for accuracy. This
+is called pseudo-transient continuation (PTC)~\cite{Kelley1998}.
+
+Technically, every momentum equation gets an extra term $V/\Delta t$ on its
+diagonal. A large diagonal makes the linear system easier to solve and
+makes each step smaller and more cautious. Crucially, the solver computes
+the \emph{change} of the fields in each iteration (``increment form'',
+Section~\ref{sec:precision}), with the current fields as the ``old time''
+values. The pseudo-time term then only enters the matrix, never the
+residual: it controls \emph{how} the solver walks, but not \emph{where} it
+ends up. The converged steady solution is the same whatever time steps were
+used (up to the small Rhie--Chow effect noted above).
+
+\begin{intuition}{walking down a foggy mountain}
+  You want to reach the bottom of a valley in fog. Small steps are safe but
+  slow; big steps are fast but you might walk off a cliff. PTC is a rule
+  for choosing the step length: start with small steps, and each time the
+  ground has clearly gone downhill (the residual dropped), lengthen your
+  stride. If a step looks dangerous, shorten it again. The valley floor
+  (the steady solution) does not depend on how you walked there.
+\end{intuition}
+
+\paragraph{Local time steps and the CFL number.}
+The time step is not the same everywhere. Each cell gets its own $\Delta t$
+from a \emph{CFL number}: roughly, the number of cells a fluid parcel would
+cross in one time step. A small cell with fast flow gets a small $\Delta t$,
+a large cell in slow flow a large one, so that all cells progress at a
+similar ``speed'' towards the steady state. A diffusive limit is included
+for regions where viscosity dominates. The global CFL number starts at 5
+and is adapted automatically between 1 and 500 (defaults).
+
+\paragraph{How the CFL number is adapted.}
+The default strategy (``mRDM''~\cite{Ceze2011,Ceze2013AIAA}) looks at the
+residual: if it went down, the CFL number is multiplied by the ratio of the
+old to the new residual, at most by 1.5 per iteration; if it went up, the
+CFL number is kept. The CFL number is \emph{reduced} only by the safety
+mechanisms (line search, failed linear solves, rollbacks), and after every
+reduction it is held for 10 iterations before it may grow again. Two
+alternative strategies (EXP: fixed growth factor; SER~\cite{MulderVanLeer1985}:
+proportional to the residual ratio, may also decrease) are selectable.
+
+\paragraph{Solution-limited local time step.}
+Even with a moderate global CFL number, a few cells (say, at a sharp edge)
+may want to change much faster than the rest. Before the time step is
+applied, coupledFoam estimates the change each cell would undergo; if it
+exceeds half of the reference velocity, that cell's time step alone is
+reduced. The global CFL can stay aggressive while individual trouble spots
+are throttled.
+
+\begin{bblock}{pseudo-transient continuation (PTC)}
+\bbwhat A fake time step per cell, $V/\Delta t$ on the diagonal, steered by
+an adaptive CFL number.
+\bbwhy It is the coupled solver's replacement for under-relaxation: it
+makes early iterations cautious and late iterations bold, automatically. It
+also improves the linear system (larger diagonal) exactly when the flow is
+still far from converged.
+\bbwithout Solving the full steady coupled problem from a poor initial guess
+in one Newton-like jump usually diverges. With a fixed small time step it
+would be robust but as slow as a transient simulation.
+\end{bblock}
+
+\begin{whyitmatters}{reading the CFL column in the log}
+  In a healthy run the CFL number climbs steadily towards its maximum and
+  stays there. A CFL number that keeps dropping back, or never gets
+  above a few tens, tells you the solver is repeatedly running into
+  trouble: look at the line-search factor, the cut counter and the
+  remediation set sizes in the same log line.
+\end{whyitmatters}
+
+% -----------------------------------------------------------------------------
+\subsection{Line search and physicality checks}\label{sec:ls}
+
+The linear solve proposes a change $\delta\Uv$, $\delta p$ for every cell.
+Before it is applied, coupledFoam asks: \emph{is this change physically
+reasonable?} The rule~\cite{Ceze2013AIAA} is simple: no cell's velocity may
+change by more than 30\,\% of a reference velocity $U_{\mathrm{ref}}$ (the
+largest velocity in the domain at the first iteration), and no cell's
+pressure by more than half the reference dynamic pressure
+$p_{\mathrm{ref}}=\tfrac12U_{\mathrm{ref}}^2$. If the proposed change is too
+large somewhere, the \emph{whole} change is scaled down by a factor
+$\omega\le1$ (the line-search factor) until the rule holds.
+
+If $\omega$ would have to be smaller than 0.1, the step is considered bad:
+the CFL number is halved and the step is recomputed from the same fields,
+up to three times. If it is still bad, the step is taken with $\omega=0.1$,
+and the cells that caused the problem are marked for special treatment
+(Section~\ref{sec:remediation}).
+
+A linear solve that failed (did not reduce its residual or produced
+non-finite numbers) is treated the same way: CFL cut and repeat (D-020,
+D-029). After three consecutive failed linear solves the run stops with a
+diagnostic output rather than carrying on with garbage.
+
+\begin{bblock}{line search}
+\bbwhat A factor $\omega\in(0,1]$ that shortens the proposed update so that
+no cell changes by more than a fixed fraction of the reference velocity or
+pressure.
+\bbwhy The linear system is only a local approximation of the nonlinear
+problem; far from convergence its answer can be wildly wrong in a few
+cells. The line search keeps such a step from wrecking the fields.
+\bbwithout One bad step in a single cell (e.g.\ at a sharp corner) could
+create huge velocities, negative turbulence quantities, and a diverged run.
+\end{bblock}
+
+\begin{pitfall}{a failed solve must not be applied at all}
+  During development a linear solve near the single-precision floor
+  diverged, and the original rule ``after the cuts, accept the step with
+  $\omega=0.1$'' applied 10\,\% of a garbage increment to an already
+  converged solution and destroyed it (D-020). Since then a failed solve is
+  never applied, and the Krylov solvers return their best iterate rather
+  than their last one.
+\end{pitfall}
+
+\begin{whyitmatters}{what $\omega$ in the log tells you}
+  $\omega=1$ means the full step was taken. Values well below one in the
+  early iterations are normal. Persistent small $\omega$ late in the run
+  means some region keeps producing large changes; the dynamic remediation
+  set size (next section) tells you how many cells are involved.
+\end{whyitmatters}
+
+% -----------------------------------------------------------------------------
+\subsection{Remediation: special treatment for problem cells}\label{sec:remediation}
+
+Real meshes of real cars contain a few bad cells: highly non-orthogonal,
+skewed, stretched, or next to a much larger neighbour. And during a run,
+some cells may temporarily misbehave. coupledFoam handles both with
+\emph{cell sets} that get gentler numerics locally, instead of making the
+whole simulation more cautious.
+
+\begin{description}
+\item[Static set (bad mesh).] Built once from OpenFOAM's mesh-quality
+  measures: non-orthogonality above $70^\circ$, skewness above 4, a
+  volume ratio to a neighbour above 20, or aspect ratio above 1000. These
+  cells get pure upwind convection, a stronger limiter on the
+  non-orthogonal correction, a limited pressure gradient in the
+  Rhie--Chow term, and half the time step.
+\item[Dynamic set (bad behaviour).] Updated every iteration. A cell is
+  added if its velocity exceeds twice the reference, its pressure exceeds
+  five times the reference, it differs strongly from its neighbours, any
+  value is not a finite number, or the line search or the rollback
+  (Section~\ref{sec:sentinel}) points at it. The cell and its direct
+  neighbours then get pure upwind, a tenth of the time step, and a clip on
+  how far the update may move them away from their neighbours' mean. A cell
+  leaves the set after 20 quiet iterations. A warning appears if the sets
+  cover more than 1\,\% of the mesh.
+\item[Zonal factors (optional).] You can name cell zones or patches (with
+  a number of cell layers around them) where the time step and the
+  high-order blending should be reduced, e.g.\ around a wheel. Off by
+  default (D-027).
+\end{description}
+
+\begin{intuition}{local speed limits}
+  Rather than lowering the speed limit on the whole motorway because of one
+  construction site, you put a local speed limit at the construction site.
+  Remediation is exactly that: local time step and scheme reductions where
+  they are needed, full speed everywhere else.
+\end{intuition}
+
+\begin{whyitmatters}{what the remediation sets mean for accuracy}
+  Pure upwind in a handful of cells changes the solution only locally and
+  slightly. The test criteria require the static set to stay at or below
+  1\,\% of the cells on the motorBike meshes (T4), and an empty dynamic set
+  at convergence on the airfoil (T3). If on your case a large fraction of
+  cells ends up in the sets, that is a sign to improve the mesh.
+\end{whyitmatters}
+
+% -----------------------------------------------------------------------------
+\subsection{Sentinel and rollback}\label{sec:sentinel}
+
+Before every field update, coupledFoam keeps a copy of the fields. After
+the update (and again after the turbulence update), a ``sentinel'' checks
+three things: are all values finite numbers, is the largest velocity below
+10 times the reference, and is the largest pressure below 50 times the
+reference? If not, the copy is restored (a \emph{rollback}), the CFL number
+is cut to a quarter, and the offending cells go into the dynamic set. After
+five consecutive rollbacks the run stops, writes the last valid fields into
+a time directory \code{<iteration>\_lastValid} together with a field that
+marks the offending cells, prints their positions, and exits with an error.
+A time directory containing \code{nan} or \code{inf} is never written.
+
+\begin{whyitmatters}{when a run stops}
+  If coupledFoam stops with a sentinel error, open the \code{\_lastValid}
+  time directory in ParaView and look at the \code{sentinelFlag} field: it
+  shows you where the trouble started, usually at a mesh defect or a
+  boundary-condition problem.
+\end{whyitmatters}
+
+% -----------------------------------------------------------------------------
+\subsection{Restart}\label{sec:restart}
+
+Whenever results are written, coupledFoam writes the normal OpenFOAM fields
+and, last, a small dictionary \code{coupledState} with everything the
+iteration needs to continue exactly where it stopped: iteration number, CFL
+number, residual history values, reference values, the dynamic set, the
+rollback counters and more (D-017). It is written under a temporary name and
+renamed at the end, so its presence guarantees that the time directory is
+complete. On restart, the face fluxes are recomputed from the stored
+velocity and pressure with the stored Rhie--Chow coefficient, and the
+difference to the stored fluxes is logged as a consistency check. The
+restart test (T-restart) requires that a run split in two reaches the same
+answer as a continuous run. The optional Anderson history
+(Section~\ref{sec:anderson}) is not part of the restart state (D-026): a
+restarted run begins with an empty history.
+
+% -----------------------------------------------------------------------------
+\subsection{Krylov solvers: GMRES, FGMRES and BiCGStab}\label{sec:krylov}
+
+Now to the inner loop: solving the big linear system $\mathsf A\,\vect x=\vect b$
+once per outer iteration. For millions of cells a direct solution
+(Gaussian elimination) is out of the question in memory and time. Iterative
+\emph{Krylov} methods~\cite{Saad2003} are used instead.
+
+\begin{intuition}{building the answer from repeated experiments}
+  A Krylov method only needs one operation: ``multiply a vector by the
+  matrix''. It starts with the current error (the residual), multiplies it
+  by the matrix, multiplies the result again, and so on. Each product shows
+  how the system ``responds'' to a certain pattern. From these responses it
+  builds a combination that best explains the right-hand side. Think of
+  tuning a sound system: you play a few test signals, record how the room
+  responds, and combine them into the correction that best cancels the
+  echo.
+\end{intuition}
+
+\begin{description}
+\item[GMRES] (Generalised Minimal RESidual) keeps all the directions it has
+  generated and picks, at every step, the combination with the smallest
+  residual. It never gets worse, but the memory grows with every step, so
+  it is \emph{restarted} after $m$ steps (default $m=10$; $m=6$ above 40
+  million cells to save memory).
+\item[FGMRES] (Flexible GMRES~\cite{Saad1993}) is GMRES that additionally
+  stores the preconditioned directions. This costs twice the memory but
+  allows the preconditioner to be slightly different every time it is
+  applied, which is the case for the K-cycle multigrid
+  (Section~\ref{sec:amg}). FGMRES is the default in coupledFoam, and the
+  K-cycle is refused at start-up with any other Krylov solver.
+\item[BiCGStab] (BiConjugate Gradient Stabilised) needs only a few vectors
+  regardless of the number of steps, but its residual does not decrease
+  monotonically and it can break down. coupledFoam's version restarts
+  after a breakdown and returns the best iterate it has seen.
+\end{description}
+
+All inner products and norms inside these solvers are accumulated in double
+precision, even though the vectors are stored in single precision
+(Section~\ref{sec:precision}).
+
+\begin{bblock}{Krylov solver}
+\bbwhat An iterative method that improves the solution of
+$\mathsf A\vect x=\vect b$ using only matrix--vector products and
+combinations of vectors.
+\bbwhy It is the only affordable way to solve linear systems with tens of
+millions of unknowns, and it parallelises well.
+\bbwithout Direct solvers would need far more memory than the machine has
+for any realistic mesh.
+\end{bblock}
+
+% -----------------------------------------------------------------------------
+\subsection{Preconditioning}\label{sec:precond}
+
+On its own, a Krylov method converges slowly on the coupled system: the
+matrix mixes scales from single cells to the whole domain, and a handful of
+matrix--vector products cannot capture that. A \emph{preconditioner} $\mathsf M$
+is a cheap, approximate inverse of $\mathsf A$. Instead of the original
+system, the Krylov method solves one in which $\mathsf A$ is combined with
+$\mathsf M^{-1}$; if $\mathsf M$ is a good approximation, this combined
+system is close to the identity and is solved in a few steps.
+
+\begin{intuition}{glasses for the solver}
+  The Krylov method is a good reader with bad eyes. The preconditioner is a
+  pair of glasses: it does not read for you, but it makes the text sharp
+  enough that reading is fast. Better glasses (a stronger preconditioner)
+  cost more to make, so there is a sweet spot.
+\end{intuition}
+
+coupledFoam offers two preconditioners: \code{blockDiagonal} (invert only
+the $4\times4$ diagonal block of each cell; cheap and weak; used in the
+benchmark to measure how much the multigrid is worth) and \code{blockGAMG},
+the block algebraic multigrid described next (the default).
+
+% -----------------------------------------------------------------------------
+\subsection{Algebraic multigrid}\label{sec:amg}
+
+\paragraph{The key observation.} Simple iterative ``smoothers'' such as
+Gauss--Seidel (Section~\ref{sec:smoothers}) update each cell from its
+neighbours. They remove \emph{jagged} errors (errors that change sign from
+cell to cell) very quickly, because those are local. But \emph{smooth}
+errors, spread over hundreds of cells, are reduced only very slowly:
+information travels one cell per sweep.
+
+\paragraph{The key trick.} A smooth error on a fine mesh looks jagged on a
+much coarser mesh. So: smooth a little on the fine mesh, then transfer the
+remaining (smooth) error problem to a coarser mesh, where it is cheap to
+reduce, and recursively to even coarser meshes; then interpolate the
+correction back and smooth again. That is \emph{multigrid}.
+
+\begin{intuition}{fixing a picture at several zoom levels}
+  To fix the colour balance of a large photo you do not retouch pixel by
+  pixel: you fix the overall tone on a thumbnail, then the regional
+  shading at medium size, then the fine details at full size. Each level
+  corrects the errors it can see best.
+\end{intuition}
+
+\paragraph{Algebraic and additive-correction.} OpenFOAM's \code{GAMG} and
+coupledFoam's \code{blockGAMG} build the coarse ``meshes'' purely from the
+matrix and the geometry of the faces, without a second mesh file:
+neighbouring cells are glued together into coarse cells
+(\emph{agglomeration}), using OpenFOAM's own \code{faceAreaPair}
+agglomeration. In the additive-correction
+approach~\cite{Hutchinson1986,Weiss1999}, the equation of a coarse cell is
+simply the sum of the equations of its fine cells, and the coarse
+correction is added unchanged to all fine cells it contains. coupledFoam
+does this with $4\times4$ blocks; the sums are accumulated in double
+precision and the result is stored in single precision. With
+\code{mergeLevels 2}, two pairwise agglomeration steps are merged into one
+level, so each level has roughly a quarter of the cells of the one above.
+
+\begin{figure}[tbp]
+\centering
+\begin{tikzpicture}[>=Stealth, font=\small,
+  lev/.style={circle, fill=cfcoupled, inner sep=1.6pt},
+  crs/.style={rectangle, fill=cfpit, inner sep=2.4pt}]
+  % V-cycle
+  \begin{scope}
+    \node at (1.5,0.6) {\textbf{V-cycle}};
+    \foreach \x/\y in {0/0,0.75/-1,1.5/-2} \node[lev] (v\x) at (\x,\y) {};
+    \node[crs] at (2.25,-3) {};
+    \foreach \x/\y in {3/-2,3.75/-1,4.5/0} \node[lev] at (\x,\y) {};
+    \draw[->] (0,0) -- (0.75,-1); \draw[->] (0.75,-1) -- (1.5,-2);
+    \draw[->] (1.5,-2) -- (2.25,-3); \draw[->] (2.25,-3) -- (3,-2);
+    \draw[->] (3,-2) -- (3.75,-1); \draw[->] (3.75,-1) -- (4.5,0);
+  \end{scope}
+  % W-cycle
+  \begin{scope}[shift={(5.4,0)}]
+    \node at (3.5,0.6) {\textbf{W-cycle}};
+    \coordinate (a) at (0,0); \coordinate (b) at (0.5,-1);
+    \coordinate (c) at (1.0,-2); \coordinate (d) at (1.5,-3);
+    \coordinate (e) at (2.0,-2); \coordinate (f) at (2.5,-3);
+    \coordinate (g) at (3.0,-2); \coordinate (h) at (3.5,-1);
+    \coordinate (i) at (4.0,-2); \coordinate (j) at (4.5,-3);
+    \coordinate (k) at (5.0,-2); \coordinate (l) at (5.5,-3);
+    \coordinate (m) at (6.0,-2); \coordinate (n) at (6.5,-1);
+    \coordinate (o) at (7.0,0);
+    \draw[->] (a)--(b); \draw[->] (b)--(c); \draw[->] (c)--(d); \draw[->] (d)--(e);
+    \draw[->] (e)--(f); \draw[->] (f)--(g); \draw[->] (g)--(h); \draw[->] (h)--(i);
+    \draw[->] (i)--(j); \draw[->] (j)--(k); \draw[->] (k)--(l); \draw[->] (l)--(m);
+    \draw[->] (m)--(n); \draw[->] (n)--(o);
+    \foreach \p in {a,b,c,e,g,h,i,k,m,n,o} \node[lev] at (\p) {};
+    \foreach \p in {d,f,j,l} \node[crs] at (\p) {};
+  \end{scope}
+  % labels
+  \foreach \y/\t in {0/finest (the mesh),-1/level 1,-2/level 2,-3/coarsest} {
+    \node[anchor=east, font=\scriptsize] at (-0.3,\y) {\t};
+  }
+\end{tikzpicture}
+\caption{Multigrid cycles over four levels. Going down: smooth, then pass
+the remaining residual to the coarser level. Going up: add the coarse
+correction, smooth again. Blue dots: smoothing; orange squares:
+coarsest-level solve. The V-cycle visits each coarse level once; the
+W-cycle visits coarse levels repeatedly, which is stronger but more
+expensive. The F-cycle lies in between; the K-cycle decides at every level
+and every visit whether a second, W-like visit is worth it.}
+\label{fig:vcycle}
+\end{figure}
+
+\paragraph{Cycle types.} How often the coarse levels are visited is the
+\emph{cycle type} (Figure~\ref{fig:vcycle}):
+\begin{description}
+\item[V] once per level: cheapest.
+\item[W] twice per level, recursively: strongest and most expensive.
+\item[F] in between: one extra visit per level.
+\item[K] (Notay and Vassilevski~\cite{NotayVassilevski2008}, the basis of
+  the AGMG solver~\cite{Notay2010}; default): at each coarse level, the
+  correction is treated as a mini-Krylov step; if the first visit reduced
+  the coarse residual well (to a quarter or better), it stops there
+  (V-like); otherwise it makes a second visit and optimally combines the
+  two (W-like). It thus adapts per level and per application.
+\end{description}
+Additive-correction multigrid has a comparatively weak coarse-level
+correction, which is why a plain V-cycle does not scale optimally with it,
+and why the adaptive K-cycle is the default. Because the K-cycle is not
+exactly the same operation every time it is applied, it needs the flexible
+Krylov solver FGMRES.
+
+\paragraph{What cycles cost.} If each level has $r$ times fewer cells than
+the one above, the work of one cycle, measured in units of ``one sweep on
+the finest mesh'', is (derived in the professional paper\pro{Block additive-correction AMG}):
+\begin{center}\small
+\begin{tabular}{lrrrr}
+\toprule
+coarsening ratio $r$ & 2 & 3 & 4 & 8\\
+\midrule
+V & 2.00 & 1.50 & 1.33 & 1.14\\
+F & 4.00 & 2.25 & 1.78 & 1.31\\
+W & $\infty$ & 3.00 & 2.00 & 1.33\\
+\bottomrule
+\end{tabular}
+\end{center}
+With plain pairwise agglomeration ($r=2$) a W-cycle would cost more with
+every additional level. The solver therefore enforces a rule: for W- and
+K-cycles every level must have at least three times fewer cells than the
+one above; if not, it merges more agglomeration steps (up to four) and
+tries again, and stops with an error if the rule still fails. It also
+checks that the total size of all coarse matrices stays below 1.5 times the
+fine matrix (``operator complexity'').
+
+\paragraph{The coarsest level.} At the bottom of the hierarchy the system is
+small. If it has at most 64 cells on one rank, it is solved exactly by a
+dense LU factorisation in double precision; otherwise by a few BiCGStab
+iterations. The choice is automatic and printed in the log.
+
+\begin{bblock}{algebraic multigrid (block-GAMG)}
+\bbwhat A hierarchy of ever coarser versions of the matrix, built by gluing
+cells together, with smoothing on each level and corrections passed
+between levels.
+\bbwhy It reduces errors of all sizes at a cost proportional to the number
+of cells. It is what makes the solver usable on meshes with millions of
+cells.
+\bbwithout With a simple preconditioner (block diagonal), the number of
+Krylov iterations grows strongly with mesh size; configuration D of the
+benchmark measures exactly this (Section~\ref{sec:protocol}).
+\end{bblock}
+
+\paragraph{Cycle-efficiency controller (autoTune).} The solver measures
+how well the multigrid cycle works: on the first application in each
+linear solve it checks by how much one cycle reduces the residual (the
+ratio $\rho$; small is good). Every 50 outer iterations it looks at the
+median $\rho$. If the cycle is weak ($\rho>0.7$ in two consecutive windows)
+it adds post-smoothing sweeps (up to 4) and, for V and F cycles, promotes
+the cycle type (V$\to$F$\to$W, only if the coarsening rule allows); if the
+cycle is very effective ($\rho<0.3$) it removes sweeps again. Changes happen
+only between linear solves and are logged as events. The K-cycle is not
+promoted further, since it adapts internally.
+
+% -----------------------------------------------------------------------------
+\subsection{Smoothers: why Gauss--Seidel failed and ILU(0) worked}\label{sec:smoothers}
+
+The smoother is the local workhorse of each multigrid level. coupledFoam
+has two:
+\begin{description}
+\item[Block Gauss--Seidel.] Go through the cells one by one; for each cell,
+  solve its own $4\times4$ block exactly, using the latest values of the
+  neighbours. Cheap and simple.
+\item[Block ILU(0)] (incomplete LU factorisation without fill-in, in
+  OpenFOAM's ``DILU'' form, D-015). Build an approximate factorisation of
+  the whole matrix that keeps the original sparsity pattern and only
+  modifies the diagonal blocks, then apply it in one forward and one
+  backward sweep. More expensive to set up, but it transports information
+  along the whole sweep direction and treats the coupling between cells
+  much more faithfully.
+\end{description}
+
+\paragraph{A learning story (D-028).} During development, the cavity at
+$Re=1000$ with the \code{linearUpwind} scheme refused to converge with
+the original configuration (BiCGStab, block multigrid, block Gauss--Seidel
+smoother): as soon as the upwind start-up ended and deferred correction
+was switched on, the CFL number oscillated, the line search kept cutting
+it, and the residual stagnated far above the target. With pure upwind the
+same configuration converged. The obvious suspect was deferred correction
+at large time steps, and an analysis (Section~\ref{sec:dc}, pitfall box)
+showed that the theoretical stability margin is indeed small.
+
+The decisive experiment was different: \emph{keep everything the same and
+only change the smoother to block ILU(0)}. The same discretisation then
+reached the maximum CFL number without a single cut and converged to
+$R<10^{-8}$ quickly, with a fraction of the Krylov iterations and of the
+solve time. The real culprit was the \emph{quality of the inner solve}:
+the $4\times4$ point smoother is weak on the saddle-point structure of the
+coupled system, the resulting poor increments were what made the outer
+iteration oscillate, and deferred correction merely had too little margin
+to absorb them. The measured details are in D-028 and in the professional
+paper\pro{Deferred correction at high CFL}.
+
+\begin{whyitmatters}{what this story teaches}
+  \begin{itemize}
+  \item Symptoms in the outer iteration (oscillating CFL, stagnating
+    residual) can be caused by the inner linear solver. Before changing
+    the discretisation, check whether the linear solves reach their
+    tolerance.
+  \item The accuracy of the inner solve and the robustness of the outer
+    iteration have to be designed together. This is why coupledFoam has
+    the Eisenstat--Walker tolerance (Section~\ref{sec:ew}), stronger
+    cycles, and the treatment of failed solves.
+  \end{itemize}
+\end{whyitmatters}
+
+\paragraph{Current status of the default.} The formal decision on the
+default smoother is made by a dedicated benchmark on the backward-facing
+step (T2, gate B2 of the specification: ILU(0) must bring at least 15\,\%
+wall-clock gain). Until that is run, the test cases still name
+\code{blockGaussSeidel}; the recommended settings for the F1 case
+(Section~\ref{sec:f1}) already use \code{blockILU0}.
+
+% -----------------------------------------------------------------------------
+\subsection{Eisenstat--Walker: do not over-solve}\label{sec:ew}
+
+How accurately should the linear system be solved in each outer iteration?
+Early on, the matrix itself is only a rough approximation of the nonlinear
+problem (it was built from fields that are still far from the answer).
+Solving it to ten digits is wasted effort: the next outer iteration builds
+a different matrix anyway. Late in the run, when the outer iteration
+converges fast, a sloppy linear solve would slow it down.
+
+The Eisenstat--Walker rule~\cite{EisenstatWalker1996,Knoll2004} sets the
+linear tolerance $\eta_n$ (the factor by which the linear residual must be
+reduced) from the progress of the outer iteration: roughly $\eta_n\approx
+0.9\,(R_n/R_{n-1})^2$. When the outer residual drops quickly, $\eta_n$
+becomes small (solve more accurately); when it stagnates, $\eta_n$ stays
+large (solve loosely). It is kept between $10^{-3}$ and $0.5$, is $0.5$ in
+the first iteration and during the upwind start-up, and at least one
+Krylov iteration is always made.
+
+\begin{intuition}{measuring with the right ruler}
+  When you are still sawing a board roughly to length you do not measure
+  with a micrometer; you measure to the millimetre only for the final cut.
+  Eisenstat--Walker picks the measuring precision of each inner solve to
+  match how close the outer iteration is to the answer.
+\end{intuition}
+
+\begin{pitfall}{a zero increment freezes the solver}
+  If the linear solver's absolute tolerance is reached before the outer
+  target, the solver may decide to do zero iterations, the increment is
+  zero, and the outer iteration stops moving. This happened on the cavity
+  (D-022). Hence the rule ``at least one Krylov iteration'', and the
+  requirement that the absolute linear tolerance lie below the outer
+  target.
+\end{pitfall}
+
+% -----------------------------------------------------------------------------
+\subsection{Anderson acceleration (optional)}\label{sec:anderson}
+
+Anderson acceleration~\cite{Anderson1965,WalkerNi2011} looks at the last
+few outer updates (default four) and asks: is there a combination of them
+that would have predicted the current one better? If the updates follow a
+pattern (for example, they keep zig-zagging), it extrapolates along that
+pattern and takes a larger, better-aimed step. The extrapolated state must
+pass the same sentinel checks; the history is cleared after every CFL cut,
+every change of the remediation sets and every rollback.
+
+It is \emph{off by default}, because it needs to store the recent history:
+about 320 bytes per cell for four steps, which matters at tens of millions
+of cells. The benchmark measures whether it pays off on T1 and T3
+(Figure~\ref{fig:anderson}).
+
+% -----------------------------------------------------------------------------
+\subsection{Processor agglomeration: gathering coarse levels}\label{sec:procagg}
+
+In a parallel run each rank owns a piece of the mesh. On the fine levels
+each rank has plenty of work, but a few levels down each rank owns only a
+handful of coarse cells, and the time is dominated by waiting for messages
+from other ranks (\emph{latency}), not by arithmetic. coupledFoam therefore
+gathers coarse levels onto fewer ranks: a level with fewer than 5000 cells
+per rank is moved onto a quarter of the ranks, and a level with fewer than
+5000 cells in total onto one rank (D-030). The finest level is never
+gathered.
+
+\begin{intuition}{do not hold a ten-person meeting about three items}
+  If ten people each have one small item to decide, calling a meeting where
+  everyone waits for everyone else costs more than letting one person
+  collect the items and decide alone. Skipping the coarse levels altogether
+  is not an option: they carry the large-scale correction and cost less
+  than 5\,\% of the cycle work.
+\end{intuition}
+
+% -----------------------------------------------------------------------------
+\subsection{Float versus double: the precision design}\label{sec:precision}
+
+Computers store real numbers in \emph{floating point}: double precision
+(``double'', 8 bytes, about 16 significant digits) or single precision
+(``float'', 4 bytes, about 7 digits). OpenFOAM normally works entirely in
+double.
+
+\paragraph{Why float at all?} Sparse linear algebra is limited by
+\emph{memory bandwidth}: the processor spends most of its time waiting for
+matrix entries to arrive from memory, not computing with them. A float
+matrix is half the size, so it can be streamed through the processor in
+roughly half the time. The coupled matrix
+needs 16 numbers per cell for the diagonal block and 32 per internal face
+for the two off-diagonal blocks; on a hexahedral mesh with about three
+internal faces per cell that is about 448 bytes per cell in float, half the
+double-precision figure. Memory size matters just as much: the budget for
+the largest target mesh (45 million cells) is set out in the professional
+paper\pro{Storage and precision}.
+
+\paragraph{Why not float everywhere?} Seven digits are not enough to add up
+millions of numbers accurately, and not enough to reach the residual levels
+a converged steady solution needs. So coupledFoam separates two roles
+(D-001, D-012):
+\begin{itemize}
+\item \textbf{Stored in float} (\code{blockScalar}): the block matrix and all
+  Krylov and multigrid vectors, i.e.\ the big, bandwidth-hungry data.
+\item \textbf{Computed in double} (\code{reduceScalar}): every sum, dot
+  product and norm (accumulated in double, reduced across ranks in double),
+  the Galerkin sums of the coarse levels, the small dense matrices of
+  GMRES, and above all \emph{the residual $\vect b-\mathsf A\vect x$}, which is
+  computed from the double-precision assembly before the matrix is rounded
+  to float.
+\end{itemize}
+
+\paragraph{Why this works: the increment form.} In each outer iteration the
+solver does not solve for the new fields, but for the \emph{change}
+$\delta\vect x$: $\mathsf A_{\text{float}}\,\delta\vect x\approx\vect r$, with
+the residual $\vect r$ computed in double. The float solve only has to get
+the change roughly right; the next iteration measures the remaining error
+exactly again, in double, and corrects it. The final accuracy is therefore
+set by the double-precision residual, not by the float solve. This is the
+classical idea of mixed-precision iterative
+refinement~\cite{Baboulin2009,Carson2018}, built into the outer iteration.
+
+\begin{intuition}{a cheap tape measure and a precise reference}
+  You adjust a machine part using a cheap tape measure (the float solve),
+  but after each adjustment you check the part against a precise gauge (the
+  double residual). The cheap tape is good enough to know which way and
+  roughly how far to adjust; the precise gauge guarantees you do not stop
+  until the part is exactly right.
+\end{intuition}
+
+\begin{pitfall}{why OpenFOAM's own mixed-precision build did not help}
+  The specification asked for OpenFOAM's \code{SPDP} build. It turned out
+  that in OpenFOAM v2606 this build does the opposite of what is needed:
+  it stores the \emph{fields} in float and \emph{solves} in double (D-001).
+  coupledFoam therefore runs on a normal double-precision OpenFOAM and
+  defines its own float and double types for the block data. The native
+  \code{simpleFoam} reference thus uses the same double-precision fields.
+\end{pitfall}
+
+\begin{pitfall}{adding many small numbers in float}
+  Summing $10^8$ copies of $10^{-4}$ in float gives a visibly wrong result,
+  because each small addition to a large running sum is rounded away. The
+  unit test \code{Test-doubleReduce} demonstrates this and checks that the
+  double accumulator is exact (D-004). Every reduction in the solver
+  therefore goes through the double-precision layer.
+\end{pitfall}
+
+Other safety measures of the precision design: the $4\times4$ block
+inversions are done in double with a guard against zero pivots, and any
+value too large for float ($|v|>10^{30}$) is clamped and counted during the
+narrowing; a non-zero count is a warning in the log and a failure in the
+tests.
+
+\begin{bblock}{mixed precision}
+\bbwhat Store the big matrix and solver vectors in float; compute residuals,
+sums and reductions in double.
+\bbwhy Halves the memory traffic and matrix memory of the most expensive
+part of the solver, without losing final accuracy.
+\bbwithout All-double: twice the matrix memory and more time per linear
+iteration. All-float: the solver would stall at a residual level far above
+what a converged steady solution needs, and sums over large meshes would be
+wrong.
+\end{bblock}
+
+% -----------------------------------------------------------------------------
+\subsection{Fixing the pressure level in closed domains}\label{sec:pref}
+
+In a closed domain (no boundary fixes the pressure, e.g.\ the cavity), only
+pressure \emph{differences} matter: adding a constant to $p$ everywhere
+changes nothing. The linear system then has a ``free direction'' that has
+to be pinned down. OpenFOAM's usual weak reference only nudges one cell. In
+double precision that is enough, but once the right-hand side is rounded to
+float the float Krylov solve starts drifting along the free direction, and
+the run failed on the cavity (D-021). coupledFoam therefore \emph{replaces}
+the continuity equation of the reference cell by ``$p$ in this cell equals
+the reference value''. This is exact, because in a closed incompressible
+domain the continuity equations of all cells add up to zero, so one of them
+is redundant. For open domains with a fixed-pressure outlet, such as an
+external car simulation, this does not apply.
+
+% -----------------------------------------------------------------------------
+\subsection{Turbulence, MRF and the rest}\label{sec:turb}
+
+\paragraph{Turbulence.} The turbulence model is \emph{not} part of the
+coupled block. After each coupled update, coupledFoam calls the unmodified
+OpenFOAM turbulence model once (\code{turbulence->correct()}), with its
+usual solvers and relaxation factors for $k$ and $\omega$. Afterwards $k$
+and $\omega$ are kept above small minimum values and $\nu_t$ is capped at
+$10^5$ times the molecular viscosity (the number of capped cells is
+logged). Any OpenFOAM incompressible RANS model works; the tests use
+$k$-$\omega$ SST~\cite{Menter1994} and GEKO~\cite{Menter2025GEKO}.
+
+\paragraph{MRF (rotating zones).} Multiple-reference-frame zones, as used
+for rotating wheels, add a rotation term to the momentum equations. In
+\code{simpleFoam} this term is explicit; coupledFoam puts it into the
+$3\times3$ momentum part of the diagonal block, i.e.\ implicitly (D-006),
+extracted from OpenFOAM's own MRF operator so that any number of zones is
+handled. As in \code{simpleFoam}, the flux is stored relative to the
+rotating frame inside MRF zones (D-014).
+
+\paragraph{Non-orthogonal meshes.} On skewed, non-orthogonal meshes the
+diffusion terms and the Rhie--Chow pressure term need a correction. It is
+applied explicitly with a limiter (default 0.5, and 0.2 on faces of
+static-remediation cells), in the same spirit as OpenFOAM's
+\code{limited corrected} scheme.
+
+% =============================================================================
+\section{The test cases}\label{sec:tests}
+% =============================================================================
+
+\subsection{Primer: how to read the results}\label{sec:primer}
+
+\paragraph{How to read a convergence plot.}
+Convergence plots (Figure~\ref{fig:readconv}) show a residual against the
+iteration number with a \emph{logarithmic} vertical axis: each grid line is
+a factor of ten. On such an axis, steady exponential convergence is a
+straight line going down; the steeper, the faster.
+\begin{itemize}
+\item A \emph{straight falling line} is healthy convergence.
+\item A curve that \emph{steepens} towards the end (bends downwards) is the
+  typical signature of a solver that gets more efficient as it approaches
+  the solution, as Newton-like methods do.
+\item A \emph{flat} line (plateau) means stagnation; a \emph{saw-tooth} or
+  noise band means the iteration is oscillating.
+\item Spikes that recover quickly are often a CFL cut or a rollback;
+  compare with the CFL panel.
+\end{itemize}
+Remember that the residual levels of different solvers are normalised
+differently (Section~\ref{sec:residual}); compare shapes, not heights.
+
+\begin{figure}[tbp]
+\centering
+\begin{tikzpicture}[>=Stealth, font=\small]
+  \draw[->] (0,0) -- (8.5,0) node[below left] {iteration};
+  \draw[->] (0,0) -- (0,4.4) node[above] {residual (log scale)};
+  \foreach \y in {0.5,1.3,2.1,2.9,3.7} \draw[gray!30] (0,\y) -- (8.3,\y);
+  \node[anchor=east, font=\scriptsize, align=right] at (-0.1,3.7) {start};
+  \node[anchor=east, font=\scriptsize, align=right] at (-0.1,0.5) {target};
+  % coupled-like curve
+  \draw[very thick, cfcoupled] (0.1,3.8) .. controls (0.8,3.3) and (1.4,2.6) .. (1.8,1.6)
+     .. controls (2.0,1.0) and (2.2,0.6) .. (2.4,0.3);
+  % straight line
+  \draw[very thick, cfnative] (0.1,3.9) -- (8.2,0.35);
+  % stagnating
+  \draw[thick, cfpit, dashed] (0.1,3.6) .. controls (1.5,2.3) and (2.5,2.0) .. (3.5,2.0)
+     -- (3.8,2.2) -- (4.1,1.9) -- (4.4,2.25) -- (4.7,1.95) -- (5.0,2.2) -- (5.3,1.9) -- (5.6,2.2);
+  % legend
+  \begin{scope}[shift={(9.0,3.4)}, font=\scriptsize]
+    \draw[very thick, cfcoupled] (0,0) -- (0.6,0);
+    \node[anchor=west] at (0.7,0) {bends down: accelerates};
+    \draw[very thick, cfnative] (0,-0.6) -- (0.6,-0.6);
+    \node[anchor=west] at (0.7,-0.6) {straight: constant rate};
+    \draw[thick, cfpit, dashed] (0,-1.2) -- (0.6,-1.2);
+    \node[anchor=west] at (0.7,-1.2) {plateau / saw-tooth:};
+    \node[anchor=west] at (0.7,-1.55) {stagnation};
+  \end{scope}
+\end{tikzpicture}
+\caption{Illustrative sketch (not data) of three typical residual histories
+on a logarithmic axis.}
+\label{fig:readconv}
+\end{figure}
+
+\paragraph{What are $C_d$ and $C_l$?}
+The force the air exerts on a body is split into \emph{drag} $F_D$ (along
+the free-stream direction) and \emph{lift} $F_L$ (perpendicular to it; for a
+race car the interesting part is negative lift, i.e.\ downforce). They are
+made dimensionless with the dynamic pressure of the free stream and a
+reference area $A$:
+\begin{equation*}
+  C_d = \frac{F_D}{\tfrac12\rho U_\infty^2 A},\qquad
+  C_l = \frac{F_L}{\tfrac12\rho U_\infty^2 A}.
+\end{equation*}
+In OpenFOAM they are computed by the \code{forceCoeffs} function object.
+In a steady RANS run they settle to constant values as the solver
+converges; the benchmark uses exactly this settling as its convergence
+criterion (Section~\ref{sec:protocol}).
+
+\paragraph{Relative $L_2$ difference.} To compare two profiles (say, the
+velocity along a line from coupledFoam and from \code{simpleFoam}), one
+takes the root of the sum of squared differences at all points, divided by
+the root of the sum of squared reference values. A value of $10^{-3}$ means
+the curves differ by about a tenth of a per cent of their typical size; a
+value of $10^{-6}$ means they are identical for all practical purposes.
+
+\paragraph{What does ``pass'' mean?} Every test has pass criteria fixed
+in the specification before any result was known, and they may only be
+tightened, never relaxed. The main criterion is always a comparison with
+\code{simpleFoam} on the \emph{identical} mesh, schemes and boundary
+conditions: both solvers solve the same discrete equations, so their
+converged answers should agree closely. Agreement with experiments is
+reported where available but is a property of the turbulence model and the
+mesh, not of the solver.
+
+\subsection{Test protocol}\label{sec:testprotocol}
+
+Unless stated otherwise, every case is run on 1 and on 4 parallel ranks, and
+both must pass, with integral quantities agreeing between rank counts to
+$10^{-4}$ relative. Development runs trap floating-point exceptions (a
+division by zero or an invalid operation aborts the run); any trap is a
+failure. Below the case tests sit unit tests of the individual components
+(block inversion, block matrix product against OpenFOAM's own, double
+reductions, the multigrid on a model problem, FGMRES with a deliberately
+changing preconditioner). Table~\ref{tab:tests} lists all test records
+produced so far.
+
+\cftable{tests}{Test results.}{tab:tests}
+
+\paragraph{How to read Table~\ref{tab:tests}.} One row per test record
+(\code{\_np1}, \code{\_np4}: run on 1 or 4 ranks). ``pass'' is the verdict
+of the test's own criteria; ``iterations'' and ``final R'' refer to the
+outer iteration of coupledFoam; ``wall'' is the elapsed time of the run on
+a \emph{shared} development machine and is not a benchmark result;
+``key metric'' shows the most important measured quantity of the test,
+e.g.\ \code{l2rel\_u} (relative $L_2$ difference of the $u$ profile against
+\code{simpleFoam}) or \code{crossRankRelDiff} (difference between the 1- and
+4-rank solutions).
+
+\subsection{T0: lid-driven cavity}\label{sec:t0}
+
+\paragraph{What it is.} A square box filled with fluid whose top wall (the
+lid) slides sideways; the fluid is dragged along and forms a large rotating
+vortex, with small counter-rotating vortices in the corners. Laminar, 2D,
+$128\times128$ cells, at Reynolds numbers 100 and 1000, with the
+\code{linearUpwind} scheme. It is the classical first test of any
+incompressible solver; reference data by Ghia et al.~\cite{Ghia1982}.
+
+\paragraph{What it tests.} The core of the solver: the block assembly,
+Rhie--Chow, the closed-domain pressure reference, the precision design, and
+whether a float linear solver can reach a residual of $10^{-8}$.
+Pass: $R<10^{-8}$ within 300 iterations, centreline profiles within
+$10^{-3}$ relative $L_2$ of \code{simpleFoam}, no floating-point trap, no
+clamped coefficients.
+
+\paragraph{Result at $Re=100$.} coupledFoam converged to $R<10^{-8}$ in
+\cfnum{TZeroReOneZeroZeroIterations} outer iterations; \code{simpleFoam}
+needed \cfnum{TZeroReOneZeroZeroNativeIterations} iterations to its own
+tolerance of $10^{-8}$. The centreline profiles agree to a relative $L_2$
+difference of \cfsci{TZeroReOneZeroZeroLTwou} in $u$ and
+\cfsci{TZeroReOneZeroZeroLTwov} in $v$, far below the threshold of
+$10^{-3}$. Two solvers that solve the same discrete equations have arrived
+at the same answer.
+
+\cffigure{T0_Re100_profiles}{T0, lid-driven cavity at $Re=100$: centreline
+profiles $u(y)$ and $v(x)$, coupledFoam against simpleFoam.}{fig:t0profiles}
+
+\paragraph{How to read Figure~\ref{fig:t0profiles}.} Left: the horizontal
+velocity $u$ (divided by the lid speed) along the vertical line through the
+centre of the box, plotted against height. Near the top it approaches the
+lid speed; lower down it is negative, which is the return flow of the
+vortex. Right: the vertical velocity $v$ along the horizontal centreline.
+\code{simpleFoam} is drawn as a thick line, coupledFoam as a thin dashed
+line on top of it. \emph{Good} means: you cannot see two lines.
+
+\cffigure{T0_Re100_np1_history}{T0, $Re=100$, one rank: combined residual $R$
+of coupledFoam and native initial residuals of simpleFoam (left); CFL number
+and line-search factor $\omega$ (right).}{fig:t0history}
+
+\paragraph{How to read Figure~\ref{fig:t0history}.} Left: residuals against
+iteration on a log axis; coupledFoam's $R$ together with the $p$ and $U_x$
+initial residuals of \code{simpleFoam}. Look at the \emph{shapes}: the
+coupled residual falls steeply within few iterations, the native ones
+decrease slowly over far more iterations. Right: the CFL number (log axis) ramps up from its start
+value to the maximum, and the line-search factor $\omega$ (right axis,
+between 0 and 1) shows whether full steps were taken. A smooth CFL ramp and
+$\omega$ at one are the picture of an untroubled run.
+
+\cffigure{T0_Re1000_profiles}{T0, lid-driven cavity at $Re=1000$: centreline
+profiles, coupledFoam against simpleFoam.}{fig:t0profilesRe1000}
+
+\cffigure{T0_Re1000_np1_history}{T0, $Re=1000$, one rank: residuals (left);
+CFL number and line-search factor $\omega$ (right).}{fig:t0historyRe1000}
+
+\paragraph{$Re=1000$} is the harder variant: the vortex is stronger, the
+corner vortices are larger and the convection scheme matters more. This is
+the case of the smoother story (Section~\ref{sec:smoothers}).
+Figures~\ref{fig:t0profilesRe1000} and~\ref{fig:t0historyRe1000} are read in
+the same way as those for $Re=100$; the measured values are listed in
+Table~\ref{tab:tests}.
+
+\subsection{T1--T5: from 2D turbulence to 3D vehicles}\label{sec:t1t5}
+
+\begin{description}
+\item[T1, pitzDaily (SST).] The OpenFOAM tutorial of a 2D channel with a
+  backward-facing step and a contraction, about 12\,k cells, turbulent. It
+  tests turbulence coupling and inlet/outlet boundary conditions. Pass:
+  $R<10^{-6}$ within 400 iterations; pressure drop from inlet to outlet
+  within 1\,\% of \code{simpleFoam}; the CFL number at least 100 without
+  cuts after iteration 100; no rollbacks. \emph{Why you should care:} the
+  pressure drop is the simplest integral engineering quantity, and the CFL
+  criterion checks that the solver runs at full speed once past the
+  start-up.
+\item[T2, backward-facing step (SST).] A 2D channel whose floor steps down;
+  the flow separates at the step and reattaches further downstream.
+  Experimental reference: Driver and Seegmiller~\cite{Driver1985}. Pass: the
+  reattachment length (where the wall shear stress on the lower wall changes
+  sign) within 2\,\% of \code{simpleFoam}, and at least two times fewer
+  outer iterations to a residual of $10^{-5}$ (the iteration definition for
+  the two solvers is fixed in D-024). \emph{Why you should care:}
+  separation and reattachment are the phenomena that dominate the wake and
+  diffuser of a car.
+\item[T3, airFoil2D (SST and GEKO).] The 2D airfoil tutorial. Pass: $C_l$
+  and $C_d$ within 0.5\,\% of \code{simpleFoam}, for each turbulence model,
+  with identical settings; empty dynamic remediation set at convergence.
+  \emph{Why you should care:} lift and drag of a wing profile, which is
+  what front and rear wings are.
+\item[T4, motorBike.] The OpenFOAM motorbike-with-rider tutorial meshed with
+  \code{snappyHexMesh}: a coarse mesh of about 350\,k cells (T4a) and a
+  finer mesh (T4b, retargeted to 1--2\,M cells, D-031), run in parallel.
+  Pass: converged by the force-window criterion; $C_d$ within 1\,\% of
+  \code{simpleFoam}; static remediation set at most 1\,\% of the cells; no
+  rollbacks. \emph{Why you should care:} this is the first case with a
+  complex 3D geometry and an automatically generated mesh with real
+  bad cells, the closest test to a car.
+\item[T5, Ahmed body, $25^\circ$ slant.] A simplified car body with a slanted
+  rear, the standard automotive bluff-body benchmark~\cite{Ahmed1984}; half
+  model, 5--8\,M cells, $U_\infty=\SI{40}{m/s}$, SST with wall functions.
+  Pass: $C_d$ within 1\,\% of \code{simpleFoam}; the comparison with the
+  experimental $C_d=0.285$ ($\pm10$\,\%) is for information only.
+  \emph{Why you should care:} it is the size class and flow type of a
+  vehicle simulation: separation on the slant, a wake, ground effect.
+\end{description}
+
+Three further tests check specific features:
+\begin{description}
+\item[T-restart.] T1 and T3 are split at iteration 150 and restarted: the
+  iteration count must match the continuous run within two iterations, the
+  final quantities within $10^{-5}$, and the recomputed fluxes must match
+  the stored ones.
+\item[T-fpe.] A deliberately brutal start of T1: zero initial velocity, no
+  potential-flow initialisation, start CFL 200, no upwind start-up. The
+  solver must not crash; rollbacks are allowed; it must recover and
+  converge. \emph{Why you should care:} this is the test of the safety net
+  (line search, remediation, sentinel).
+\item[T-mrf.] The \code{mixerVessel2D} tutorial with a rotating MRF zone;
+  torque compared with \code{simpleFoam}. Informational only, because the
+  specification gave no threshold (D-009).
+\end{description}
+
+\cftable{validation}{Validation, T1--T5: integral quantities (pressure drop,
+reattachment length, $C_l$, $C_d$, torque) of coupledFoam and simpleFoam and
+their relative differences.}{tab:validation}
+
+\paragraph{How to read Table~\ref{tab:validation}.} One row per case and
+quantity: the value from coupledFoam, the value from \code{simpleFoam} on the
+same mesh, their relative difference, the tolerance of the test, and the
+verdict. \emph{Good} means: the relative difference is well below the
+tolerance. A difference close to the tolerance on a case with many
+remediated cells would point to the local upwinding of
+Section~\ref{sec:remediation}.
+
+\cffigure{remediation_history}{Remediation set sizes and rollbacks over the
+iterations for T4 and T5.}{fig:remediation}
+
+\paragraph{How to read Figure~\ref{fig:remediation}.} The number of cells in
+the dynamic remediation set against the iteration. Typical and healthy: a
+peak during the early, violent iterations, then decay to (nearly) zero as
+the flow settles. A set that stays large, or grows late in the run, points
+at a persistent local problem (mesh or boundary condition).
+
+% =============================================================================
+\section{Performance: is it faster?}\label{sec:perf}
+% =============================================================================
+
+\subsection{The benchmark protocol in plain words}\label{sec:protocol}
+
+\paragraph{Contestants.} For each case (T1, T2, T3 with SST and with GEKO,
+T4a, T4b, T5), with identical mesh, decomposition, schemes, turbulence model
+and boundary conditions:
+\begin{description}
+\item[A] \code{simpleFoam} with the tutorial's own settings (for pitzDaily
+  and the backward-facing step the tutorial already uses SIMPLEC, D-025);
+\item[B] \code{simpleFoam} SIMPLEC with relaxation factors 1.0 for $p$ and
+  0.9 for $\Uv$, $k$, $\omega$: the tuned native baseline;
+\item[C] coupledFoam with default settings;
+\item[D] coupledFoam with the simple block-diagonal preconditioner instead
+  of multigrid (shows what the multigrid is worth);
+\item[E] coupledFoam with a V-cycle instead of the K-cycle on T2, T4b and
+  T5 (shows what the cycle choice is worth).
+\end{description}
+In addition, T1 and T3-SST are run with a fixed linear tolerance instead of
+Eisenstat--Walker (labelled F in the figures) and with Anderson acceleration
+(G).
+
+\paragraph{Finish line.} Each solver's own stopping rule is switched off and
+a fixed number of iterations is run. Afterwards the harness finds, for all
+solvers in the same way, the first iteration at which the force
+coefficients have settled: over the last 100 iterations, $C_d$ and $C_l$
+vary by at most 0.2\,\% of their mean (for T1 and T2, the pressure drop).
+This is the ``convergence iteration''.
+
+\paragraph{Stopwatch.} Every rank runs under \code{/usr/bin/time}, which
+records the wall-clock time and the CPU time. The totals of the whole run
+are scaled to the convergence iteration using the solver's own time log
+(D-025). CPU time is summed over ranks and reported in CPU-hours. Peak
+memory is the maximum resident memory of each rank. Each configuration is
+run three times and the median is reported.
+
+\paragraph{Machine.} 16 physical cores, 94\,GB of memory visible to WSL; MPI
+ranks bound to physical cores; the heavy cases use at most 10 ranks
+(D-031); benchmarks run only when no other solver is running, and the
+machine load before each run is recorded (D-007).
+
+\begin{whyitmatters}{why this protocol is fair}
+  Both solvers are stopped by the same, physically meaningful criterion
+  (the forces do not change any more), not by their incomparable residuals;
+  both get the same hardware and the same mesh; and the native solver gets
+  its best of two settings. A speed-up measured this way is the time you
+  would actually save.
+\end{whyitmatters}
+
+\subsection{How to read speed-ups}
+
+The speed-up is
+\begin{equation*}
+  \text{speed-up}=\frac{\text{time of the better native configuration (A or B)}}
+                      {\text{time of coupledFoam (C)}} ,
+\end{equation*}
+computed once with wall-clock time and once with CPU-hours. A value above
+one means coupledFoam is faster; 2.0 means it needs half the time; a value
+below one means it is slower. The two can differ: if one solver scales
+worse in parallel, it may still finish sooner in wall time but consume
+more CPU-hours, or vice versa.
+
+\begin{table}[tbp]
+\centering\small
+\caption{Speed-up of coupledFoam against the better native configuration,
+from the benchmark (values $>1$: coupledFoam faster). Generated numbers;
+``pending'' where the benchmark has not been run yet.}
+\label{tab:speedups}
+\begin{tabular}{lcc}
+\toprule
+case & speed-up (wall-clock) & speed-up (CPU-hours)\\
+\midrule
+T1 pitzDaily & \cfnum{SpeedupWallTOne} & \cfnum{SpeedupCpuTOne}\\
+T2 backward-facing step & \cfnum{SpeedupWallTTwo} & \cfnum{SpeedupCpuTTwo}\\
+T3 airfoil, SST & \cfnum{SpeedupWallTThreeSST} & \cfnum{SpeedupCpuTThreeSST}\\
+T3 airfoil, GEKO & \cfnum{SpeedupWallTThreeGEKO} & \cfnum{SpeedupCpuTThreeGEKO}\\
+T4a motorBike, coarse & \cfnum{SpeedupWallTFoura} & \cfnum{SpeedupCpuTFoura}\\
+T4b motorBike, fine & \cfnum{SpeedupWallTFourb} & \cfnum{SpeedupCpuTFourb}\\
+T5 Ahmed body & \cfnum{SpeedupWallTFive} & \cfnum{SpeedupCpuTFive}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:speedups} extracts the speed-ups; the full executive summary
+with absolute times and the memory ratio is Table~\ref{tab:summary}.
+
+\cftable{executive_summary}{Executive summary: time to convergence (identical
+window criterion), best native configuration against coupledFoam, as
+wall-clock time and CPU-hours.}{tab:summary}
+
+\paragraph{How to read Table~\ref{tab:summary}.} Per case: the wall time and
+CPU-hours of the best native configuration and of coupledFoam, the two
+speed-ups, and the memory ratio (coupledFoam's peak memory divided by the
+native one; a value above one means coupledFoam needs more memory, which is
+expected because of the $4\times4$ blocks).
+
+\subsection{The benchmark figures}
+
+\cffigure{bench_wall}{Wall-clock time to convergence (median of three runs)
+per case and configuration.}{fig:benchwall}
+
+\cffigure{bench_cpu}{CPU time to convergence (CPU-hours summed over ranks,
+median of three runs).}{fig:benchcpu}
+
+\paragraph{How to read Figures~\ref{fig:benchwall} and~\ref{fig:benchcpu}.}
+One group of bars per case, one bar per configuration (legend). The
+vertical axis is \emph{logarithmic}: equal distances mean equal
+\emph{factors}, so a bar one grid step lower is ten times faster. Compare
+the coupledFoam bar (C) with the lower of the two \code{simpleFoam} bars
+(A, B). Bar D shows the cost of dropping the multigrid, E the cost of the
+V-cycle.
+
+\cffigure{bench_iters}{Outer iterations to convergence. Shown for
+completeness; the decisive metrics are those of Figures~\ref{fig:benchwall}
+and~\ref{fig:benchcpu}.}{fig:benchiters}
+
+\paragraph{Figure~\ref{fig:benchiters}} shows iteration counts. Expect
+coupledFoam to need far fewer; that alone proves nothing
+(Section~\ref{sec:fair}). The ratio of the iteration ratio to the time
+ratio tells you how much more expensive a coupled iteration is.
+
+\cffigure{bench_breakdown}{coupledFoam time per outer iteration split into
+assembly, linear solve and turbulence.}{fig:breakdown}
+
+\paragraph{How to read Figure~\ref{fig:breakdown}.} For each case, one bar
+of coupledFoam's average time per outer iteration, split into building the
+system (assembly), solving it (linear solve) and the turbulence update. In
+a coupled solver the linear solve normally dominates; if assembly or
+turbulence were dominant, optimising the multigrid would not help much.
+
+\cffigure{bench_memory}{Peak memory, sum of the per-rank maximum RSS.}{fig:memory}
+
+\paragraph{Memory (Figure~\ref{fig:memory}).} The sum over all ranks of
+each rank's peak memory. coupledFoam stores $4\times4$ blocks and the
+multigrid hierarchy, so it needs more memory than \code{simpleFoam}; the
+float storage (Section~\ref{sec:precision}) halves the matrix part of that
+overhead. For planning a large case, the ratio between the bars is the
+number to scale with.
+
+\cffigure{scaling}{Strong scaling on T4b: time per iteration and parallel
+efficiency of coupledFoam and simpleFoam. Pass: the parallel efficiency of
+coupledFoam at the largest rank count is at least 80\,\% of that of
+simpleFoam.}{fig:scaling}
+
+\paragraph{Scaling (Figure~\ref{fig:scaling}).} \emph{Strong scaling}
+means: the same mesh, more ranks. Left: time per iteration against the
+number of ranks, both on log axes; ideal scaling is a straight line
+falling with slope $-1$ (twice the ranks, half the time). Right:
+\emph{parallel efficiency}
+\begin{equation*}
+  E(n)=\frac{t(n_0)\,n_0}{t(n)\,n},
+\end{equation*}
+with $t(n)$ the time per iteration on $n$ ranks and $n_0$ the smallest
+rank count; $E=1$ is perfect, $E=0.5$ means half of the added cores are
+wasted on communication and waiting. On this machine the scaling test runs
+on 1, 2, 4, 8 and 10 ranks (D-031; the specification originally planned
+16), with the pass threshold unchanged. Multigrid solvers typically lose
+some efficiency on coarse levels; processor agglomeration
+(Section~\ref{sec:procagg}) is the countermeasure.
+
+\cftable{gamg_levels}{Block-GAMG hierarchy per case: levels, cells and ranks
+per level, coarsening ratios, operator complexity, coarsest-level
+solver.}{tab:gamglevels}
+
+\paragraph{How to read Table~\ref{tab:gamglevels}.} For each run: how many
+multigrid levels were built, the \code{mergeLevels} value finally used
+(larger than 2 means the coarsening rule forced more aggressive
+coarsening), the operator complexity $C_{\mathrm{op}}$ (total size of all
+level matrices relative to the finest; must be at most 1.5), and the number
+of cells on each level. Dividing consecutive cell counts gives the
+coarsening ratios of Section~\ref{sec:amg}.
+
+\cffigure{cycle_comparison}{Cycle types: wall time and Krylov iterations with
+the V-cycle (configuration E) against the default K-cycle.}{fig:cycles}
+
+\paragraph{Cycles (Figure~\ref{fig:cycles}).} Krylov iterations (left) and
+solve time (right) per cycle type. A stronger cycle needs fewer Krylov
+iterations but each is more expensive; the time panel decides.
+
+\cffigure{eta_rho_history}{Eisenstat--Walker forcing term $\eta_n$ and
+preconditioner efficiency $\rho$ with the controller events.}{fig:etarho}
+
+\paragraph{Controller histories (Figure~\ref{fig:etarho}).} Left: the linear
+tolerance $\eta_n$ chosen by Eisenstat--Walker, on a log axis. Expect it at
+0.5 during the start-up and falling as the outer iteration speeds up.
+Right: the measured cycle efficiency $\rho$ (lower is better); dotted
+vertical lines mark changes made by the autoTune controller.
+
+\cffigure{anderson}{Anderson acceleration on and off (T1, T3-SST): outer
+iterations and wall time.}{fig:anderson}
+
+\paragraph{Anderson (Figure~\ref{fig:anderson}).} Pairs of bars, off and on,
+for iterations (left) and wall time (right). Anderson is worth its memory
+only if the right panel shows a clear gain.
+
+% =============================================================================
+\section{What this means for the F1 half-car}\label{sec:f1}
+% =============================================================================
+
+The project's readiness check (\code{F1\_READINESS.md}) went through the
+F1 half-car case (the most recent stage, run with \code{simpleFoam} and
+$k$-$\omega$ SST) feature by feature. In plain language:
+
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.38\linewidth}
+                >{\raggedright\arraybackslash}p{0.55\linewidth}}
+\toprule
+feature of the F1 case & status in coupledFoam\\
+\midrule
+inlet (fixed velocity), outlet (\code{inletOutlet} velocity, fixed pressure)
+  & supported through the generic boundary treatment (Section~\ref{sec:bc})\\
+\code{slip} tunnel walls
+  & supported; on the review list to double-check\\
+no-slip car and driver, moving road, rotating wheel walls
+  & supported\\
+symmetry plane, processor patches
+  & supported (symmetry: zero flux; processor: fully implicit)\\
+MRF zones for the wheels, rear zone with \code{nonRotatingPatches}
+  & MRF implicit (Section~\ref{sec:turb}); \code{nonRotatingPatches} to be
+    verified before the first F1 run\\
+$k$-$\omega$ SST
+  & supported, segregated after each coupled step\\
+\code{bounded Gauss linearUpwind limited} for \code{div(phi,U)}
+  & supported through deferred correction (Section~\ref{sec:dc})\\
+open domain with fixed-pressure outlet
+  & good: no pressure reference needed (Section~\ref{sec:pref})\\
+no \code{cyclicAMI}, no mesh changes during the run
+  & fine; coupledFoam does not support topology changes at run time\\
+force function objects
+  & work; \code{solverInfo} shows empty entries for the block solve (the
+    coupledFoam log line and summary file carry that information)\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Switching the case over.} The readiness file contains a drop-in
+\code{fvSolution} block. What its main entries mean, in terms of this
+document:
+\begin{itemize}
+\item \code{solver blockFGMRES; preconditioner blockGAMG;}: the Krylov
+  solver and multigrid of Sections~\ref{sec:krylov}--\ref{sec:amg}.
+\item \code{adaptiveRelTol yes;}: Eisenstat--Walker (Section~\ref{sec:ew}).
+\item \code{cycleType K;} with the comment ``use V until the K-cycle fix
+  lands'': see the open items below.
+\item \code{smoother blockILU0;}: the smoother of the learning story
+  (Section~\ref{sec:smoothers}).
+\item \code{autoTune yes;}: the cycle-efficiency controller.
+\item The \code{coupled} dictionary with \code{potentialInit yes}: start
+  from a \code{potentialFoam} solution; the \code{convergence} entries set
+  a residual target and the force-window criterion (100 iterations,
+  0.2\,\%). By default the run stops when \emph{either} criterion is met
+  (D-005).
+\item The turbulence solvers for $k$ and $\omega$ stay as they are.
+\end{itemize}
+
+\paragraph{What to watch in the log.} coupledFoam prints one line per
+outer iteration starting with \code{CF|}, containing the CFL number, the
+line-search factor $\omega$, the number of CFL cuts, $R$, $r_U$, $r_p$,
+the Eisenstat--Walker tolerance, linear iterations and residual, the times
+for assembly, solve and turbulence, the sizes of the remediation sets, the
+rollback count and the number of clamped values. For a first F1 run, the
+useful questions are: does the CFL number climb and stay high
+(Section~\ref{sec:ptc})? Is $\omega$ mostly one (Section~\ref{sec:ls})? Do
+the remediation sets stay small (Section~\ref{sec:remediation})? Do the
+linear solves reach their tolerance (Section~\ref{sec:smoothers})? And,
+finally, do the force coefficients settle? At the end, a JSON summary with
+iterations, wall and CPU time and peak memory is written.
+
+\paragraph{Open items before a production F1 run.} The readiness check
+lists, at the time of writing: the verification of the \code{slip}
+linearisation and of MRF \code{nonRotatingPatches}; an open issue in
+parallel runs with the K-cycle that is being investigated (hence the
+comment to use the V-cycle until it is fixed); the formal smoother decision
+on T2; and the validation on T3 and T4. The results of T3--T5 and of the
+benchmark in this document (Sections~\ref{sec:t1t5} and~\ref{sec:perf}) are
+exactly the evidence those items require.
+
+\begin{whyitmatters}{what to expect on the F1 case}
+  The benchmark cases T4 and T5 are the closest to the F1 half-car: complex
+  3D geometry, \code{snappyHexMesh} meshes with bad cells, separated wakes,
+  and parallel runs. Their rows in Tables~\ref{tab:speedups}
+  and~\ref{tab:summary} and the memory figure are the best available
+  predictor of what coupledFoam will do on the F1 case. The F1 case adds
+  rotating MRF wheels and a moving ground, which T-mrf covers only
+  informally.
+\end{whyitmatters}
+
+% =============================================================================
+\section{Limitations}\label{sec:limits}
+% =============================================================================
+
+\begin{itemize}
+\item \textbf{Memory.} A coupled solver needs more memory than a segregated
+  one. The budget for the largest target mesh (45\,M cells) cannot be
+  verified on the development machine (94\,GB); the largest test meshes
+  are T4b and T5.
+\item \textbf{Periodic and AMI patches} are coupled explicitly (lagged
+  values), which slows convergence across them; implicit coupling is
+  planned for Phase~2.
+\item \textbf{The pseudo-time step enters the Rhie--Chow term}, so the
+  converged solution depends very slightly on the final time step, as a
+  SIMPLE solution depends on its relaxation factor
+  (Section~\ref{sec:rc}).
+\item \textbf{Gradient limiting in bad cells} applies to the Rhie--Chow
+  pressure gradient only; the gradient inside your convection scheme cannot
+  be limited per cell (D-018). With the default settings, bad cells use
+  pure upwind, so this gradient does not enter there.
+\item \textbf{Some boundary conditions are linearised about the previous
+  iteration} (\code{inletOutlet}, \code{totalPressure}); outflow through a
+  fixed-value velocity face uses the prescribed value (D-019).
+\item \textbf{MRF} is implemented implicitly but checked only by an
+  informational test (D-009).
+\item \textbf{The restart file is written atomically} only with the default
+  (uncollated) file handler (D-017).
+\item \textbf{Residuals} of coupledFoam and \code{simpleFoam} are not
+  directly comparable; all speed comparisons use the force window.
+\end{itemize}
+
+\paragraph{Phase 2} (not in this version): a block-selective algebraic
+multigrid~\cite{Uroic2018,Uroic2020} as an additional preconditioner,
+adaptive mesh refinement during the run (the restart format already
+reserves space for it), implicit cyclic and AMI coupling, GPU execution,
+and the 45\,M-cell production run with a measured memory budget.
+
+% =============================================================================
+\section{Summary: the ideas in ten sentences}\label{sec:summary}
+% =============================================================================
+
+\begin{enumerate}
+\item Pressure has no equation of its own; it is whatever makes the flow
+  conserve mass.
+\item \code{simpleFoam} handles this by letting velocity and pressure take
+  turns, with under-relaxation, which is cheap per iteration but needs many
+  iterations.
+\item coupledFoam solves velocity and pressure together in one system of
+  $4\times4$ blocks, which needs far fewer, but more expensive, iterations.
+\item Only wall-clock time and CPU-hours to the same converged forces decide
+  which is faster.
+\item The Rhie--Chow interpolation prevents checkerboard pressure and makes
+  the coupled system solvable.
+\item A pseudo-time step per cell, steered by an adaptive CFL number,
+  replaces under-relaxation and does not change the converged answer.
+\item Line search, problem-cell sets and rollback keep single bad steps or
+  bad cells from ruining a run.
+\item The linear system is solved by FGMRES with a block algebraic
+  multigrid, to a tolerance that follows the progress of the outer
+  iteration.
+\item The quality of the smoother decides whether the outer iteration runs
+  smoothly: block ILU(0) succeeded where block Gauss--Seidel failed.
+\item The big data are stored in float for speed, while every residual and
+  sum is computed in double, so the final accuracy is that of double
+  precision.
+\end{enumerate}
+
+% =============================================================================
+\section*{Glossary}\label{sec:glossary}
+\addcontentsline{toc}{section}{Glossary}
+% =============================================================================
+
+\begin{description}\small
+\item[Agglomeration.] Gluing neighbouring cells into coarse cells to build
+  the coarse levels of algebraic multigrid (Section~\ref{sec:amg}).
+\item[Algebraic multigrid (AMG, GAMG).] A solver or preconditioner that
+  reduces errors of all sizes by working on a hierarchy of coarsened
+  versions of the matrix.
+\item[Anderson acceleration.] Extrapolating the next outer update from a
+  short history of previous updates; optional in coupledFoam.
+\item[Assembly.] Computing all matrix entries and the right-hand side from
+  the current fields.
+\item[BiCGStab.] A Krylov method with low, fixed memory; its residual does
+  not decrease monotonically.
+\item[Block.] The $4\times4$ sub-matrix that couples the four unknowns
+  $(u,v,w,p)$ of one cell with those of itself or a neighbour.
+\item[Boundary linearisation.] Writing a boundary value as factor $\times$
+  cell value $+$ constant, which OpenFOAM provides for every patch type.
+\item[$C_d$, $C_l$.] Drag and lift coefficients: forces divided by dynamic
+  pressure times reference area.
+\item[CFL number.] Roughly, how many cells a fluid parcel crosses in one
+  (pseudo-)time step; controls the size of the pseudo-time step.
+\item[Checkerboard mode.] An alternating pressure pattern that a naive
+  cell-centred discretisation cannot see; removed by Rhie--Chow.
+\item[Continuity.] Conservation of mass; for incompressible flow
+  $\nabla\cdot\Uv=0$.
+\item[Convection.] Transport of a quantity (here momentum) by the flow
+  itself.
+\item[Coupled solver.] A solver that solves velocity and pressure
+  simultaneously in one linear system.
+\item[CPU-hours.] CPU time added up over all ranks; the computing cost of a
+  run.
+\item[Cycle (V, F, W, K).] The order in which multigrid visits its levels.
+\item[Deferred correction.] Keeping a robust low-order scheme in the matrix
+  and adding the difference to the high-order scheme as a known source.
+\item[Double precision.] 8-byte floating-point numbers, about 16 digits.
+\item[Eisenstat--Walker.] A rule that sets the inner (linear) tolerance
+  from the progress of the outer iteration.
+\item[FGMRES.] Flexible GMRES; tolerates a preconditioner that changes from
+  one application to the next.
+\item[Finite volume.] Discretisation by balancing fluxes over the faces of
+  each cell.
+\item[Float (single precision).] 4-byte floating-point numbers, about 7
+  digits.
+\item[Flux ($\phi$).] Volume per second crossing a face.
+\item[GMRES.] A Krylov method that minimises the residual over all
+  directions generated so far; restarted to limit memory.
+\item[Increment form.] Solving for the change of the fields, with the
+  residual as right-hand side; makes the float solve safe.
+\item[Inner iteration.] One iteration of the linear solver inside an outer
+  iteration.
+\item[Krylov method.] An iterative linear solver built from repeated
+  matrix--vector products.
+\item[Latency.] The waiting time for a message between ranks, independent
+  of its size.
+\item[Line search.] Shortening a proposed update by a factor $\omega\le1$ so
+  that no cell changes too much.
+\item[Local time step.] A pseudo-time step chosen separately for each cell.
+\item[LDU matrix.] OpenFOAM's sparse matrix format: diagonal, and upper and
+  lower entries per face.
+\item[Memory bandwidth.] How fast data can be moved from memory to the
+  processor; the usual bottleneck of sparse linear algebra.
+\item[MRF.] Multiple reference frame: a zone computed in a rotating frame
+  to represent rotating parts (e.g.\ wheels) in a steady run.
+\item[Operator complexity.] Total size of all multigrid level matrices
+  relative to the finest matrix.
+\item[Outer iteration.] One cycle of assemble, solve, update, turbulence;
+  the iteration counted in the log.
+\item[Parallel efficiency.] How well added cores are used: time on $n_0$
+  ranks times $n_0$, divided by time on $n$ ranks times $n$.
+\item[Preconditioner.] A cheap approximate inverse that makes a Krylov
+  method converge in far fewer iterations.
+\item[Processor agglomeration.] Gathering coarse multigrid levels onto fewer
+  ranks to save communication.
+\item[Pseudo-transient continuation (PTC).] Marching a steady problem with
+  fake time steps chosen for robustness and speed.
+\item[RANS.] Reynolds-averaged Navier--Stokes: equations for the
+  time-averaged turbulent flow, closed by a turbulence model.
+\item[Rank.] One MPI process of a parallel run, owning one piece of the
+  mesh.
+\item[Remediation.] Local, gentler numerics (upwind, smaller time step) in
+  cells with bad mesh quality or bad behaviour.
+\item[Residual.] How strongly the current fields violate the discrete
+  equations; zero at the discrete solution.
+\item[Rhie--Chow interpolation.] A correction of the face flux that couples
+  neighbouring pressures and removes the checkerboard mode.
+\item[Rollback.] Restoring the fields of the previous iteration after a
+  failed sentinel check.
+\item[Saddle-point system.] A system with a zero diagonal block, as the
+  coupled system would be without Rhie--Chow.
+\item[Segregated solver.] A solver that solves velocity and pressure one
+  after the other (SIMPLE, PISO).
+\item[Sentinel.] The check after each update for non-finite or absurdly
+  large values.
+\item[SIMPLE, SIMPLEC.] The classical segregated algorithms for steady
+  incompressible flow used by \code{simpleFoam}.
+\item[Smoother.] A cheap local iteration (Gauss--Seidel, ILU(0)) that
+  removes jagged errors on each multigrid level.
+\item[Speed-up.] Native time divided by coupledFoam time; above one means
+  coupledFoam is faster.
+\item[Strong scaling.] Same mesh, more ranks: how the time per iteration
+  falls.
+\item[Under-relaxation.] Accepting only a fraction of each change to keep a
+  segregated iteration stable.
+\item[Upwind.] Taking a face value from the upstream cell; robust but
+  diffusive.
+\item[Wall-clock time.] Elapsed time from start to finish of a run.
+\end{description}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
