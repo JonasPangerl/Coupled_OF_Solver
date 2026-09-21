@@ -1,0 +1,27 @@
+#!/bin/sh
+#------------------------------------------------------------------------------
+# Allwclean - remove all build products of coupledFoam (library, solver,
+# test applications, lnInclude). Touches only this repository and the
+# coupledFoam binaries in $FOAM_USER_LIBBIN / $FOAM_USER_APPBIN.
+#------------------------------------------------------------------------------
+cd "${0%/*}" || exit 1
+
+if [ -z "$WM_PROJECT_DIR" ]
+then
+    echo "Error: no OpenFOAM environment sourced" 1>&2
+    exit 1
+fi
+
+wclean libso src
+rm -rf src/lnInclude
+
+wclean applications/coupledFoam
+
+for app in applications/test/Test-*
+do
+    [ -d "$app/Make" ] && wclean "$app"
+done
+
+rm -f "$FOAM_USER_LIBBIN/libcoupledFoam.so"
+
+#------------------------------------------------------------------------------

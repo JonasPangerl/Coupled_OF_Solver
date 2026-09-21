@@ -1,7 +1,7 @@
 # wmake build products
 lnInclude/
-Make/linux*/
-Make/darwin*/
+**/Make/linux*/
+**/Make/darwin*/
 platforms/
 *.o
 *.so
@@ -48,3 +48,6 @@ venv/
 *~
 *.own~
 .vscode/
+
+# Case runs made by the test suite and the benchmark harness
+run/

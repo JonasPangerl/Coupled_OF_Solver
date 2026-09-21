@@ -1,0 +1,81 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T0 - lid-driven cavity
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+// Set by Allrun: coupledFoam or simpleFoam
+application     coupledFoam;
+
+startFrom       latestTime;
+
+startTime       0;
+
+stopAt          endTime;
+
+// Upper bound only; both solvers stop on their own convergence criterion
+// (coupledFoam: coupled.convergence, simpleFoam: SIMPLE.residualControl)
+endTime         20000;
+
+deltaT          1;
+
+writeControl    timeStep;
+
+writeInterval   20000;
+
+purgeWrite      0;
+
+writeFormat     binary;
+
+writePrecision  12;
+
+writeCompression off;
+
+timeFormat      general;
+
+timePrecision   8;
+
+runTimeModifiable false;
+
+functions
+{
+    // Centreline profiles, 129 points each (spec 13 T0)
+    centreLines
+    {
+        type            sets;
+        libs            (sampling);
+        writeControl    writeTime;
+        interpolationScheme cellPoint;
+        setFormat       raw;
+        fields          (U p);
+
+        sets
+        {
+            // u(y) on the vertical centreline x = 0.05
+            vertical
+            {
+                type    uniform;
+                axis    y;
+                start   (0.05 0 0.005);
+                end     (0.05 0.1 0.005);
+                nPoints 129;
+            }
+            // v(x) on the horizontal centreline y = 0.05
+            horizontal
+            {
+                type    uniform;
+                axis    x;
+                start   (0 0.05 0.005);
+                end     (0.1 0.05 0.005);
+                nPoints 129;
+            }
+        }
+    }
+}
+
+// ************************************************************************* //

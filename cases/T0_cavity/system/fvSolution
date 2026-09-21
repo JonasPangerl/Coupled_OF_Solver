@@ -1,0 +1,174 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T0 - lid-driven cavity
+  solvers.coupled : block linear solver (spec 6.1)
+  coupled         : outer iteration controls, all keywords of spec 11
+  SIMPLE, p, U    : native simpleFoam reference (SIMPLEC, spec 13)
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSolution;
+}
+
+solvers
+{
+    coupled
+    {
+        solver          blockBiCGStab;
+        preconditioner  blockGAMG;
+        tolerance       1e-8;
+        relTol          0.05;
+        maxIter         200;
+        gmresRestart    10;
+        blockGAMG
+        {
+            agglomerator          faceAreaPair;
+            nCellsInCoarsestLevel 500;
+            mergeLevels           1;
+            smoother              blockGaussSeidel;
+            nPreSweeps            1;
+            nPostSweeps           2;
+            nFinestSweeps         2;
+            coarsestSolver        blockBiCGStab;
+            coarsestTolerance     1e-3;
+            maxOperatorComplexity 1.5;
+            cacheAgglomeration    true;
+        }
+    }
+
+    // Native reference solver
+    p
+    {
+        solver          GAMG;
+        smoother        GaussSeidel;
+        tolerance       1e-10;
+        relTol          0.01;
+    }
+
+    U
+    {
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-10;
+        relTol          0.1;
+    }
+
+    // potentialFoam initialisation (spec 7.4)
+    Phi
+    {
+        $p;
+    }
+}
+
+coupled
+{
+    maxIter             2000;
+    potentialInit       no;     // closed cavity: potential flow is zero
+    startupUpwindIters  50;
+    nonOrthLimiter      0.5;
+    pRefCell            0;
+    pRefValue           0;
+
+    ptc
+    {
+        cflStrategy     mRDM;
+        CFL0            5;
+        CFLmin          1;
+        CFLmax          500;
+        gamma           1;
+        betaMax         1.5;
+        betaExp         1.1;
+        nHold           10;
+    }
+
+    lineSearch
+    {
+        fU              0.3;
+        fp              0.5;
+        omegaMin        0.1;
+        kappa           0.5;
+        maxCflCuts      3;
+    }
+
+    localLimit
+    {
+        enabled         yes;
+        fLoc            0.5;
+    }
+
+    remediation
+    {
+        static
+        {
+            enabled             yes;
+            nonOrthThreshold    70;
+            skewThreshold       4;
+            volRatioThreshold   20;
+            aspectThreshold     1000;
+            beta                0;
+            nonOrthLimiter      0.2;
+            cflFactor           0.5;
+        }
+        dynamic
+        {
+            enabled             yes;
+            cU                  2;
+            cp                  5;
+            cSpike              0.5;
+            nLayers             1;
+            nQuietIters         20;
+            cflFactor           0.1;
+            clipToNeighbourMean yes;
+        }
+    }
+
+    sentinel
+    {
+        maxRollbacks    5;
+    }
+
+    bounds
+    {
+        kMin            1e-12;
+        omegaMin        1e-6;
+        nutMaxFactor    1e5;
+    }
+
+    convergence
+    {
+        mode                any;
+        forceCoeffsWindow   100;
+        forceCoeffsTol      0.002;
+        residualTol         1e-8;   // T0 pass criterion R < 1e-8
+    }
+
+    ftz             yes;
+    writeState      yes;
+}
+
+// Native reference: SIMPLEC, converged to 1e-8 (spec 13)
+SIMPLE
+{
+    nNonOrthogonalCorrectors 0;
+    consistent      yes;
+    pRefCell        0;
+    pRefValue       0;
+
+    residualControl
+    {
+        p               1e-8;
+        U               1e-8;
+    }
+}
+
+relaxationFactors
+{
+    equations
+    {
+        U               0.9;
+    }
+}
+
+// ************************************************************************* //

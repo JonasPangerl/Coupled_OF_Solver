@@ -1,0 +1,18 @@
+blockMatrix/doubleReduce.C
+blockMatrix/blockLduInterface.C
+blockMatrix/blockLduMatrix4.C
+
+blockSolvers/blockSolver.C
+blockSolvers/blockBiCGStab.C
+blockSolvers/blockGMRES.C
+blockSolvers/blockGAMG.C
+blockSolvers/blockPreconditioners/blockPreconditioner.C
+blockSolvers/blockPreconditioners/blockDiagonal.C
+blockSolvers/blockPreconditioners/blockGAMGPrecon.C
+blockSolvers/blockSmoothers/blockSmoother.C
+blockSolvers/blockSmoothers/blockGaussSeidel.C
+blockSolvers/blockSmoothers/blockILU0.C
+
+io/jsonWriter.C
+
+LIB = $(FOAM_USER_LIBBIN)/libcoupledFoam

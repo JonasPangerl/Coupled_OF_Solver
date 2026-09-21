@@ -1,0 +1,52 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T0 - lid-driven cavity
+  Identical schemes for coupledFoam and the simpleFoam reference (spec 13).
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSchemes;
+}
+
+ddtSchemes
+{
+    default         steadyState;
+}
+
+gradSchemes
+{
+    default         Gauss linear;
+}
+
+divSchemes
+{
+    default         none;
+
+    // High-order scheme (simpleFoam: implicit; coupledFoam: deferred
+    // correction on top of the implicit upwind operator, spec 5.3a)
+    div(phi,U)          bounded Gauss linearUpwind grad(U);
+
+    // Low-order operator of the deferred correction (coupledFoam only)
+    div(phi,U)_upwind   bounded Gauss upwind;
+
+    div((nuEff*dev2(T(grad(U)))))   Gauss linear;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+    default         corrected;
+}
+
+// ************************************************************************* //

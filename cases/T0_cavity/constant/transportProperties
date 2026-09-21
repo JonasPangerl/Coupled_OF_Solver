@@ -1,0 +1,17 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T0 - nu is set by Allrun from Re = U_lid L / nu,
+  U_lid = 1 m/s, L = 0.1 m (Re 100 -> nu 1e-3, Re 1000 -> nu 1e-4)
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      transportProperties;
+}
+
+transportModel  Newtonian;
+
+nu              1e-3;
+
+// ************************************************************************* //
