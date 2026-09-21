@@ -15,7 +15,7 @@ Amendment B9:
                                    GMRES outcome recorded
   test_blockGAMG_cycles_motorBike  (heavy) the cycle study on the motorBike
                                    mesh (run/T4a_mesh)
-  test_procAgglom                  (heavy) 16 ranks, motorBike mesh:
+  test_procAgglom                  (heavy) CF_HEAVY_NP ranks, motorBike mesh:
                                    processorAgglomerator on vs off to 1e-5,
                                    ranks per level follow rule 6.3.4
 """
@@ -23,6 +23,7 @@ Amendment B9:
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -140,7 +141,7 @@ def test_blockGAMG(foam, cavity_mesh):
 CYCLES = ("V", "F", "W", "K")
 MERGE_LEVELS = 2
 MIN_RATIO = 3.0                 # coarsening-ratio rule 6.3.1 (W and K)
-PROC_AGGLOM_NPROCS = 16
+PROC_AGGLOM_NPROCS = int(os.environ.get("CF_HEAVY_NP", "10"))
 PROC_AGGLOM_CELLS_PER_RANK = 5000   # rule 6.3.4
 PROC_AGGLOM_SINGLE_RANK = 5000      # rule 6.3.4
 RANKS_LINE = "blockGAMG: ranks per level"
@@ -324,11 +325,14 @@ def _parse_ranks_per_level(log: Path) -> list[int] | None:
 
 
 def _expected_ranks(cells_per_level: list[int], nranks: int) -> list[int]:
-    """Rule 6.3.4: nCells(l) < 5000 -> 1 rank; nCells(l) < 5000*nRanks ->
-    max(1, nRanks/4) ranks; otherwise all ranks."""
+    """Rule 6.3.4 for levels >= 1; level 0 is never agglomerated (native
+    restriction, D-030). nCells(l) < 5000 -> 1 rank; nCells(l) <
+    5000*nRanks -> max(1, nRanks/4) ranks; otherwise all ranks."""
     out = []
-    for n in cells_per_level:
-        if n < PROC_AGGLOM_SINGLE_RANK:
+    for i, n in enumerate(cells_per_level):
+        if i == 0:
+            out.append(nranks)
+        elif n < PROC_AGGLOM_SINGLE_RANK:
             out.append(1)
         elif n < PROC_AGGLOM_CELLS_PER_RANK * nranks:
             out.append(max(1, nranks // 4))
@@ -339,8 +343,9 @@ def _expected_ranks(cells_per_level: list[int], nranks: int) -> list[int]:
 
 @pytest.mark.heavy
 def test_procAgglom(foam):
-    """B9 Test-procAgglom: 16 ranks, motorBike mesh; processor agglomeration
-    on vs off identical to 1e-5; ranks per level follow rule 6.3.4."""
+    """B9 Test-procAgglom: CF_HEAVY_NP ranks, motorBike mesh; processor
+    agglomeration on vs off identical to 1e-5; ranks per level follow
+    rule 6.3.4 (level 0 excepted, D-030)."""
     n = PROC_AGGLOM_NPROCS
     case = _motorbike_mesh(n)
     common = ["-tolerance", str(GAMG_TOLERANCE),

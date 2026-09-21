@@ -45,6 +45,36 @@ Description
     autoTune controller (6.3.5); a promotion to W or K is refused if the
     coarsening ratios do not satisfy the rule of 6.3.1.
 
+    Processor agglomeration (6.3.4), keyword processorAgglomerator:
+      masterCoarsest (default)
+          the rule of 6.3.4: a level l >= 1 with N_l global cells lives on
+          nRanks ranks if N_l >= procAgglomCellsPerRank*nRanks, on
+          max(1, nRanks/procAgglomDivisor) ranks if N_l is below that, and
+          on one rank if N_l < procAgglomCellsPerRank (5000, 4).
+          Levels 1..L-1 are gathered by the native GAMGProcAgglomeration
+          mechanism (runtime type blockGAMGRule, see
+          blockGAMGProcAgglomeration.H); the coarsest level L, which the
+          native mechanism cannot gather on its own, is gathered here with
+          the native lduPrimitiveMesh gathering (gatherCoarsest).
+          Level 0 (the decomposed mesh) is never agglomerated.
+      none
+          no processor agglomeration
+      nativeMasterCoarsest
+          the native masterCoarsest agglomerator (its own keywords)
+      any other word
+          passed verbatim to the native selector (manual, procFaces, eager)
+          together with the blockGAMG dictionary.
+    On a processor-agglomerated level l the ranks of a group restrict their
+    level-(l-1) operator locally and send it to the group master, which
+    assembles it with the native maps cellOffsets, faceMap, boundaryMap and
+    boundaryFaceMap (native GAMGSolver::procAgglomerateMatrix), 16
+    coefficients per block; processor faces that become internal go to
+    upper (owner side, map >= 0) or lower (neighbour side, map < 0).
+    Vectors are gathered/scattered with globalIndex::gather/scatter on the
+    group communicator. Ranks without the level skip all work on it and
+    below but take part in the gather and the scatter. Every reduction on a
+    level uses that level's communicator.
+
 SourceFiles
     blockGAMG.C
 
@@ -57,11 +87,14 @@ SourceFiles
 #include "blockSmoother.H"
 #include "blockSolver.H"
 #include "GAMGAgglomeration.H"
+#include "UPtrList.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 namespace Foam
 {
+
+class lduPrimitiveMesh;
 
 class blockGAMG
 {
@@ -73,7 +106,32 @@ public:
     static cycleKind cycleFromWord(const word& w);
     static word cycleName(const cycleKind c);
 
+
 private:
+
+    // Private Types
+
+        //- Gathering of a processor-agglomerated coarse level from the
+        //  local (pre-gather) coarse operators of a rank group (6.3.4)
+        struct gatherLevel
+        {
+            //- Group communicator, rank 0 = group master
+            label comm = -1;
+
+            //- True on the group master
+            bool master = false;
+
+            //- identity(nProcs(comm)) (procIDs for globalIndex)
+            labelList procIDs;
+
+            //- Native maps, master only (index = rank in comm)
+            labelList cellOffsets;
+            labelList vecOffsets;       // blockDim*cellOffsets
+            labelListList faceMap;
+            labelListList boundaryMap;
+            labelListListList boundaryFaceMap;
+        };
+
 
     // Private Data
 
@@ -94,6 +152,11 @@ private:
         label maxMergeLevels_;
         label denseLUMaxCells_;
 
+        //- Processor agglomeration controls (6.3.4)
+        word procAgglomType_;
+        label procAgglomCellsPerRank_;
+        label procAgglomDivisor_;
+
         //- Agglomeration in use (cached on the mesh database)
         const GAMGAgglomeration* aggPtr_;
 
@@ -104,7 +167,27 @@ private:
         reduceScalar Cop_;
         List<reduceScalar> ratios_;
 
-        //- Coarse matrices, index l = level l+1
+        //- Coarsest level index on this rank (= agglomeration size)
+        label L_;
+
+        //- Global cells and ranks per level (all ranks, cached)
+        labelList cellsPerLevel_;
+        labelList ranksPerLevel_;
+
+        //- Mesh of each level held by this rank (unset: not held)
+        UPtrList<const lduMesh> levelMesh_;
+
+        //- Gathering info, index = coarse level (set where the level is
+        //  processor-agglomerated and this rank holds the level below)
+        PtrList<gatherLevel> gather_;
+
+        //- Coarsest level gathered by blockGAMG (master only) and its
+        //  communicators (-1 if unused)
+        autoPtr<lduPrimitiveMesh> coarsestMesh_;
+        label coarsestAllComm_;
+        label coarsestAgglomComm_;
+
+        //- Coarse matrices, index l = level l+1 (unset: level not held)
         PtrList<blockLduMatrix4> coarse_;
 
         //- Smoothers, index l = level l (0 = finest)
@@ -129,6 +212,7 @@ private:
         mutable List<blockScalarList> z2_;
         mutable List<blockScalarList> q2_;
         mutable List<blockScalarList> rk_;
+        mutable List<blockScalarList> gbuf_;  // local pre-gather coarse vector
 
         //- Last coarsest-level iteration count (diagnostics)
         mutable label nCoarsestIters_;
@@ -136,15 +220,23 @@ private:
 
     // Private Member Functions
 
+        //- Build agglomeration, gathering, matrices, smoothers, work
+        void buildHierarchy();
+
+        //- Release everything built by buildHierarchy (not the agglomeration)
+        void clearHierarchy();
+
         //- Choose the agglomeration respecting C_op and the ratio rule
         void agglomerate();
 
-        //- Operator complexity and ratios of an agglomeration (global)
+        //- Operator complexity, ratios and global cells per level of an
+        //  agglomeration (collective on the finest communicator)
         void measure
         (
             const GAMGAgglomeration& agg,
             reduceScalar& cop,
-            List<reduceScalar>& ratios
+            List<reduceScalar>& ratios,
+            labelList& cells
         ) const;
 
         //- True if the ratio rule holds
@@ -156,23 +248,56 @@ private:
             return c == cycleKind::W || c == cycleKind::K;
         }
 
+        //- Rule 6.3.4 active (processorAgglomerator masterCoarsest)
+        bool ruleMode() const
+        {
+            return procAgglomType_ == "masterCoarsest";
+        }
+
+        //- Set up gathering info of the natively agglomerated levels
+        void setNativeGathering();
+
+        //- Gather the coarsest level if rule 6.3.4 requires fewer ranks
+        //  on it than on the level above (native lduPrimitiveMesh gather)
+        void gatherCoarsest();
+
+        //- True if this rank holds level l
+        bool hasLevel(const label l) const
+        {
+            return l >= 0 && l <= L_ && levelMesh_.set(l);
+        }
+
         //- Build coarse level fineLevel+1 from fineLevel (coefficients)
         void restrictMatrix(const label fineLevel);
 
-        //- Matrix of level l (0 = finest)
+        //- Assemble the gathered coarse matrix of level l on the master
+        void gatherMatrix
+        (
+            const label l,
+            const blockScalarList& lDiag,
+            const blockScalarList& lUpper,
+            const blockScalarList& lLower,
+            const labelList& lIfaceIndex,
+            const List<blockScalarList>& lIfaceCoeffs
+        );
+
+        //- Matrix of level l (0 = finest), level must be held
         const blockLduMatrix4& matrixLevel(const label l) const
         {
             return (l == 0 ? fine_ : coarse_[l - 1]);
         }
 
         //- Coarsest level index
-        label L() const
+        label L() const noexcept
         {
-            return coarse_.size();
+            return L_;
         }
 
         //- Allocate per-level work vectors
         void allocateWork();
+
+        //- Allocate the K-step workspace
+        void allocateKWork() const;
 
         //- Factorise the coarsest level densely (if selected)
         void factoriseDense();
@@ -180,7 +305,8 @@ private:
         //- Solve the coarsest level
         void solveCoarsest(blockScalarUList& x, const blockScalarUList& b) const;
 
-        //- Restrict r (level l) into bc (level l+1), block sum
+        //- Restrict r (level l) into bc (level l+1), block sum; gathers on
+        //  a processor-agglomerated level l+1 (bc used on the master only)
         void restrictVector
         (
             const label l,
@@ -188,7 +314,8 @@ private:
             blockScalarUList& bc
         ) const;
 
-        //- x (level l) += P e (level l+1)
+        //- x (level l) += P e (level l+1); scatters on a
+        //  processor-agglomerated level l+1 (e used on the master only)
         void prolongAdd
         (
             const label l,
@@ -227,12 +354,16 @@ public:
         void operator=(const blockGAMG&) = delete;
 
 
+    //- Destructor (frees the coarsest-level communicators)
+    ~blockGAMG();
+
+
     // Member Functions
 
-        //- Number of levels including the finest
-        label nLevels() const
+        //- Number of levels including the finest (global)
+        label nLevels() const noexcept
         {
-            return coarse_.size() + 1;
+            return cellsPerLevel_.size();
         }
 
         reduceScalar operatorComplexity() const noexcept { return Cop_; }
@@ -240,8 +371,17 @@ public:
         const List<reduceScalar>& ratios() const noexcept { return ratios_; }
         bool denseCoarsest() const noexcept { return useDenseLU_; }
 
-        //- Global cell count per level
-        labelList globalCellsPerLevel() const;
+        //- Global cell count per level (cached, not collective)
+        const labelList& globalCellsPerLevel() const noexcept
+        {
+            return cellsPerLevel_;
+        }
+
+        //- Number of ranks holding each level (cached, not collective)
+        const labelList& ranksPerLevel() const noexcept
+        {
+            return ranksPerLevel_;
+        }
 
         //- Guarded pivots summed over all levels at the last update (rank)
         label nSingularDiag() const;
@@ -269,10 +409,10 @@ public:
         //- One cycle: x = approx A^-1 b (x is overwritten)
         void apply(blockScalarUList& x, const blockScalarUList& b) const;
 
-        //- Write hierarchy statistics (levels, cells, ratios, C_op)
+        //- Write hierarchy statistics (levels, cells, ranks, ratios, C_op)
         void writeStats(Ostream& os) const;
 
-        //- Statistics as a dictionary (for JSON output)
+        //- Statistics as a dictionary (for JSON output, not collective)
         dictionary statsDict() const;
 
         //- Effective settings

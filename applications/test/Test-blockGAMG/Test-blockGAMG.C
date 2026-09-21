@@ -28,8 +28,8 @@ Description
                          the requested cycle is the one measured.
                          cycleType K forces solver blockFGMRES (B1).
       -mergeLevels n     sets blockGAMG.mergeLevels
-      -procAgglom on|off sets / removes blockGAMG.processorAgglomerator
-                         masterCoarsest (6.3.4, Test-procAgglom)
+      -procAgglom on|off sets blockGAMG.processorAgglomerator to
+                         masterCoarsest / none (6.3.4, Test-procAgglom)
     The JSON records cycleType, mergeLevels (requested and used), the
     measured coarsening ratios, nIterations, wall seconds, converged.
 
@@ -267,7 +267,7 @@ int main(int argc, char *argv[])
         }
         else if (procAgglom == "off")
         {
-            gamgDict.remove("processorAgglomerator");
+            gamgDict.set("processorAgglomerator", word("none"));
         }
         else
         {

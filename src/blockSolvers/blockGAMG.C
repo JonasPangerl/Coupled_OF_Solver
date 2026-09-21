@@ -4,14 +4,193 @@
 \*---------------------------------------------------------------------------*/
 
 #include "blockGAMG.H"
+#include "blockGAMGProcAgglomeration.H"
 #include "blockPreconditioner.H"
 #include "block4Ops.H"
 #include "doubleReduce.H"
 #include "coupledDefaults.H"
 #include "lduMesh.H"
+#include "lduPrimitiveMesh.H"
+#include "globalIndex.H"
+#include "PstreamBuffers.H"
 #include "objectRegistry.H"
 #include "PstreamReduceOps.H"
+#include "addToRunTimeSelectionTable.H"
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+
+// * * * * * * * * * * * * blockGAMGProcAgglomeration  * * * * * * * * * * * //
+// Implemented here (not in its own translation unit) so that the library
+// file list does not change.
+
+namespace Foam
+{
+    defineTypeNameAndDebug(blockGAMGProcAgglomeration, 0);
+
+    addToRunTimeSelectionTable
+    (
+        GAMGProcAgglomeration,
+        blockGAMGProcAgglomeration,
+        GAMGAgglomeration
+    );
+}
+
+
+Foam::blockGAMGProcAgglomeration::blockGAMGProcAgglomeration
+(
+    GAMGAgglomeration& agglom,
+    const dictionary& controlDict
+)
+:
+    GAMGProcAgglomeration(agglom, controlDict),
+    cellsPerRank_
+    (
+        controlDict.getOrDefault<label>
+        (
+            "procAgglomCellsPerRank",
+            coupledDefaults::procAgglomCellsPerRank
+        )
+    ),
+    divisor_
+    (
+        controlDict.getOrDefault<label>
+        (
+            "procAgglomDivisor",
+            coupledDefaults::procAgglomDivisor
+        )
+    )
+{
+    if (cellsPerRank_ < 1 || divisor_ < 1)
+    {
+        FatalIOErrorInFunction(controlDict)
+            << "procAgglomCellsPerRank (" << cellsPerRank_
+            << ") and procAgglomDivisor (" << divisor_
+            << ") must be >= 1" << exit(FatalIOError);
+    }
+}
+
+
+Foam::label Foam::blockGAMGProcAgglomeration::targetRanks
+(
+    const reduceScalar nCells,
+    const label nRanks,
+    const label cellsPerRank,
+    const label divisor
+)
+{
+    if (nCells < reduceScalar(cellsPerRank))
+    {
+        return 1;
+    }
+    if (nCells < reduceScalar(cellsPerRank)*reduceScalar(nRanks))
+    {
+        return max(label(1), nRanks/divisor);
+    }
+    return nRanks;
+}
+
+
+Foam::labelList Foam::blockGAMGProcAgglomeration::groupMap
+(
+    const label nProcs,
+    const label nGroups
+)
+{
+    labelList map(nProcs);
+    forAll(map, proci)
+    {
+        // 64-bit product: no overflow for any rank count
+        map[proci] = label
+        (
+            (int64_t(proci)*int64_t(nGroups))/int64_t(nProcs)
+        );
+    }
+    return map;
+}
+
+
+bool Foam::blockGAMGProcAgglomeration::agglomerate()
+{
+    const label nCoarse = agglom_.size();
+    const label comm0 = agglom_.mesh().comm();
+    const label nRanks = UPstream::nProcs(comm0);
+
+    // Levels 1..nCoarse-1 can be gathered natively (level 0 never, the
+    // coarsest level nCoarse is gathered by blockGAMG::gatherCoarsest)
+    if (nCoarse < 2 || nRanks < 2)
+    {
+        return true;
+    }
+
+    // Global cell count per level. At this point (end of the local
+    // agglomeration, before any processor agglomeration) every rank holds
+    // every level.
+    reduceScalarList cells(nCoarse + 1, Zero);
+    for (label l = 1; l <= nCoarse; ++l)
+    {
+        cells[l] = reduceScalar(agglom_.nCells(l - 1));
+    }
+    doubleReduce::parSum(cells.data(), cells.size(), comm0);
+
+    label current = nRanks;
+
+    for (label l = 1; l < nCoarse; ++l)
+    {
+        const label target =
+            targetRanks(cells[l], nRanks, cellsPerRank_, divisor_);
+
+        if (target >= current)
+        {
+            continue;
+        }
+
+        // Ranks agglomerated away at an earlier step do not hold the level
+        // and take no part (as native manualGAMGProcAgglomeration)
+        if (agglom_.hasMeshLevel(l))
+        {
+            const label levelComm = agglom_.meshLevel(l).comm();
+            const label nProcs = UPstream::nProcs(levelComm);
+
+            if (nProcs > 1 && UPstream::myProcNo(levelComm) != -1)
+            {
+                const labelList procAgglomMap(groupMap(nProcs, target));
+
+                labelList masterProcs;
+                List<label> agglomProcIDs;
+                GAMGAgglomeration::calculateRegionMaster
+                (
+                    levelComm,
+                    procAgglomMap,
+                    masterProcs,
+                    agglomProcIDs
+                );
+
+                // Communicator for the processor-agglomerated level
+                comms_.push_back
+                (
+                    UPstream::newCommunicator(levelComm, masterProcs)
+                );
+
+                // Native gathering of the level and re-agglomeration of the
+                // coarser levels on the masters
+                GAMGProcAgglomeration::agglomerate
+                (
+                    l,
+                    procAgglomMap,
+                    masterProcs,
+                    agglomProcIDs,
+                    comms_.back()
+                );
+            }
+        }
+
+        current = target;
+    }
+
+    return true;
+}
+
 
 // * * * * * * * * * * * * * * * Static Functions  * * * * * * * * * * * * * //
 
@@ -115,10 +294,38 @@ Foam::blockGAMG::blockGAMG
             coupledDefaults::denseLUMaxCells
         )
     ),
+    procAgglomType_
+    (
+        dict.getOrDefault<word>("processorAgglomerator", "masterCoarsest")
+    ),
+    procAgglomCellsPerRank_
+    (
+        dict.getOrDefault<label>
+        (
+            "procAgglomCellsPerRank",
+            coupledDefaults::procAgglomCellsPerRank
+        )
+    ),
+    procAgglomDivisor_
+    (
+        dict.getOrDefault<label>
+        (
+            "procAgglomDivisor",
+            coupledDefaults::procAgglomDivisor
+        )
+    ),
     aggPtr_(nullptr),
     mergeLevelsUsed_(-1),
     Cop_(0),
     ratios_(),
+    L_(0),
+    cellsPerLevel_(),
+    ranksPerLevel_(),
+    levelMesh_(),
+    gather_(),
+    coarsestMesh_(),
+    coarsestAllComm_(-1),
+    coarsestAgglomComm_(-1),
     coarse_(),
     smoothers_(),
     coarsestSolver_(),
@@ -145,38 +352,116 @@ Foam::blockGAMG::blockGAMG
     setDefault("coarsestMaxIter", coupledDefaults::coarsestMaxIter);
     setDefault("cacheAgglomeration", coupledDefaults::cacheAgglomeration);
     dict_.set("cycleType", cycleName(cycle_));
+    dict_.set("processorAgglomerator", procAgglomType_);
+    if (ruleMode())
+    {
+        if (procAgglomCellsPerRank_ < 1 || procAgglomDivisor_ < 1)
+        {
+            FatalIOErrorInFunction(dict)
+                << "procAgglomCellsPerRank (" << procAgglomCellsPerRank_
+                << ") and procAgglomDivisor (" << procAgglomDivisor_
+                << ") must be >= 1" << exit(FatalIOError);
+        }
+        dict_.set("procAgglomCellsPerRank", procAgglomCellsPerRank_);
+        dict_.set("procAgglomDivisor", procAgglomDivisor_);
+    }
 
+    buildHierarchy();
+}
+
+
+// * * * * * * * * * * * * * * * * Destructor  * * * * * * * * * * * * * * * //
+
+Foam::blockGAMG::~blockGAMG()
+{
+    clearHierarchy();
+}
+
+
+// * * * * * * * * * * * * * Private Member Functions  * * * * * * * * * * * //
+
+void Foam::blockGAMG::buildHierarchy()
+{
     agglomerate();
 
     const GAMGAgglomeration& agg = *aggPtr_;
-    const label nCoarse = agg.size();
+    L_ = agg.size();
 
-    coarse_.resize(nCoarse);
-    for (label l = 0; l < nCoarse; ++l)
+    // Levels held by this rank
+    levelMesh_.clear();
+    levelMesh_.resize(L_ + 1);
+    levelMesh_.set(0, &fine_.mesh());
+    for (label l = 1; l <= L_; ++l)
     {
-        const lduMesh& cMesh = agg.meshLevel(l + 1);
-        coarse_.set
-        (
-            l,
-            new blockLduMatrix4
-            (
-                cMesh.lduAddr(),
-                agg.interfaceLevel(l + 1),
-                cMesh.comm()
-            )
-        );
+        if (agg.hasMeshLevel(l))
+        {
+            levelMesh_.set(l, &agg.meshLevel(l));
+        }
     }
 
-    const label nLev = nLevels();
-    smoothers_.resize(nLev - 1);
-    for (label l = 0; l < nLev - 1; ++l)
+    // Processor agglomeration (6.3.4)
+    gather_.clear();
+    gather_.resize(L_ + 1);
+    setNativeGathering();
+    gatherCoarsest();
+
+    // Vector offsets of the gathered levels: blockDim values per cell
+    forAll(gather_, l)
     {
-        smoothers_.set(l, blockSmoother::New(matrixLevel(l), dict_).ptr());
+        if (gather_.set(l))
+        {
+            gatherLevel& g = gather_[l];
+            g.vecOffsets.resize_nocopy(g.cellOffsets.size());
+            forAll(g.vecOffsets, i)
+            {
+                g.vecOffsets[i] = blockDim*g.cellOffsets[i];
+            }
+        }
+    }
+
+    // Ranks per level (global)
+    const label nLevG = cellsPerLevel_.size();
+    ranksPerLevel_.resize_nocopy(nLevG);
+    for (label l = 0; l < nLevG; ++l)
+    {
+        ranksPerLevel_[l] = (hasLevel(l) ? 1 : 0);
+    }
+    Foam::reduce
+    (
+        ranksPerLevel_.data(),
+        int(ranksPerLevel_.size()),
+        sumOp<label>(),
+        UPstream::msgType(),
+        fine_.comm()
+    );
+
+    // Coarse matrices on the levels held
+    coarse_.clear();
+    coarse_.resize(L_);
+    for (label l = 1; l <= L_; ++l)
+    {
+        if (hasLevel(l))
+        {
+            coarse_.set(l - 1, new blockLduMatrix4(levelMesh_[l]));
+        }
+    }
+
+    smoothers_.clear();
+    smoothers_.resize(L_);
+    for (label l = 0; l < L_; ++l)
+    {
+        if (hasLevel(l))
+        {
+            smoothers_.set(l, blockSmoother::New(matrixLevel(l), dict_).ptr());
+        }
     }
 
     // Coarsest level (6.3.3): dense LU if small and on one rank, else Krylov
+    useDenseLU_ = false;
+    coarsestSolver_.reset(nullptr);
+    if (hasLevel(L_))
     {
-        const blockLduMatrix4& Ac = matrixLevel(L());
+        const blockLduMatrix4& Ac = matrixLevel(L_);
         const bool oneRank =
             !UPstream::parRun() || UPstream::nProcs(Ac.comm()) == 1;
         useDenseLU_ =
@@ -202,9 +487,14 @@ Foam::blockGAMG::blockGAMG
             );
             coarsestSolver_ = blockSolver::New(Ac, cd);
         }
-        Info<< "blockGAMG: coarsest level " << L() << " ("
-            << returnReduce(Ac.nCells(), sumOp<label>()) << " cells): "
-            << (useDenseLU_ ? "dense LU" : dict_.get<word>("coarsestSolver"))
+    }
+    {
+        const bool anyDense =
+            returnReduceOr(useDenseLU_, fine_.comm());
+        Info<< "blockGAMG: coarsest level " << nLevG - 1 << " ("
+            << cellsPerLevel_.last() << " cells, "
+            << ranksPerLevel_.last() << " rank(s)): "
+            << (anyDense ? "dense LU" : dict_.get<word>("coarsestSolver"))
             << endl;
     }
 
@@ -212,46 +502,84 @@ Foam::blockGAMG::blockGAMG
 }
 
 
-// * * * * * * * * * * * * * Private Member Functions  * * * * * * * * * * * //
+void Foam::blockGAMG::clearHierarchy()
+{
+    coarsestSolver_.reset(nullptr);
+    smoothers_.clear();
+    coarse_.clear();
+    useDenseLU_ = false;
+    denseLU_.clear();
+    densePivot_.clear();
+    gather_.clear();
+    levelMesh_.clear();
+    coarsestMesh_.reset(nullptr);
+
+    // Children before parents
+    if (coarsestAgglomComm_ >= 0)
+    {
+        UPstream::freeCommunicator(coarsestAgglomComm_);
+        coarsestAgglomComm_ = -1;
+    }
+    if (coarsestAllComm_ >= 0)
+    {
+        UPstream::freeCommunicator(coarsestAllComm_);
+        coarsestAllComm_ = -1;
+    }
+}
+
 
 void Foam::blockGAMG::measure
 (
     const GAMGAgglomeration& agg,
     reduceScalar& cop,
-    List<reduceScalar>& ratios
+    List<reduceScalar>& ratios,
+    labelList& cellsOut
 ) const
 {
+    const label comm = fine_.comm();
     const label nC = agg.size();
 
-    // Per level: cells and nnz blocks, summed over ranks in one call
-    List<reduceScalar> cells(nC + 1, Zero);
-    List<reduceScalar> nnz(nC + 1, Zero);
+    // Number of levels: the same on all ranks except for native
+    // agglomerators that add master-only levels
+    const label nLevG =
+        returnReduce(nC, maxOp<label>(), UPstream::msgType(), comm) + 1;
+
+    // Per level: cells and nnz blocks of the levels held by this rank,
+    // summed over ranks in one call. The sums do not depend on processor
+    // agglomeration (a merged processor face counts twice before and after).
+    List<reduceScalar> cells(nLevG, Zero);
+    List<reduceScalar> nnz(nLevG, Zero);
     cells[0] = reduceScalar(fine_.nCells());
     nnz[0] = reduceScalar(fine_.nnzBlocks());
 
-    for (label l = 0; l < nC; ++l)
+    for (label l = 1; l <= nC; ++l)
     {
-        cells[l + 1] = reduceScalar(agg.nCells(l));
-        reduceScalar n = cells[l + 1] + 2*reduceScalar(agg.nFaces(l));
+        if (!agg.hasMeshLevel(l))
+        {
+            continue;
+        }
+        const lduMesh& m = agg.meshLevel(l);
+        cells[l] = reduceScalar(m.lduAddr().size());
+        reduceScalar n =
+            cells[l] + 2*reduceScalar(m.lduAddr().lowerAddr().size());
 
-        const lduInterfacePtrsList coarseIfaces = agg.interfaceLevel(l + 1);
-        const labelList& nPatchFaces = agg.nPatchFaces(l);
-        forAll(coarseIfaces, i)
+        const lduInterfacePtrsList ifaces = m.interfaces();
+        forAll(ifaces, i)
         {
             if
             (
-                coarseIfaces.set(i)
-             && blockLduInterface::isBlockCoupled(coarseIfaces[i])
+                ifaces.set(i)
+             && blockLduInterface::isBlockCoupled(ifaces[i])
             )
             {
-                n += reduceScalar(nPatchFaces[i]);
+                n += reduceScalar(ifaces[i].faceCells().size());
             }
         }
-        nnz[l + 1] = n;
+        nnz[l] = n;
     }
 
-    doubleReduce::parSum(cells.data(), cells.size(), fine_.comm());
-    doubleReduce::parSum(nnz.data(), nnz.size(), fine_.comm());
+    doubleReduce::parSum(cells.data(), cells.size(), comm);
+    doubleReduce::parSum(nnz.data(), nnz.size(), comm);
 
     reduceScalar total = 0;
     for (const reduceScalar v : nnz)
@@ -261,11 +589,17 @@ void Foam::blockGAMG::measure
     // GUARD: a mesh has at least one cell globally
     cop = total/std::max(nnz[0], reduceScalar(1));
 
-    ratios.resize(nC);
-    for (label l = 0; l < nC; ++l)
+    ratios.resize(nLevG - 1);
+    for (label l = 0; l < nLevG - 1; ++l)
     {
         // GUARD: coarse levels are never empty globally
         ratios[l] = cells[l]/std::max(cells[l + 1], reduceScalar(1));
+    }
+
+    cellsOut.resize_nocopy(nLevG);
+    forAll(cellsOut, l)
+    {
+        cellsOut[l] = label(std::llround(cells[l]));
     }
 }
 
@@ -291,20 +625,49 @@ void Foam::blockGAMG::agglomerate()
 
     reduceScalar cop = 0;
     List<reduceScalar> ratios;
+    labelList cells;
 
     for (label m = m0; m <= mMax; ++m)
     {
         dictionary aggDict(dict_);
         aggDict.set("mergeLevels", m);
-        aggDict.set("name", word("blockGAMGAgglomeration_m" + Foam::name(m)));
+
+        // Processor agglomeration (6.3.4)
+        if (procAgglomType_ == "none")
+        {
+            aggDict.remove("processorAgglomerator");
+        }
+        else if (ruleMode())
+        {
+            aggDict.set
+            (
+                "processorAgglomerator",
+                word(blockGAMGProcAgglomeration::typeName)
+            );
+        }
+        else if (procAgglomType_ == "nativeMasterCoarsest")
+        {
+            aggDict.set("processorAgglomerator", word("masterCoarsest"));
+        }
+        // else: native type passed verbatim
+
+        aggDict.set
+        (
+            "name",
+            word
+            (
+                "blockGAMGAgglomeration_m" + Foam::name(m)
+              + "_" + procAgglomType_
+            )
+        );
 
         const GAMGAgglomeration& agg = GAMGAgglomeration::New(mesh, aggDict);
-        measure(agg, cop, ratios);
+        measure(agg, cop, ratios, cells);
 
         const bool copOk = cop <= maxCop_;
         const bool ratioOk = !needsRatio(cycle_) || ratiosOk(ratios);
 
-        Info<< "blockGAMG: mergeLevels " << m << " levels " << agg.size() + 1
+        Info<< "blockGAMG: mergeLevels " << m << " levels " << cells.size()
             << " C_op " << cop << " ratios " << flatOutput(ratios)
             << (copOk && ratioOk ? " accepted" : " rejected") << endl;
 
@@ -314,6 +677,7 @@ void Foam::blockGAMG::agglomerate()
             mergeLevelsUsed_ = m;
             Cop_ = cop;
             ratios_ = ratios;
+            cellsPerLevel_ = cells;
             return;
         }
     }
@@ -331,15 +695,172 @@ void Foam::blockGAMG::agglomerate()
 }
 
 
+void Foam::blockGAMG::setNativeGathering()
+{
+    const GAMGAgglomeration& agg = *aggPtr_;
+
+    if (!agg.processorAgglomerate())
+    {
+        return;
+    }
+
+    for (label l = 1; l <= L_; ++l)
+    {
+        // Level l is gathered from the local coarse operators of level l-1
+        if (!hasLevel(l - 1) || !agg.hasProcMesh(l))
+        {
+            continue;
+        }
+
+        auto* gPtr = new gatherLevel;
+        gatherLevel& g = *gPtr;
+        g.comm = agg.agglomCommunicator(l);
+        g.master = (UPstream::myProcNo(g.comm) == 0);
+        g.procIDs = identity(UPstream::nProcs(g.comm));
+
+        if (g.master)
+        {
+            g.cellOffsets = agg.cellOffsets(l);
+            g.faceMap = agg.faceMap(l);
+            g.boundaryMap = agg.boundaryMap(l);
+            g.boundaryFaceMap = agg.boundaryFaceMap(l);
+        }
+        else if (hasLevel(l))
+        {
+            FatalErrorInFunction
+                << "Rank holds processor-agglomerated level " << l
+                << " without being the master of its group"
+                << abort(FatalError);
+        }
+
+        gather_.set(l, gPtr);
+    }
+}
+
+
+void Foam::blockGAMG::gatherCoarsest()
+{
+    if (!ruleMode() || L_ < 1 || !UPstream::parRun())
+    {
+        return;
+    }
+
+    const label nRanks = UPstream::nProcs(fine_.comm());
+    const label target = blockGAMGProcAgglomeration::targetRanks
+    (
+        reduceScalar(cellsPerLevel_.last()),
+        nRanks,
+        procAgglomCellsPerRank_,
+        procAgglomDivisor_
+    );
+
+    const label current = returnReduce
+    (
+        label(hasLevel(L_) ? 1 : 0),
+        sumOp<label>(),
+        UPstream::msgType(),
+        fine_.comm()
+    );
+
+    if (target >= current || !hasLevel(L_))
+    {
+        return;
+    }
+
+    // This rank holds the coarsest level, which is to be gathered onto
+    // 'target' masters. Same native steps as the native processor
+    // agglomeration of a level (masterCoarsestGAMGProcAgglomeration +
+    // GAMGAgglomeration::procAgglomerateLduAddressing), but without the
+    // restriction addressing below the level, which does not exist.
+
+    const lduMesh& localMesh = levelMesh_[L_];
+    const label levelComm = localMesh.comm();
+    const label nProcs = UPstream::nProcs(levelComm);
+
+    if (nProcs != current)
+    {
+        FatalErrorInFunction
+            << "Coarsest level communicator has " << nProcs
+            << " ranks, expected " << current << abort(FatalError);
+    }
+
+    const labelList procAgglomMap
+    (
+        blockGAMGProcAgglomeration::groupMap(nProcs, target)
+    );
+
+    labelList masterProcs;
+    List<label> agglomProcIDs;
+    GAMGAgglomeration::calculateRegionMaster
+    (
+        levelComm,
+        procAgglomMap,
+        masterProcs,
+        agglomProcIDs
+    );
+
+    // Communicator of the gathered level (the masters) and of my group
+    coarsestAllComm_ = UPstream::newCommunicator(levelComm, masterProcs);
+    coarsestAgglomComm_ = UPstream::newCommunicator(levelComm, agglomProcIDs);
+
+    // Collect the meshes of the group on its master
+    PtrList<lduPrimitiveMesh> otherMeshes;
+    lduPrimitiveMesh::gather(coarsestAgglomComm_, localMesh, otherMeshes);
+
+    auto* gPtr = new gatherLevel;
+    gatherLevel& g = *gPtr;
+    g.comm = coarsestAgglomComm_;
+    g.master = (UPstream::myProcNo(g.comm) == 0);
+    g.procIDs = identity(UPstream::nProcs(g.comm));
+
+    if (g.master)
+    {
+        labelList faceOffsets;
+        coarsestMesh_.reset
+        (
+            new lduPrimitiveMesh
+            (
+                coarsestAllComm_,
+                procAgglomMap,
+                agglomProcIDs,
+                localMesh,
+                otherMeshes,
+                g.cellOffsets,
+                faceOffsets,
+                g.faceMap,
+                g.boundaryMap,
+                g.boundaryFaceMap
+            )
+        );
+        levelMesh_.set(L_, coarsestMesh_.get());
+    }
+    else
+    {
+        levelMesh_.set(L_, nullptr);
+    }
+
+    gather_.set(L_, gPtr);
+}
+
+
 void Foam::blockGAMG::allocateWork()
 {
-    const label nLev = nLevels();
-    for (auto* v : {&b_, &e_, &r_, &t_, &e2_, &z1_, &q1_, &z2_, &q2_, &rk_})
+    const label nLev = L_ + 1;
+    for
+    (
+        auto* v
+      : {&b_, &e_, &r_, &t_, &e2_, &z1_, &q1_, &z2_, &q2_, &rk_, &gbuf_}
+    )
     {
+        v->clear();
         v->resize(nLev);
     }
     for (label l = 0; l < nLev; ++l)
     {
+        if (!hasLevel(l))
+        {
+            continue;
+        }
         const label n = matrixLevel(l).nRows();
         r_[l].resize(n, Zero);
         if (l > 0)
@@ -348,14 +869,31 @@ void Foam::blockGAMG::allocateWork()
             e_[l].resize(n, Zero);
             t_[l].resize(n, Zero);
             e2_[l].resize(n, Zero);
-            if (cycle_ == cycleKind::K)
-            {
-                z1_[l].resize(n, Zero);
-                q1_[l].resize(n, Zero);
-                z2_[l].resize(n, Zero);
-                q2_[l].resize(n, Zero);
-                rk_[l].resize(n, Zero);
-            }
+        }
+        if (l < L_ && gather_.set(l + 1))
+        {
+            gbuf_[l].resize(blockDim*aggPtr_->nCells(l), Zero);
+        }
+    }
+    if (cycle_ == cycleKind::K)
+    {
+        allocateKWork();
+    }
+}
+
+
+void Foam::blockGAMG::allocateKWork() const
+{
+    for (label l = 1; l <= L_; ++l)
+    {
+        if (hasLevel(l) && z1_[l].empty())
+        {
+            const label n = matrixLevel(l).nRows();
+            z1_[l].resize(n, Zero);
+            q1_[l].resize(n, Zero);
+            z2_[l].resize(n, Zero);
+            q2_[l].resize(n, Zero);
+            rk_[l].resize(n, Zero);
         }
     }
 }
@@ -365,8 +903,9 @@ void Foam::blockGAMG::restrictMatrix(const label fineLevel)
 {
     const GAMGAgglomeration& agg = *aggPtr_;
     const blockLduMatrix4& F = matrixLevel(fineLevel);
-    blockLduMatrix4& C = coarse_[fineLevel];
 
+    // Local coarse sizes (before any processor agglomeration of the
+    // coarse level)
     const label nCC = agg.nCells(fineLevel);
     const label nCF = agg.nFaces(fineLevel);
 
@@ -433,51 +972,39 @@ void Foam::blockGAMG::restrictMatrix(const label fineLevel)
         }
     }
 
-    // Store narrowed
-    blockScalarList& cD = C.diag();
-    blockScalarList& cU = C.upper();
-    blockScalarList& cL = C.lower();
-    forAll(cD, i)
+    // Narrow the local coarse operator
+    blockScalarList lDiag(cDiag.size());
+    blockScalarList lUpper(cUpper.size());
+    blockScalarList lLower(cLower.size());
+    forAll(lDiag, i)
     {
-        cD[i] = narrow(cDiag[i]);
+        lDiag[i] = narrow(cDiag[i]);
     }
-    forAll(cU, i)
+    forAll(lUpper, i)
     {
-        cU[i] = narrow(cUpper[i]);
-        cL[i] = narrow(cLower[i]);
+        lUpper[i] = narrow(cUpper[i]);
+        lLower[i] = narrow(cLower[i]);
     }
 
-    // Processor interface coefficients
+    // Processor interface coefficients, per fine block interface (the local
+    // coarse interface has the same native index)
     const labelListList& patchFaceRestrict =
         agg.patchFaceRestrictAddressing(fineLevel);
+    const labelList& nPatchFaces = agg.nPatchFaces(fineLevel);
 
-    forAll(C.interfaces(), ci)
+    const label nFI = F.interfaces().size();
+    labelList lIfaceIndex(nFI);
+    List<blockScalarList> lIfaceCoeffs(nFI);
+
+    forAll(F.interfaces(), j)
     {
-        const label inti = C.interfaces()[ci].index();
+        const label inti = F.interfaces()[j].index();
+        lIfaceIndex[j] = inti;
 
-        // Matching fine block interface (same native interface index)
-        label fi = -1;
-        forAll(F.interfaces(), j)
-        {
-            if (F.interfaces()[j].index() == inti)
-            {
-                fi = j;
-                break;
-            }
-        }
-        if (fi < 0)
-        {
-            FatalErrorInFunction
-                << "No fine-level block interface for coarse interface "
-                << inti << " on level " << fineLevel + 1
-                << abort(FatalError);
-        }
-
-        const blockScalarList& fC = F.interfaceCoeffs(fi);
-        blockScalarList& cC = C.interfaceCoeffs(ci);
+        const blockScalarList& fC = F.interfaceCoeffs(j);
         const labelList& pfr = patchFaceRestrict[inti];
 
-        reduceScalarList sumC(cC.size(), Zero);
+        reduceScalarList sumC(blockSize*nPatchFaces[inti], Zero);
         forAll(pfr, pf)
         {
             const label cpf = pfr[pf];
@@ -486,9 +1013,263 @@ void Foam::blockGAMG::restrictMatrix(const label fineLevel)
                 sumC[cpf*blockSize + k] += toDouble(fC[pf*blockSize + k]);
             }
         }
+
+        blockScalarList& cC = lIfaceCoeffs[j];
+        cC.resize_nocopy(sumC.size());
         forAll(cC, i)
         {
             cC[i] = narrow(sumC[i]);
+        }
+    }
+
+    if (gather_.set(fineLevel + 1))
+    {
+        // Processor-agglomerated coarse level (6.3.4)
+        gatherMatrix
+        (
+            fineLevel + 1,
+            lDiag,
+            lUpper,
+            lLower,
+            lIfaceIndex,
+            lIfaceCoeffs
+        );
+        return;
+    }
+
+    blockLduMatrix4& C = coarse_[fineLevel];
+
+    if (C.nCells() != nCC || C.nFaces() != nCF)
+    {
+        FatalErrorInFunction
+            << "Coarse level " << fineLevel + 1 << " has " << C.nCells()
+            << " cells / " << C.nFaces() << " faces, agglomeration "
+            << nCC << " / " << nCF << abort(FatalError);
+    }
+
+    C.diag() = lDiag;
+    C.upper() = lUpper;
+    C.lower() = lLower;
+
+    forAll(C.interfaces(), ci)
+    {
+        const label inti = C.interfaces()[ci].index();
+        const label j = lIfaceIndex.find(inti);
+        if (j < 0)
+        {
+            FatalErrorInFunction
+                << "No fine-level block interface for coarse interface "
+                << inti << " on level " << fineLevel + 1
+                << abort(FatalError);
+        }
+        blockScalarList& cC = C.interfaceCoeffs(ci);
+        if (cC.size() != lIfaceCoeffs[j].size())
+        {
+            FatalErrorInFunction
+                << "Coarse interface " << inti << " on level "
+                << fineLevel + 1 << " has " << cC.size()/blockSize
+                << " faces, agglomeration " << nPatchFaces[inti]
+                << abort(FatalError);
+        }
+        cC = lIfaceCoeffs[j];
+    }
+
+    C.markUpdated();
+}
+
+
+void Foam::blockGAMG::gatherMatrix
+(
+    const label l,
+    const blockScalarList& lDiag,
+    const blockScalarList& lUpper,
+    const blockScalarList& lLower,
+    const labelList& lIfaceIndex,
+    const List<blockScalarList>& lIfaceCoeffs
+)
+{
+    const gatherLevel& g = gather_[l];
+
+    // Send the local coarse operators to the group master (as native
+    // GAMGSolver::gatherMatrices, 16 coefficients per block)
+    PstreamBuffers pBufs(g.comm);
+
+    if (!g.master)
+    {
+        UOPstream toMaster(UPstream::masterNo(), pBufs);
+        toMaster
+            << lDiag << lUpper << lLower << lIfaceIndex << lIfaceCoeffs;
+    }
+
+    pBufs.finishedGathers();
+
+    if (!g.master)
+    {
+        return;
+    }
+
+    // Assemble on the master (as native GAMGSolver::procAgglomerateMatrix)
+    blockLduMatrix4& C = coarse_[l - 1];
+    C.clear();
+
+    // Native interface index of the gathered level -> block interface
+    labelList blockIface(levelMesh_[l].interfaces().size(), -1);
+    forAll(C.interfaces(), ci)
+    {
+        blockIface[C.interfaces()[ci].index()] = ci;
+    }
+
+    auto copyBlock = [](blockScalar* dst, const blockScalar* src)
+    {
+        std::copy(src, src + blockSize, dst);
+    };
+
+    const label nProcs = UPstream::nProcs(g.comm);
+
+    for (label proci = 0; proci < nProcs; ++proci)
+    {
+        blockScalarList rDiag, rUpper, rLower;
+        labelList rIfaceIndex;
+        List<blockScalarList> rIfaceCoeffs;
+
+        if (proci > 0)
+        {
+            UIPstream fromProc(proci, pBufs);
+            fromProc
+                >> rDiag >> rUpper >> rLower >> rIfaceIndex >> rIfaceCoeffs;
+        }
+
+        const blockScalarList& pDiag = (proci == 0 ? lDiag : rDiag);
+        const blockScalarList& pUpper = (proci == 0 ? lUpper : rUpper);
+        const blockScalarList& pLower = (proci == 0 ? lLower : rLower);
+        const labelList& pIfaceIndex =
+            (proci == 0 ? lIfaceIndex : rIfaceIndex);
+        const List<blockScalarList>& pIfaceCoeffs =
+            (proci == 0 ? lIfaceCoeffs : rIfaceCoeffs);
+
+        // Diagonal: cells in processor order
+        const label nCellsP = g.cellOffsets[proci + 1] - g.cellOffsets[proci];
+        const labelList& fMap = g.faceMap[proci];
+        if
+        (
+            pDiag.size() != blockSize*nCellsP
+         || pUpper.size() != blockSize*fMap.size()
+         || pLower.size() != blockSize*fMap.size()
+        )
+        {
+            FatalErrorInFunction
+                << "Level " << l << ": sizes from group rank " << proci
+                << " (" << pDiag.size()/blockSize << " cells, "
+                << pUpper.size()/blockSize << " faces) do not match the"
+                << " agglomeration (" << nCellsP << ", " << fMap.size()
+                << ")" << abort(FatalError);
+        }
+        std::copy
+        (
+            pDiag.cbegin(),
+            pDiag.cend(),
+            C.diag().begin() + blockSize*g.cellOffsets[proci]
+        );
+
+        // Internal faces (orientation preserved by the gathering; the
+        // negative branch is defensive and swaps upper/lower)
+        forAll(fMap, facei)
+        {
+            const label m = fMap[facei];
+            const blockScalar* pu = pUpper.cdata() + facei*blockSize;
+            const blockScalar* pl = pLower.cdata() + facei*blockSize;
+            if (m >= 0)
+            {
+                copyBlock(C.upper().data() + m*blockSize, pu);
+                copyBlock(C.lower().data() + m*blockSize, pl);
+            }
+            else
+            {
+                const label a = -m - 1;
+                copyBlock(C.upper().data() + a*blockSize, pl);
+                copyBlock(C.lower().data() + a*blockSize, pu);
+            }
+        }
+
+        // Processor interfaces: kept ones map to an interface of the
+        // gathered level, merged ones become internal faces. Block
+        // coefficients are actual matrix entries A_PN (blockLduInterface):
+        // the owner side (map >= 0, its cell is the lower cell) gives the
+        // upper block, the neighbour side (map < 0) the lower block.
+        const labelList& bMap = g.boundaryMap[proci];
+        const labelListList& bfMaps = g.boundaryFaceMap[proci];
+
+        forAll(pIfaceIndex, j)
+        {
+            const label inti = pIfaceIndex[j];
+            if (inti < 0 || inti >= bMap.size() || inti >= bfMaps.size())
+            {
+                FatalErrorInFunction
+                    << "Level " << l << ": interface " << inti
+                    << " of group rank " << proci
+                    << " not in the boundary map" << abort(FatalError);
+            }
+
+            const labelList& bfMap = bfMaps[inti];
+            const blockScalarList& pc = pIfaceCoeffs[j];
+            if (pc.size() != blockSize*bfMap.size())
+            {
+                FatalErrorInFunction
+                    << "Level " << l << ": interface " << inti
+                    << " of group rank " << proci << " has "
+                    << pc.size()/blockSize << " faces, boundary face map "
+                    << bfMap.size() << abort(FatalError);
+            }
+
+            const label allInti = bMap[inti];
+
+            if (allInti >= 0)
+            {
+                const label ci =
+                (
+                    allInti < blockIface.size() ? blockIface[allInti] : -1
+                );
+                if (ci < 0)
+                {
+                    FatalErrorInFunction
+                        << "Level " << l << ": kept interface " << allInti
+                        << " (from interface " << inti << " of group rank "
+                        << proci << ") is not a block-coupled interface"
+                        << abort(FatalError);
+                }
+                blockScalarList& cc = C.interfaceCoeffs(ci);
+                forAll(bfMap, k)
+                {
+                    copyBlock
+                    (
+                        cc.data() + bfMap[k]*blockSize,
+                        pc.cdata() + k*blockSize
+                    );
+                }
+            }
+            else
+            {
+                forAll(bfMap, k)
+                {
+                    const label m = bfMap[k];
+                    if (m >= 0)
+                    {
+                        copyBlock
+                        (
+                            C.upper().data() + m*blockSize,
+                            pc.cdata() + k*blockSize
+                        );
+                    }
+                    else
+                    {
+                        copyBlock
+                        (
+                            C.lower().data() + (-m - 1)*blockSize,
+                            pc.cdata() + k*blockSize
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -504,14 +1285,34 @@ void Foam::blockGAMG::restrictVector
 ) const
 {
     const labelField& restrictAddr = aggPtr_->restrictAddressing(l);
-    bc = Zero;
+    const bool gathered = gather_.set(l + 1);
+
+    // Local restriction (into the pre-gather buffer if gathered)
+    blockScalarUList& lc = (gathered ? gbuf_[l] : bc);
+    lc = Zero;
     forAll(restrictAddr, celli)
     {
         const label c = restrictAddr[celli];
         for (label k = 0; k < blockDim; ++k)
         {
-            bc[c*blockDim + k] += r[celli*blockDim + k];
+            lc[c*blockDim + k] += r[celli*blockDim + k];
         }
+    }
+
+    if (gathered)
+    {
+        // As native restrictField(..., procAgglom = true), 4 values per cell
+        const gatherLevel& g = gather_[l + 1];
+        globalIndex::gather
+        (
+            g.vecOffsets,
+            g.comm,
+            g.procIDs,
+            lc,
+            bc,
+            UPstream::msgType(),
+            UPstream::commsTypes::nonBlocking
+        );
     }
 }
 
@@ -524,12 +1325,31 @@ void Foam::blockGAMG::prolongAdd
 ) const
 {
     const labelField& restrictAddr = aggPtr_->restrictAddressing(l);
+    const bool gathered = gather_.set(l + 1);
+
+    if (gathered)
+    {
+        // As native prolongField(..., procAgglom = true)
+        const gatherLevel& g = gather_[l + 1];
+        globalIndex::scatter
+        (
+            g.vecOffsets,
+            g.comm,
+            g.procIDs,
+            e,
+            gbuf_[l],
+            UPstream::msgType(),
+            UPstream::commsTypes::nonBlocking
+        );
+    }
+
+    const blockScalarUList& ec = (gathered ? gbuf_[l] : e);
     forAll(restrictAddr, celli)
     {
         const label c = restrictAddr[celli];
         for (label k = 0; k < blockDim; ++k)
         {
-            x[celli*blockDim + k] += e[c*blockDim + k];
+            x[celli*blockDim + k] += ec[c*blockDim + k];
         }
     }
 }
@@ -699,51 +1519,58 @@ void Foam::blockGAMG::cycle
     }
 
     A.residual(r_[l], x, b);
+
+    // Collective within the group if level l+1 is processor-agglomerated
     restrictVector(l, r_[l], b_[l + 1]);
 
     blockScalarList& ec = e_[l + 1];
 
-    switch (kind)
+    // Ranks agglomerated away (no level l+1) skip the coarse correction and
+    // only take part in the gather above and the scatter below
+    if (hasLevel(l + 1))
     {
-        case cycleKind::V:
+        switch (kind)
         {
-            cycle(l + 1, b_[l + 1], ec, cycleKind::V);
-            break;
-        }
-        case cycleKind::F:
-        {
-            cycle(l + 1, b_[l + 1], ec, cycleKind::F);
-            if (l + 1 < L())
+            case cycleKind::V:
             {
-                matrixLevel(l + 1).residual(t_[l + 1], ec, b_[l + 1]);
-                cycle(l + 1, t_[l + 1], e2_[l + 1], cycleKind::V);
-                const blockScalarList& e2 = e2_[l + 1];
-                forAll(ec, i)
-                {
-                    ec[i] += e2[i];
-                }
+                cycle(l + 1, b_[l + 1], ec, cycleKind::V);
+                break;
             }
-            break;
-        }
-        case cycleKind::W:
-        {
-            cycle(l + 1, b_[l + 1], ec, cycleKind::W);
-            if (l + 1 < L())
+            case cycleKind::F:
             {
-                matrixLevel(l + 1).residual(t_[l + 1], ec, b_[l + 1]);
-                cycle(l + 1, t_[l + 1], e2_[l + 1], cycleKind::W);
-                const blockScalarList& e2 = e2_[l + 1];
-                forAll(ec, i)
+                cycle(l + 1, b_[l + 1], ec, cycleKind::F);
+                if (l + 1 < L())
                 {
-                    ec[i] += e2[i];
+                    matrixLevel(l + 1).residual(t_[l + 1], ec, b_[l + 1]);
+                    cycle(l + 1, t_[l + 1], e2_[l + 1], cycleKind::V);
+                    const blockScalarList& e2 = e2_[l + 1];
+                    forAll(ec, i)
+                    {
+                        ec[i] += e2[i];
+                    }
                 }
+                break;
             }
-            break;
-        }
-        case cycleKind::K:
-        {
-            kstep(l + 1, b_[l + 1], ec);
-            break;
+            case cycleKind::W:
+            {
+                cycle(l + 1, b_[l + 1], ec, cycleKind::W);
+                if (l + 1 < L())
+                {
+                    matrixLevel(l + 1).residual(t_[l + 1], ec, b_[l + 1]);
+                    cycle(l + 1, t_[l + 1], e2_[l + 1], cycleKind::W);
+                    const blockScalarList& e2 = e2_[l + 1];
+                    forAll(ec, i)
+                    {
+                        ec[i] += e2[i];
+                    }
+                }
+                break;
+            }
+            case cycleKind::K:
+            {
+                kstep(l + 1, b_[l + 1], ec);
+                break;
+            }
         }
     }
 
@@ -769,6 +1596,8 @@ void Foam::blockGAMG::kstep
         return;
     }
 
+    // Only ranks holding level l get here; all reductions use its
+    // communicator
     const blockLduMatrix4& A = matrixLevel(l);
     const label comm = A.comm();
     const label n = A.nRows();
@@ -833,25 +1662,15 @@ void Foam::blockGAMG::kstep
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-Foam::labelList Foam::blockGAMG::globalCellsPerLevel() const
-{
-    labelList n(nLevels());
-    n[0] = fine_.nCells();
-    for (label l = 1; l < nLevels(); ++l)
-    {
-        n[l] = coarse_[l - 1].nCells();
-    }
-    Foam::reduce(n.data(), int(n.size()), sumOp<label>(), UPstream::msgType(), fine_.comm());
-    return n;
-}
-
-
 Foam::label Foam::blockGAMG::nSingularDiag() const
 {
     label n = 0;
     forAll(smoothers_, l)
     {
-        n += smoothers_[l].nSingularDiag();
+        if (smoothers_.set(l))
+        {
+            n += smoothers_[l].nSingularDiag();
+        }
     }
     if (coarsestSolver_ && coarsestSolver_->preconditioner())
     {
@@ -867,18 +1686,10 @@ bool Foam::blockGAMG::setCycleType(const cycleKind c) const
     {
         return false;
     }
-    if (c == cycleKind::K && z1_.size() > 1 && z1_[1].empty())
+    if (c == cycleKind::K)
     {
-        // K workspace was not allocated for the start-up cycle type
-        for (label l = 1; l < nLevels(); ++l)
-        {
-            const label n = matrixLevel(l).nRows();
-            z1_[l].resize(n, Zero);
-            q1_[l].resize(n, Zero);
-            z2_[l].resize(n, Zero);
-            q2_[l].resize(n, Zero);
-            rk_[l].resize(n, Zero);
-        }
+        // K workspace may not have been allocated for the start-up cycle
+        allocateKWork();
     }
     cycle_ = c;
     return true;
@@ -889,14 +1700,17 @@ void Foam::blockGAMG::update()
 {
     if (!dict_.get<bool>("cacheAgglomeration"))
     {
+        // Rebuild everything on a fresh agglomeration (the matrices and
+        // smoothers reference the agglomeration's addressing)
         const label nLevOld = nLevels();
+        clearHierarchy();
         fine_.mesh().thisDb().checkOut
         (
             const_cast<GAMGAgglomeration*>(aggPtr_)
         );
         aggPtr_ = nullptr;
-        agglomerate();
-        if (aggPtr_->size() + 1 != nLevOld)
+        buildHierarchy();
+        if (nLevels() != nLevOld)
         {
             FatalErrorInFunction
                 << "Level count changed on re-agglomeration of a static mesh"
@@ -904,14 +1718,22 @@ void Foam::blockGAMG::update()
         }
     }
 
-    for (label l = 0; l < coarse_.size(); ++l)
+    // Levels in order: a group master assembles level l+1 from the group
+    // before restricting it further
+    for (label l = 0; l < L_; ++l)
     {
-        restrictMatrix(l);
+        if (hasLevel(l))
+        {
+            restrictMatrix(l);
+        }
     }
 
     forAll(smoothers_, l)
     {
-        smoothers_[l].update();
+        if (smoothers_.set(l))
+        {
+            smoothers_[l].update();
+        }
     }
 
     factoriseDense();
@@ -930,12 +1752,13 @@ void Foam::blockGAMG::apply
 
 void Foam::blockGAMG::writeStats(Ostream& os) const
 {
-    const labelList n = globalCellsPerLevel();
     os  << "blockGAMG: levels " << nLevels()
         << ", mergeLevels " << mergeLevelsUsed_
         << ", C_op " << Cop_
-        << ", cycle " << cycleName(cycle_) << nl
-        << "blockGAMG: cells per level " << flatOutput(n) << nl
+        << ", cycle " << cycleName(cycle_)
+        << ", processorAgglomerator " << procAgglomType_ << nl
+        << "blockGAMG: cells per level " << flatOutput(cellsPerLevel_) << nl
+        << "blockGAMG: ranks per level " << flatOutput(ranksPerLevel_) << nl
         << "blockGAMG: coarsening ratios " << flatOutput(ratios_) << endl;
 }
 
@@ -948,7 +1771,9 @@ Foam::dictionary Foam::blockGAMG::statsDict() const
     d.add("Cop", Cop_);
     d.add("cycleType", cycleName(cycle_));
     d.add("nPostSweeps", nPostSweeps_);
-    d.add("cellsPerLevel", globalCellsPerLevel());
+    d.add("cellsPerLevel", cellsPerLevel_);
+    d.add("ranksPerLevel", ranksPerLevel_);
+    d.add("processorAgglomerator", procAgglomType_);
     d.add("ratios", List<doubleScalar>(ratios_));
     d.add("denseCoarsest", useDenseLU_);
     return d;
@@ -969,6 +1794,7 @@ void Foam::blockGAMG::writeSettings(dictionary& dict) const
     dict.set("maxMergeLevels", maxMergeLevels_);
     dict.set("mergeLevelsUsed", mergeLevelsUsed_);
     dict.set("denseLUMaxCells", denseLUMaxCells_);
+    dict.set("processorAgglomerator", procAgglomType_);
 }
 
 
