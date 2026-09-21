@@ -21,7 +21,9 @@ Description
     row-major 4x4 block, 16 values per face.
 
     Cyclic and cyclicAMI interfaces are not block-coupled in v2 (explicit,
-    spec 5.5); isBlockCoupled() returns false for them.
+    spec 5.5); isBlockCoupled() returns false for them, and also for
+    processorCyclic interfaces (processor patches of a decomposed cyclic,
+    lagged like cyclic in the assembly).
 
 SourceFiles
     blockLduInterface.C

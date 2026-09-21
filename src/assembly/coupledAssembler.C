@@ -10,9 +10,9 @@
 #include "laplacianScheme.H"
 #include "symmetryFvPatch.H"
 #include "symmetryPlaneFvPatch.H"
-#include "wedgeFvPatch.H"
 #include "findRefCell.H"
 #include "IStringStream.H"
+#include <limits>
 
 using namespace Foam::boundaryCoupling;
 
@@ -22,8 +22,7 @@ bool Foam::coupledAssembler::zeroFluxPatch(const fvPatch& patch)
 {
     return
         isA<symmetryFvPatch>(patch)
-     || isA<symmetryPlaneFvPatch>(patch)
-     || isA<wedgeFvPatch>(patch);
+     || isA<symmetryPlaneFvPatch>(patch);
 }
 
 
@@ -69,6 +68,7 @@ Foam::coupledAssembler::coupledAssembler
     needRef_(false),
     pRefCell_(-1),
     pRefValue_(0),
+    refFluxChecked_(false),
     A_(mesh),
     rhs_(blockDim*mesh.nCells(), Zero),
     Dd_(blockSize*mesh.nCells(), Zero),
@@ -85,6 +85,20 @@ Foam::coupledAssembler::coupledAssembler
     rp_(0),
     nClamped_(0)
 {
+    // GUARD: the clamp must be representable in blockScalar, otherwise a
+    // clamped value would still overflow on narrowing (9.2)
+    if
+    (
+        !(clampValue_ > 0)
+     || clampValue_ > doubleScalar(std::numeric_limits<blockScalar>::max())
+    )
+    {
+        FatalIOErrorInFunction(coupledDict)
+            << "guards.clampValue " << clampValue_ << " must be in (0, "
+            << std::numeric_limits<blockScalar>::max()
+            << "] (largest blockScalar)" << exit(FatalIOError);
+    }
+
     forAll(A_.interfaces(), bi)
     {
         blockIndex_[A_.interfaces()[bi].index()] = bi;
@@ -105,6 +119,52 @@ Foam::coupledAssembler::coupledAssembler
     {
         needRef_ = true;
         setRefCell(p, coupledDict, pRefCell_, pRefValue_);
+    }
+}
+
+
+void Foam::coupledAssembler::checkReferenceFluxBalance
+(
+    const volVectorField& U
+)
+{
+    // adjustPhi-style check (native adjustPhi): with the strong pressure
+    // reference (D-021) one continuity equation is dropped, which is exact
+    // only if the prescribed boundary fluxes sum to zero. Collective:
+    // needRef_ is the same on all ranks (p.needReference() reduces).
+    reduceScalar sums[2] = {0, 0};   // sum U_b.S_f, sum |U_b.S_f|
+    const surfaceVectorField& Sf = mesh_.Sf();
+    forAll(kinds_, patchi)
+    {
+        const fvPatch& patch = mesh_.boundary()[patchi];
+        if (kinds_[patchi] != patchKind::physical || zeroFluxPatch(patch))
+        {
+            continue;
+        }
+        const vectorField& Ub = U.boundaryField()[patchi];
+        const vectorField& Sp = Sf.boundaryField()[patchi];
+        forAll(Ub, pf)
+        {
+            const reduceScalar f = Ub[pf] & Sp[pf];
+            sums[0] += f;
+            sums[1] += std::abs(f);
+        }
+    }
+    doubleReduce::parSum(sums, 2, mesh_.comm());
+
+    if
+    (
+        std::abs(sums[0])
+      > coupledDefaults::refFluxBalanceTol*max(sums[1], VSMALL)
+    )
+    {
+        WarningInFunction
+            << "Closed domain (pressure reference, D-021) but the boundary"
+            << " fluxes do not balance: sum U_b.S_f = " << sums[0]
+            << ", sum |U_b.S_f| = " << sums[1] << " (relative tolerance "
+            << coupledDefaults::refFluxBalanceTol << "). The continuity"
+            << " equation of the reference cell is dropped, so the"
+            << " imbalance is silently absorbed there." << endl;
     }
 }
 
@@ -391,6 +451,12 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
     const scalarField& pi = p.primitiveField();
     const label nCells = mesh_.nCells();
 
+    if (needRef_ && !refFluxChecked_)
+    {
+        checkReferenceFluxBalance(U);
+        refFluxChecked_ = true;
+    }
+
     // --- PTC diagonal and abar
     for (label celli = 0; celli < nCells; ++celli)
     {
@@ -406,6 +472,12 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
     // --- Rhie-Chow D, D_f, explicit face term q
     rc_.updateD(abar_, p);
     rc_.updateExplicit(p, noc_);
+
+    // --- Continuity row scale s_p (5.3f); GUARD: s_p <= 1/VSMALL. Every
+    //     row-3 coefficient is scaled in double before it is narrowed, so
+    //     the clamp and the single rounding apply to the scaled value.
+    sp_ = 1.0/max(rc_.Dref(), VSMALL);
+    const doubleScalar sp = sp_;
     const surfaceScalarField& q = rc_.q();
 
     blockScalar* __restrict__ Aup = A_.upper().data();
@@ -428,22 +500,22 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
             // Owner row (+)
             Dd_[di(P, blockP, c)] += wf*S[c];
             const doubleScalar ud = (1 - wf)*S[c];
-            Ub[blockP*blockDim + c] = store(ud);
+            Ub[blockP*blockDim + c] = store(sp*ud);
             Ax_[P*blockDim + blockP] += ud*Ui[N][c];
 
             // Neighbour row (-)
             Dd_[di(N, blockP, c)] -= (1 - wf)*S[c];
             const doubleScalar ld = -wf*S[c];
-            Lb[blockP*blockDim + c] = store(ld);
+            Lb[blockP*blockDim + c] = store(sp*ld);
             Ax_[N*blockDim + blockP] += ld*Ui[P][c];
         }
 
         Dd_[di(P, blockP, blockP)] += g;
-        Ub[blockP*blockDim + blockP] = store(-g);
+        Ub[blockP*blockDim + blockP] = store(-sp*g);
         Ax_[P*blockDim + blockP] -= g*pi[N];
 
         Dd_[di(N, blockP, blockP)] += g;
-        Lb[blockP*blockDim + blockP] = store(-g);
+        Lb[blockP*blockDim + blockP] = store(-sp*g);
         Ax_[N*blockDim + blockP] -= g*pi[P];
 
         b_[P*blockDim + blockP] -= q[facei];
@@ -486,12 +558,12 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
                     {
                         Dd_[di(P, blockP, c)] += wp[pf]*Sp[pf][c];
                         const doubleScalar cd = (1 - wp[pf])*Sp[pf][c];
-                        Cb[blockP*blockDim + c] = store(cd);
+                        Cb[blockP*blockDim + c] = store(sp*cd);
                         Ax_[P*blockDim + blockP] += cd*Un[pf][c];
                     }
 
                     Dd_[di(P, blockP, blockP)] += g;
-                    Cb[blockP*blockDim + blockP] = store(-g);
+                    Cb[blockP*blockDim + blockP] = store(-sp*g);
                     Ax_[P*blockDim + blockP] -= g*pn[pf];
 
                     b_[P*blockDim + blockP] -= qp[pf];
@@ -636,21 +708,19 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
         Ax_[celli*blockDim + blockP] += s;
     }
 
-    // --- Narrow the diagonal blocks
+    // --- Narrow the diagonal blocks (row 3 scaled by s_p in double)
     blockScalarList& Ad = A_.diag();
     forAll(Dd_, i)
     {
-        Ad[i] = store(Dd_[i]);
+        const bool row3 = ((i % blockSize)/blockDim == blockP);
+        Ad[i] = store(row3 ? sp*Dd_[i] : Dd_[i]);
     }
-
-    // --- Continuity row scaling (5.3f); GUARD: s_p <= 1/VSMALL
-    sp_ = 1.0/max(rc_.Dref(), VSMALL);
-    A_.scaleRow(blockP, narrow(sp_));
 
     // --- Residual (right-hand side of the increment solve) and norms
     reduceScalar sums[6] = {0, 0, 0, 0, 0, 0};
     // 0: sum r^2 (all), 1: sum(|Ax|+|b|) all, 2: sum|r| rows 0-2,
     // 3: sum(|Ax|+|b|) rows 0-2, 4: sum|r| row 3, 5: sum(|Ax|+|b|) row 3
+    const label refCell = (needRef_ ? pRefCell_ : -1);
 
     for (label celli = 0; celli < nCells; ++celli)
     {
@@ -659,7 +729,13 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
             const label i = celli*blockDim + k;
             const reduceScalar s = (k == blockP ? sp_ : 1.0);
             const reduceScalar r = s*(b_[i] - Ax_[i]);
-            const reduceScalar m = s*(std::abs(Ax_[i]) + std::abs(b_[i]));
+            // The replaced continuity row of the pressure reference cell
+            // (D-021) is not part of the physical system: it enters the
+            // residual but not the normalisation sums
+            const reduceScalar m =
+                (k == blockP && celli == refCell)
+              ? 0
+              : s*(std::abs(Ax_[i]) + std::abs(b_[i]));
 
             rhs_[i] = store(r);
 
@@ -678,7 +754,7 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
         }
     }
 
-    doubleReduce::parSum(sums, 6, UPstream::worldComm);
+    doubleReduce::parSum(sums, 6, mesh_.comm());
 
     // GUARD: normFactor >= SMALL (9.2)
     normFactor_ = sums[1] + SMALL;

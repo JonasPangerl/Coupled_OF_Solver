@@ -85,11 +85,65 @@ void Foam::convergenceMonitor::record(const Time& runTime)
         }
     }
 
-    if (!foName_.empty())
+    if (foName_.empty())
     {
-        Cd_.append(props.getObjectResult<scalar>(foName_, "Cd"));
-        Cl_.append(props.getObjectResult<scalar>(foName_, "Cl"));
+        return;
     }
+
+    // One sample per function-object evaluation. The result stored in the
+    // properties is the one of the last execution; it is not renewed on
+    // iterations where the object does not execute (executeInterval > 1),
+    // and after a rolled-back or skipped iteration the object evaluates the
+    // restored, already recorded state. Such repeats are recognised by an
+    // unchanged (Cd, Cl) pair and not recorded again: a genuinely new
+    // evaluation of a changed flow field reproduces both values bit for
+    // bit only if the forces did not change at all.
+    const scalar Cd = props.getObjectResult<scalar>(foName_, "Cd");
+    const scalar Cl = props.getObjectResult<scalar>(foName_, "Cl");
+
+    if (Cd_.size() && Cd == Cd_.last() && Cl == Cl_.last())
+    {
+        return;
+    }
+
+    Cd_.append(Cd);
+    Cl_.append(Cl);
+}
+
+
+void Foam::convergenceMonitor::writeState(dictionary& dict) const
+{
+    // The last window samples are all the criterion needs
+    const label n = (window_ > 0 ? min(window_, Cd_.size()) : 0);
+    const label start = Cd_.size() - n;
+
+    dictionary d;
+    d.set("Cd", scalarList(SubList<scalar>(Cd_, n, start)));
+    d.set("Cl", scalarList(SubList<scalar>(Cl_, n, start)));
+    dict.set("convergenceMonitor", d);
+}
+
+
+void Foam::convergenceMonitor::readState(const dictionary& dict)
+{
+    const dictionary* dp = dict.findDict("convergenceMonitor");
+    if (!dp)
+    {
+        return;
+    }
+
+    const scalarList Cd(dp->get<scalarList>("Cd"));
+    const scalarList Cl(dp->get<scalarList>("Cl"));
+    if (Cd.size() != Cl.size())
+    {
+        FatalIOErrorInFunction(*dp)
+            << "Cd and Cl histories differ in size" << exit(FatalIOError);
+    }
+
+    Cd_.clear();
+    Cl_.clear();
+    Cd_.push_back(Cd);
+    Cl_.push_back(Cl);
 }
 
 

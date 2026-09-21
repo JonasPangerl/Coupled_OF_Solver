@@ -19,14 +19,16 @@ Description
             and cycleType V or F: promote V -> F -> W (event
             "promotion-refused" if the coarsening-ratio rule refuses W);
             cycleType K: nothing further, event "kcycle-saturated".
-      - rho_med < tuneRhoLow (0.3) and nPostSweeps > 1:
-            nPostSweeps -= 1; if then nPostSweeps == 1, rho_med <
-            tuneRhoDemote (0.2) and the cycle type was promoted by the
-            controller: demote one step (W -> F -> V, never below the
-            user's cycle type).
-      - Hysteresis: a change requires the same condition in two
-        consecutive windows; after a change the count restarts.
-      - Failure: rho_med > tuneRhoFail (0.9) in two consecutive windows at
+      - rho_med < tuneRhoLow (0.3) and nPostSweeps > minPostSweeps (1):
+            nPostSweeps -= 1. Whenever nPostSweeps == 1 (after the
+            decrement or already before), rho_med < tuneRhoDemote (0.2)
+            and the cycle type was promoted by the controller: demote one
+            step (W -> F -> V, never below the user's cycle type).
+      - Hysteresis: a change requires the same condition in
+        tuneConsecutiveWindows (2) consecutive windows; after a change the
+        count restarts.
+      - Failure: rho_med > tuneRhoFail (0.9) in tuneConsecutiveWindows
+        consecutive windows at
         nPostSweepsMax with cycleType W or K -> Warning, event "failure",
         failed() == true.
 
@@ -91,8 +93,11 @@ private:
             //- Outer iterations recorded in the current window
             label nInWindow_;
 
-            //- Condition of the previous window
+            //- Condition of the previous window(s)
             condition prevCondition_;
+
+            //- Consecutive windows with prevCondition_
+            label nSameCondition_;
 
             //- Consecutive windows satisfying the failure condition
             label nFailWindows_;
@@ -106,6 +111,9 @@ private:
 
             //- Failure detected
             bool failed_;
+
+            //- The last record() changed sweeps or cycle type
+            bool changed_;
 
             //- Event history
             DynamicList<tuneEvent> events_;
@@ -122,6 +130,14 @@ private:
         //- Apply the high / low rule
         void applyHigh(const label iter, const scalar rhoMed);
         void applyLow(const label iter, const scalar rhoMed);
+
+        //- Cycle type one demotion step below the current one if the
+        //  controller promoted it (not below the user's type), else the
+        //  current type
+        blockGAMG::cycleKind demotionTarget() const;
+
+        //- Demote one step (if demotionTarget() differs)
+        void demote(const label iter, const scalar rhoMed);
 
         //- Log and store an event
         void addEvent
@@ -147,9 +163,17 @@ public:
         label nPostSweepsMax() const noexcept { return nPostSweepsMax_; }
         const UList<tuneEvent>& events() const noexcept { return events_; }
 
-        //- Record the rho of outer iteration iter (rho < 0: not measured).
-        //  Evaluates the window after every tuneInterval calls.
-        void record(const label iter, const scalar rho);
+        //- Record the rho of outer iteration iter (rho < 0: not measured
+        //  or not to be used - rejected/failed solves). Evaluates the
+        //  window after every tuneInterval calls. Returns true if the
+        //  sweeps or the cycle type were changed.
+        bool record(const label iter, const scalar rho);
+
+        //- Restart state (subdictionary gamgAutoTune): sweeps, cycle type,
+        //  rho window, hysteresis and failure counters, latches.
+        //  readState re-applies sweeps and cycle type to the GAMG.
+        void writeState(dictionary& dict) const;
+        void readState(const dictionary& dict);
 
         //- Events as a JSON array [{"iter":..,"what":"..","rhoMed":..}, ...]
         std::string eventsJson() const;

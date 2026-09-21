@@ -139,6 +139,12 @@ int main(int argc, char *argv[])
             "maxLinFails",
             coupledDefaults::maxLinFails
         );
+    if (maxLinFails < 1)
+    {
+        FatalIOErrorInFunction(coupledDict)
+            << "ptc.maxLinFails must be >= 1, got " << maxLinFails
+            << exit(FatalIOError);
+    }
 
     // autoTune controller of the block-GAMG cycle (6.3.5)
     autoPtr<gamgAutoTune> tuner;
@@ -259,6 +265,11 @@ int main(int argc, char *argv[])
             rem.readState(st);
             sen.readState(st);
             ew.readState(st);
+            conv.readState(st);
+            if (tuner)
+            {
+                tuner->readState(st);
+            }
 
             Info<< "coupledFoam: restart from " << runTime.timeName()
                 << " at iteration " << iter << ", CFL " << ptc.CFL()
@@ -272,8 +283,24 @@ int main(int argc, char *argv[])
                 scalarField abar(mesh.V()/max(Dc, VSMALL));  // GUARD
                 assembler.rc().updateD(abar, p);
 
+                // The written phi was built with the explicit term q_f of
+                // the assembly that was solved (rhieChow::updateFlux); use
+                // the stored q_f if present, else recompute it from p
                 surfaceScalarField phiRe("phiRecomputed", phi);
-                assembler.rc().updateFlux(phiRe, U, p, assembler.noc());
+                tmp<surfaceScalarField> tQ = state.readQ();
+                if (tQ.valid())
+                {
+                    assembler.rc().setQ(tQ());
+                }
+                else
+                {
+                    Info<< "coupledFoam: restart without coupledQ, q_f"
+                        << " recomputed from p for the phi check" << endl;
+                }
+                assembler.rc().updateFlux
+                (
+                    phiRe, U, p, assembler.noc(), !tQ.valid()
+                );
                 MRF.makeRelative(phiRe);
 
                 scalar dmax = gMax(mag(phi.primitiveField() - phiRe.primitiveField())());
@@ -325,6 +352,12 @@ int main(int argc, char *argv[])
         rem.writeState(st);
         sen.writeState(st);
         ew.writeState(st);
+        conv.writeState(st);
+        if (tuner)
+        {
+            tuner->writeState(st);
+        }
+        // Anderson history deliberately not part of the state (D-026)
         st.set("refinementHistory", labelList());
         return st;
     };
@@ -333,6 +366,7 @@ int main(int argc, char *argv[])
     {
         rem.write();
         state.writeD(assembler.rc().D());
+        state.writeQ(assembler.rc().q());
         state.write(stateDict());
     };
 
@@ -469,13 +503,19 @@ int main(int argc, char *argv[])
                 ++linFails;
                 if (linFails >= maxLinFails)
                 {
+                    // Fields are unchanged since iteration iter-1: write
+                    // them (and the remediation sets) into
+                    // <iter-1>_lastValid, never into the current time
+                    // directory, which would be left without U/p (9.3)
+                    const label validIter = iter - 1;
                     const sentinel::checkResult chk =
                         sen.check(U, p, kPtr, omegaPtr, ls.Uref(), ls.pref());
                     sen.writeLastValid
                     (
-                        U, p, phi, kPtr, omegaPtr, nutPtr, chk.offending, iter
+                        U, p, phi, kPtr, omegaPtr, nutPtr, chk.offending,
+                        validIter
                     );
-                    rem.write();
+                    rem.write(sentinel::lastValidName(validIter));
                     FatalErrorInFunction
                         << linFails << " consecutive linear-solve failures"
                         << " (maxLinFails " << maxLinFails << ") at iteration "
@@ -483,8 +523,9 @@ int main(int argc, char *argv[])
                         << perf.initialResidual << ", final "
                         << perf.finalResidual << " after "
                         << perf.nIterations << " iterations, eta " << eta
-                        << ". Fields written to " << iter << "_lastValid."
-                        << exit(FatalError);
+                        << ". Fields of iteration " << validIter
+                        << " written to " << sentinel::lastValidName(validIter)
+                        << "." << exit(FatalError);
                 }
             }
             else
@@ -597,7 +638,10 @@ int main(int argc, char *argv[])
             }
         }
 
-        assembler.rc().updateFlux(phi, U, p, assembler.noc());
+        // Flux with the explicit Rhie-Chow term of the solved assembly: the
+        // continuity row that was solved, evaluated at the new (U, p)
+        // (conservative to the solver tolerance for omega = 1)
+        assembler.rc().updateFlux(phi, U, p, assembler.noc(), false);
         MRF.makeRelative(phi);
 
         // --- Sentinel (9.3)
@@ -617,16 +661,20 @@ int main(int argc, char *argv[])
 
             if (sen.exhausted())
             {
+                // The restored fields are those of iteration iter-1
+                const label validIter = iter - 1;
                 sen.writeLastValid
                 (
-                    U, p, phi, kPtr, omegaPtr, nutPtr, chk.offending, iter
+                    U, p, phi, kPtr, omegaPtr, nutPtr, chk.offending,
+                    validIter
                 );
-                rem.write();
+                rem.write(sentinel::lastValidName(validIter));
                 FatalErrorInFunction
                     << sen.consecutive() << " consecutive rollbacks (limit "
                     << sen.maxRollbacks() << ") at iteration " << iter
-                    << ". Last valid fields written to " << iter
-                    << "_lastValid." << exit(FatalError);
+                    << ". Last valid fields (iteration " << validIter
+                    << ") written to " << sentinel::lastValidName(validIter)
+                    << "." << exit(FatalError);
             }
         };
 
@@ -643,13 +691,14 @@ int main(int argc, char *argv[])
 
         if (!rolledBack)
         {
-            const label nDynBefore = rem.nDynamic();
+            const label dynVersion = rem.dynamicVersion();
             rem.updateDynamic
             (
                 U, p, kPtr, omegaPtr, ls.Uref(), ls.pref(), iter
             );
-            if (rem.nDynamic() != nDynBefore)
+            if (rem.dynamicVersion() != dynVersion)
             {
+                // Membership changed (beta and dt of those cells change)
                 aa.flush();
             }
 
@@ -670,9 +719,20 @@ int main(int argc, char *argv[])
 
         if (!rolledBack)
         {
-            sen.accepted();
-            ptc.update(R);
-            ew.accept(R, eta);
+            // A skipped step (failed solve, cuts exhausted) is neither an
+            // accepted step nor a rollback: no strategy/EW/sentinel update
+            if (!skipStep)
+            {
+                sen.accepted();
+                ptc.update(R);
+                ew.accept(R, eta);
+
+                // Line-search beta (7.2): CFL boost on a full step
+                if (omega >= 1 && cuts == 0)
+                {
+                    ptc.boost(ls.beta());
+                }
+            }
 
             if
             (
@@ -681,6 +741,9 @@ int main(int argc, char *argv[])
             )
             {
                 startupDone = true;
+                // beta 0 -> 1 changes the discretisation: the Anderson
+                // history refers to the upwind operator
+                aa.flush();
                 Info<< "coupledFoam: start-up phase done at iteration "
                     << iter << " (R " << R << ")" << endl;
             }
@@ -692,7 +755,14 @@ int main(int argc, char *argv[])
 
         if (tuner)
         {
-            tuner->record(iter, scalar(perf.rho));
+            // Only accepted, successful solves enter the rho window
+            // (rho < 0: not recorded, the iteration still counts)
+            const bool useRho = !rolledBack && !skipStep && perf.converged;
+            if (tuner->record(iter, useRho ? scalar(perf.rho) : scalar(-1)))
+            {
+                // Different preconditioner from the next solve on
+                aa.flush();
+            }
         }
 
         // --- Log line (12.1)

@@ -464,3 +464,88 @@ both are delivered to the user during the work (D-031).
   totals; both parts are recorded (potentialFoamWallSeconds /
   potentialFoamCpuHours, solver* / pre*). Time to convergence is
   t_pre + f*t_solver, and the same for CPU, where f is the solvers
+
+## D-034 - Restart state per processor, ASCII (review fix)
+
+`coupledState` is a per-processor `localIOdictionary`, always written as
+ASCII with 17 significant digits. It holds:
+- CFL/PTC state
+- Eisenstat-Walker state
+- the dynamic set
+- the gamgAutoTune state (sweeps, cycle type, rho window, hysteresis,
+  failure counters, latches), re-applied to the GAMG on restart
+- the last Cd/Cl window of the convergence monitor
+
+`coupledD` and `coupledQ` are written next to it. The Anderson history
+is not saved (D-026).
+
+Before this fix:
+- The state was a global IOdictionary, so in parallel every rank read
+  rank 0's state. On T0 np4 the first residual after a restart jumped
+  from 5.6e-5 to 1.3e-2.
+- A binary dictionary cannot read back an empty list `0 ( )` (restart
+  crash: "dynamicSet has 2 excess tokens").
+
+Verified: the restart round trip is bit-exact on T0 np1 (30 + 26 = 56)
+and np4 (30 + 46 = 76, same final R as the uninterrupted run on the same
+decomposition). Old binary coupledState files cannot be read.
+
+## D-035 - Conservative flux; Rhie-Chow boundary weighting (review fixes)
+
+- After the solve, the flux update reuses the explicit Rhie-Chow q_f of
+  the solved assembly (A7). Sum phi per cell then equals that continuity
+  row's linear residual, as in native `phiHbyA - pEqn.flux()`. q_f is
+  stored as `coupledQ` for the spec-10 restart check.
+- On physical patches the explicit q_b is weighted by
+  (1 - valueInternalCoeffs(p)), the same weight as the implicit p-p term
+  (A3). This matters for mixed-type BCs (freestreamPressure,
+  inletOutlet): before, their zero-gradient faces carried a spurious flux
+  that D-013 was meant to prevent.
+- The non-orthogonal part of q uses the cellLimited gradient in static
+  cells (A8, extends D-018).
+- Processor faces decide the non-orthogonal limiter by the same rule as
+  internal faces: static if either cell is static. The static flag is
+  exchanged across processor patches (A2).
+- Wedge patches go through the general BC path instead of being treated
+  as zero-flux (A4).
+- Row 3 is scaled by s_p in double before narrowing to float (A5).
+- normFactor excludes the pressure-reference row and reduces on
+  mesh.comm() (A6).
+- processorCyclic interfaces are not block-coupled (A9).
+- A closed domain whose boundary fluxes do not balance gets a one-time
+  Warning; tolerance refFluxBalanceTol = 1e-8, the native adjustPhi value
+  (A10).
+- The nonOrthCorrection constructor does one global reduction instead of
+  one per patch; per-patch reductions caused the MPI_ERR_TRUNCATE (f025546).
+
+## D-036 - Line-search beta (spec 7.2)
+
+beta >= 1 multiplies CFL after a full step with no cuts, capped at CFLmax
+and not applied during a hold. The default of 1 is spec 7.2's "no
+additional boost". Before, beta was read but unused.
+
+## D-037 - autoTune demotion reachable (6.3.5); Anderson flushes; aborts
+
+- A low window at nPostSweeps == 1 with rho < 0.2 after a controller
+  promotion now demotes one step. Hysteresis is a counter
+  (tuneConsecutiveWindows).
+- The Anderson history is flushed on:
+  - a CFL cut or skipped step
+  - the line-search minimum
+  - a rollback
+  - a change in dynamic-set membership (version counter, not set size)
+  - the end of start-up (beta 0 -> 1)
+  - any autoTune change
+- Skipped steps no longer update Eisenstat-Walker, PTC or the sentinel.
+  The rho window takes only accepted, converged solves. The convergence
+  monitor does not record a repeated (Cd, Cl) pair.
+- Both abort paths write fields and remediation sets only into
+  `<iter-1>_lastValid`, named after the iteration whose fields it holds.
+  No more incomplete time directories.
+- Anderson is disabled with a Warning above andersonMaxCells = 35 M
+  cells (B7). maxLinFails < 1 is a FatalIOError.
+- blockGMRES gets the same mixed-precision refinement as blockFGMRES
+  (double iterate, true double residual).
+- potentialFoam `-writep` needs `div(div(phi,U))`; it was added to the
+  fvSchemes of T1-T5, where every coupledFoam run failed at potentialFoam
+  before.

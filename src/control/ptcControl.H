@@ -126,6 +126,10 @@ public:
         //  start the hold
         void decrease(const scalar factor);
 
+        //- Increase CFL by factor >= 1 (line-search beta on a full step,
+        //  7.2), capped at CFLmax; no effect during a hold
+        void boost(const scalar factor);
+
         //- Restart state
         void writeState(dictionary& dict) const;
         void readState(const dictionary& dict);

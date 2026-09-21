@@ -20,6 +20,12 @@ Description
     cells with |dU| > fU Uref/omegaMin or |dp| > fp pref/omegaMin go to the
     dynamic remediation set (offendingCells).
 
+    beta (>= 1, default 1): CFL boost on a full step. After an accepted
+    step with omega == 1 and no CFL cut, the caller multiplies CFL by beta
+    after the strategy update (ptcControl::boost: capped at CFLmax, not
+    during a hold). beta = 1 is the spec default "no additional CFL boost on
+    full step; the strategy handles growth" (7.2).
+
     Dictionary: coupled.lineSearch { fU fp omegaMin kappa maxCflCuts beta }.
 
 SourceFiles
@@ -67,6 +73,7 @@ public:
         scalar omegaMin() const noexcept { return omegaMin_; }
         scalar kappa() const noexcept { return kappa_; }
         label maxCflCuts() const noexcept { return maxCflCuts_; }
+        scalar beta() const noexcept { return beta_; }
         scalar Uref() const noexcept { return Uref_; }
         scalar pref() const noexcept { return pref_; }
         bool referenceSet() const noexcept { return refSet_; }

@@ -211,10 +211,10 @@ void Foam::sentinel::writeLastValid
     const volScalarField* omega,
     const volScalarField* nut,
     const labelList& offending,
-    const label iter
+    const label validIter
 ) const
 {
-    const word inst(Foam::name(iter) + "_lastValid");
+    const word inst(lastValidName(validIter));
 
     auto writeCopy = [&inst](const auto& fld)
     {

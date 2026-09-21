@@ -18,10 +18,14 @@ Description
     CFL <- max(CFLmin, cflFactor*CFL), marks the offending cells into the
     dynamic remediation set and counts a rollback. After maxRollbacks
     consecutive rollbacks, writeLastValid() writes the restored fields to
-    time "<iter>_lastValid" together with remediationFlag and a
-    volScalarField sentinelFlag of the offending cells, prints the
+    time "<n>_lastValid" together with a volScalarField sentinelFlag of the
+    offending cells (the caller adds remediationFlag and the remediation
+    cellSets into the same instance), prints the
     offending cell centres (at most maxReport) and the run exits with
     FatalError. A time directory with non-finite values is never written.
+    <n> is the outer iteration whose fields are written, i.e. the last
+    accepted one (iter - 1 when iteration iter is aborted), see
+    lastValidName().
 
     Dictionary: coupled.sentinel { maxRollbacks UFactor pFactor cflFactor
     maxReport }.
@@ -149,7 +153,15 @@ public:
             return consecutive_ >= maxRollbacks_;
         }
 
-        //- Write the last valid fields, sentinelFlag, report (9.3)
+        //- Instance name "<validIter>_lastValid" of the 9.3 abort path;
+        //  validIter is the iteration whose fields are written
+        static word lastValidName(const label validIter)
+        {
+            return word(Foam::name(validIter) + "_lastValid");
+        }
+
+        //- Write the last valid fields (those of iteration validIter) to
+        //  lastValidName(validIter), sentinelFlag, report (9.3)
         void writeLastValid
         (
             const volVectorField& U,
@@ -159,7 +171,7 @@ public:
             const volScalarField* omega,
             const volScalarField* nut,
             const labelList& offending,
-            const label iter
+            const label validIter
         ) const;
 
         //- Restart state

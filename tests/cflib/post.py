@@ -32,6 +32,60 @@ def sets_file(case: Path, fo: str, name: str, time: str | None = None) -> Path:
     return matches[0]
 
 
+def line_profile(coord: np.ndarray, values: np.ndarray,
+                 rel_tol: float = 1e-9) -> tuple[np.ndarray, np.ndarray]:
+    """Sorted, de-duplicated line samples.
+
+    A parallel `sets` run writes the sample points of every rank in rank
+    order: points on a processor boundary appear twice (once per rank) and
+    points that no rank claims are missing. Sort by the line coordinate and
+    merge points whose coordinates agree to rel_tol of the line length
+    (their values are averaged)."""
+    order = np.argsort(coord, kind="stable")
+    c = np.asarray(coord, dtype=float)[order]
+    v = np.asarray(values, dtype=float)[order]
+    span = float(c[-1] - c[0]) if c.size > 1 else 1.0
+    tol = rel_tol * max(abs(span), 1.0e-300)
+    out_c, out_v = [], []
+    i = 0
+    while i < c.size:
+        j = i + 1
+        while j < c.size and c[j] - c[i] <= tol:
+            j += 1
+        out_c.append(float(c[i:j].mean()))
+        out_v.append(float(v[i:j].mean()))
+        i = j
+    return np.array(out_c), np.array(out_v)
+
+
+def match_profiles(profile: tuple[np.ndarray, np.ndarray],
+                   reference: tuple[np.ndarray, np.ndarray],
+                   rel_tol: float = 1e-9
+                   ) -> tuple[np.ndarray, np.ndarray, int]:
+    """Values of two line profiles at the sample points present in both.
+
+    Both profiles are cleaned with line_profile() (sorted, duplicates of a
+    parallel run merged). A parallel `sets` run of a line that lies on
+    cell faces (T0 centrelines) also drops whole runs of points: measured
+    on T0 np4, up to 3 consecutive points of 129. Interpolating across such
+    a gap is not an option - linear interpolation over 4 sample spacings
+    of the lid boundary layer is off by 2.6e-3 while the sampled values
+    agree to 1e-9 - so missing points are left out and counted instead.
+    Returns (profile values, reference values, number of reference points
+    missing in the profile)."""
+    pc, pv = line_profile(*profile, rel_tol=rel_tol)
+    rc, rv = line_profile(*reference, rel_tol=rel_tol)
+    span = float(rc[-1] - rc[0]) if rc.size > 1 else 1.0
+    tol = rel_tol * max(abs(span), 1.0e-300)
+    idx = np.clip(np.searchsorted(pc, rc), 0, max(pc.size - 1, 0))
+    best = idx.copy()
+    left = np.maximum(idx - 1, 0)
+    use_left = np.abs(pc[left] - rc) < np.abs(pc[idx] - rc)
+    best[use_left] = left[use_left]
+    present = np.abs(pc[best] - rc) <= tol
+    return pv[best[present]], rv[present], int(np.count_nonzero(~present))
+
+
 def l2rel(a: np.ndarray, b: np.ndarray) -> float:
     """||a - b||_2 / ||b||_2"""
     nb = np.linalg.norm(b)

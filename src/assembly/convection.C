@@ -6,7 +6,6 @@
 #include "convection.H"
 #include "fvmDiv.H"
 #include "fvcDiv.H"
-#include "PstreamReduceOps.H"
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
@@ -39,7 +38,8 @@ Foam::tmp<Foam::vectorField> Foam::convection::deferredCorrection
 {
     auto tcorr = tmp<vectorField>::New(mesh_.nCells(), Zero);
 
-    const bool anyHO = returnReduceOr(gMax(beta) > 0);
+    // gMax is already a global (reduced) maximum: no further collective
+    const bool anyHO = (gMax(beta) > 0);
     if (!anyHO)
     {
         return tcorr;

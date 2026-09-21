@@ -8,12 +8,22 @@
 #include "UIPstream.H"
 #include "UOPstream.H"
 #include "error.H"
+#include "processorCyclicFvPatch.H"
+#include "processorCyclicGAMGInterface.H"
 
 // * * * * * * * * * * * * * * * Static Functions  * * * * * * * * * * * * * //
 
 bool Foam::blockLduInterface::isBlockCoupled(const lduInterface& iface)
 {
-    return dynamic_cast<const processorLduInterface*>(&iface) != nullptr;
+    // processorCyclic (processor patch of a decomposed cyclic, finest level
+    // processorCyclicFvPatch, coarse levels processorCyclicGAMGInterface) is
+    // a processorLduInterface too, but the assembly treats it explicitly
+    // (lagged, boundaryCoupling::kind): its block coefficients would be all
+    // zero and each Amul on each level would still pay an exchange.
+    return
+        dynamic_cast<const processorLduInterface*>(&iface) != nullptr
+     && !isA<processorCyclicFvPatch>(iface)
+     && !isA<processorCyclicGAMGInterface>(iface);
 }
 
 

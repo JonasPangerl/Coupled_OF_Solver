@@ -14,25 +14,6 @@
 #include "wordRes.H"
 #include <cmath>
 
-// * * * * * * * * * * * * * * * Local Constants * * * * * * * * * * * * * * //
-
-namespace Foam
-{
-namespace remediationZonalDefaults
-{
-    //- Default zonal CFL multiplier of an entry (neutral)
-    static constexpr scalar cflFactor = 1;
-
-    //- Default zonal beta multiplier of an entry (neutral)
-    static constexpr scalar beta = 1;
-
-    //- Default number of face layers of a patchDistance entry
-    //  (layer 1 = cells adjacent to the patch faces)
-    static constexpr label nLayers = 1;
-}
-}
-
-
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
 Foam::remediation::remediation
@@ -64,6 +45,7 @@ Foam::remediation::remediation
     pending_(mesh.nCells(), false),
     nStatic_(0),
     nDynamic_(0),
+    dynamicVersion_(0),
     zonalEnabled_(coupledDefaults::zonalEnabled),
     zonalCfl_(),
     zonalBeta_(),
@@ -213,12 +195,12 @@ void Foam::remediation::readZonalFactors
     cflFactor = entryDict.getOrDefault<scalar>
     (
         "cflFactor",
-        remediationZonalDefaults::cflFactor
+        coupledDefaults::zonalCflFactor
     );
     beta = entryDict.getOrDefault<scalar>
     (
         "beta",
-        remediationZonalDefaults::beta
+        coupledDefaults::zonalBeta
     );
 
     // Negated comparisons also reject non-finite input
@@ -306,8 +288,8 @@ void Foam::remediation::buildZonal(const dictionary& zonalDict)
         const dictionary& e = zoneDicts[entryi];
         const wordRe zoneName(e.get<wordRe>("cellZone"));
 
-        scalar cflFactor = remediationZonalDefaults::cflFactor;
-        scalar beta = remediationZonalDefaults::beta;
+        scalar cflFactor = coupledDefaults::zonalCflFactor;
+        scalar beta = coupledDefaults::zonalBeta;
         readZonalFactors(e, zonalDict, cflFactor, beta);
 
         const labelList zoneIDs(czm.indices(zoneName, true));
@@ -363,7 +345,7 @@ void Foam::remediation::buildZonal(const dictionary& zonalDict)
         const label nLayers = e.getOrDefault<label>
         (
             "nLayers",
-            remediationZonalDefaults::nLayers
+            coupledDefaults::zonalNLayers
         );
 
         if (nLayers < 1)
@@ -373,8 +355,8 @@ void Foam::remediation::buildZonal(const dictionary& zonalDict)
                 << " in entry " << entryi << exit(FatalIOError);
         }
 
-        scalar cflFactor = remediationZonalDefaults::cflFactor;
-        scalar beta = remediationZonalDefaults::beta;
+        scalar cflFactor = coupledDefaults::zonalCflFactor;
+        scalar beta = coupledDefaults::zonalBeta;
         readZonalFactors(e, zonalDict, cflFactor, beta);
 
         boolList selected(pbm.size(), false);
@@ -618,8 +600,10 @@ void Foam::remediation::updateDynamic
 
     // Hysteresis
     nDynamic_ = 0;
+    bool changed = false;
     forAll(age_, celli)
     {
+        const bool wasIn = (age_[celli] >= 0);
         if (mark[celli])
         {
             age_[celli] = 0;
@@ -632,10 +616,19 @@ void Foam::remediation::updateDynamic
                 age_[celli] = -1;
             }
         }
-        nDynamic_ += (age_[celli] >= 0);
+        const bool isIn = (age_[celli] >= 0);
+        changed = changed || (isIn != wasIn);
+        nDynamic_ += isIn;
     }
 
     pending_ = false;
+
+    // Membership changed anywhere: new version (a size comparison misses
+    // cells that enter and leave in the same update)
+    if (returnReduceOr(changed))
+    {
+        ++dynamicVersion_;
+    }
 
     label nUnion = 0;
     forAll(age_, celli)
@@ -770,12 +763,18 @@ Foam::label Foam::remediation::clipIncrement
 
 void Foam::remediation::write() const
 {
+    write(mesh_.time().timeName());
+}
+
+
+void Foam::remediation::write(const word& instance) const
+{
     volScalarField flag
     (
         IOobject
         (
             "remediationFlag",
-            mesh_.time().timeName(),
+            instance,
             mesh_,
             IOobject::NO_READ,
             IOobject::NO_WRITE,
@@ -799,11 +798,11 @@ void Foam::remediation::write() const
     flag.write();
 
     cellSet cs(mesh_, "remediationStatic", stat);
-    cs.instance() = mesh_.time().timeName();
+    cs.instance() = instance;
     cs.write();
 
     cellSet cd(mesh_, "remediationDynamic", dyn);
-    cd.instance() = mesh_.time().timeName();
+    cd.instance() = instance;
     cd.write();
 
     if (zonalEnabled_)
@@ -813,7 +812,7 @@ void Foam::remediation::write() const
             IOobject
             (
                 "zonalCflFactor",
-                mesh_.time().timeName(),
+                instance,
                 mesh_,
                 IOobject::NO_READ,
                 IOobject::NO_WRITE,

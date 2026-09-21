@@ -6,14 +6,26 @@ Class
     Foam::coupledState
 
 Description
-    Restart state (spec 10): an IOdictionary "coupledState" in the time
-    directory with
+    Restart state (spec 10): a localIOdictionary "coupledState" in the time
+    directory (per processor directory in parallel; a global IOdictionary
+    would be read by the master and broadcast, giving every rank the state
+    of rank 0) with
         CFL, iter, startupDone, R1, Uref, pref, nHoldRemaining, Rprev,
-        dynamicSet, dynamicSetAge, nRollbacks,
+        dynamicSet, dynamicSetAge, nRollbacks, Eisenstat-Walker state,
+        gamgAutoTune (sweeps, cycle type, rho window, hysteresis, latches),
+        convergenceMonitor (last forceCoeffsWindow Cd/Cl samples),
         refinementHistory (empty placeholder for Phase 2 AMR)
     plus the volScalarField coupledD (Rhie-Chow D = V/abar of the last
-    assembly), from which phi is recomputed on restart for the consistency
-    check (spec 10; ||phi_read - phi_recomputed||_inf/||phi||_inf).
+    assembly) and the surfaceScalarField coupledQ (explicit Rhie-Chow face
+    term of the last assembly), from which phi is recomputed on restart for
+    the consistency check (spec 10; ||phi_read -
+    phi_recomputed||_inf/||phi||_inf). The Anderson history is not part of
+    the state (D-026).
+
+    The dictionary is always written in ASCII with round-trip precision
+    (max_digits10), independent of writeFormat/writePrecision: a binary
+    dictionary does not read back an empty labelList, and the scalars must
+    restart exactly.
 
     Atomic write (DECISIONS.md D-017): the state is written to
     "coupledState.tmp" and renamed to "coupledState" (per processor
@@ -31,6 +43,7 @@ SourceFiles
 
 #include "fvMesh.H"
 #include "volFields.H"
+#include "surfaceFields.H"
 #include "dictionary.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
@@ -70,6 +83,14 @@ public:
 
         //- Read coupledD of the current time if present (null tmp otherwise)
         tmp<volScalarField> readD() const;
+
+        //- Write the explicit Rhie-Chow face term q_f of the last assembly
+        //  (the flux of the time directory was built with it, so the
+        //  restart consistency check needs it, spec 10)
+        void writeQ(const surfaceScalarField& q) const;
+
+        //- Read coupledQ of the current time if present (null tmp otherwise)
+        tmp<surfaceScalarField> readQ() const;
 };
 
 

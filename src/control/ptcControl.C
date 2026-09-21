@@ -211,6 +211,16 @@ void Foam::ptcControl::decrease(const scalar factor)
 }
 
 
+void Foam::ptcControl::boost(const scalar factor)
+{
+    if (holdRemaining_ > 0 || !(factor > 1))
+    {
+        return;
+    }
+    CFL_ = min(CFLmax_, factor*CFL_);
+}
+
+
 void Foam::ptcControl::writeState(dictionary& dict) const
 {
     dict.set("CFL", CFL_);

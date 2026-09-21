@@ -33,10 +33,22 @@ def _reference(re: int):
 
 
 def _profiles(case):
+    """(coordinate, u) on the vertical and (coordinate, v) on the horizontal
+    centreline, as written (unsorted, with duplicates in parallel)."""
     v = post.read_xy(post.sets_file(case, "centreLines", "vertical"))
     h = post.read_xy(post.sets_file(case, "centreLines", "horizontal"))
     # columns: coordinate, p, Ux, Uy, Uz
-    return v[:, 2], h[:, 3]
+    return (v[:, 0], v[:, 2]), (h[:, 0], h[:, 3])
+
+
+def _on(profile, reference):
+    """Profile and reference at their common sample points: sorted,
+    de-duplicated; points a parallel sets run dropped are left out (see
+    post.match_profiles). Returns (values, reference values, number of
+    reference points missing in the profile)."""
+    vals, ref, n_missing = post.match_profiles(profile, reference)
+    assert vals.size > 0, "no common sample points"
+    return vals, ref, n_missing
 
 
 @pytest.mark.case
@@ -61,9 +73,11 @@ def test_T0(foam, re, nprocs):
     it_conv = logs.coupled_iterations_to(rows, R_TARGET)
     n_clamped = max((r.get("nClamped", 0) for r in rows), default=-1)
 
-    u, v = _profiles(case)
-    du = post.l2rel(u, ref_u)
-    dv = post.l2rel(v, ref_v)
+    prof_u, prof_v = _profiles(case)
+    u, ru, fill_u = _on(prof_u, ref_u)
+    v, rv, fill_v = _on(prof_v, ref_v)
+    du = post.l2rel(u, ru)
+    dv = post.l2rel(v, rv)
 
     rec = {
         "Re": re, "nProcs": nprocs, "rc": rc,
@@ -71,6 +85,7 @@ def test_T0(foam, re, nprocs):
         "finalR": rows[-1]["R"] if rows else None,
         "iterations": len(rows),
         "l2rel_u": du, "l2rel_v": dv, "tolProfile": TOL_PROFILE,
+        "profilePointsMissing": {"u": fill_u, "v": fill_v},
         "fpeTrap": fpe_trap, "fpeEnabled": "trapFpe" in text,
         "nClampedMax": n_clamped,
         "rollbacks": summ.get("rollbacks"),
@@ -92,8 +107,11 @@ def test_T0(foam, re, nprocs):
         serial = results.read("tests", f"T0_Re{re}_np1")
         if serial is not None:
             su, sv = _profiles(cfcase.RUN_ROOT / f"T0_Re{re}_np1")
-            rec["crossRank_u"] = post.l2rel(u, su)
-            rec["crossRank_v"] = post.l2rel(v, sv)
+            pu, psu, fu = _on(prof_u, su)
+            pv, psv, fv = _on(prof_v, sv)
+            rec["crossRank_u"] = post.l2rel(pu, psu)
+            rec["crossRank_v"] = post.l2rel(pv, psv)
+            rec["crossRankPointsMissing"] = {"u": fu, "v": fv}
 
     passed = (
         rc == 0 and it_conv is not None and it_conv <= MAX_ITERS

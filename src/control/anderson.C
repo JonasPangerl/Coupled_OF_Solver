@@ -58,6 +58,22 @@ Foam::anderson::anderson(const fvMesh& mesh, const dictionary& coupledDict)
             << ", beta " << beta_ << ", maxAlpha " << maxAlpha_ << ")"
             << exit(FatalIOError);
     }
+
+    // B7 memory table: "Anderson m=4 (optional) +11.5 GB -> not enabled
+    // above 35 M cells"
+    if (enabled_)
+    {
+        const label nTotal = returnReduce(mesh.nCells(), sumOp<label>());
+        if (nTotal > coupledDefaults::andersonMaxCells)
+        {
+            WarningInFunction
+                << "anderson.enabled ignored: " << nTotal << " cells > "
+                << coupledDefaults::andersonMaxCells
+                << " (amendment B7 memory rule); Anderson acceleration is"
+                << " disabled" << endl;
+            enabled_ = false;
+        }
+    }
 }
 
 
@@ -224,8 +240,7 @@ bool Foam::anderson::orthogonalise(const label c)
 
     // Numerical rank: the orthogonal part must keep at least half of the
     // significant digits of the column (sqrt of the double epsilon)
-    const doubleScalar rankTol =
-        std::sqrt(std::numeric_limits<doubleScalar>::epsilon());
+    const doubleScalar rankTol = coupledDefaults::andersonRankTol;
 
     if (!(norm > rankTol*norm0) || !std::isfinite(norm))
     {

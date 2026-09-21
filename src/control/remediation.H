@@ -115,6 +115,10 @@ class remediation
             label nStatic_;
             label nDynamic_;
 
+            //- Incremented whenever the dynamic-set membership changes
+            //  (global; the Anderson history is flushed on a change)
+            label dynamicVersion_;
+
         // Zonal factors (8.3)
 
             bool zonalEnabled_;
@@ -211,11 +215,16 @@ public:
         const boolList& isStatic() const noexcept { return isStatic_; }
         label nStatic() const noexcept { return nStatic_; }
         label nDynamic() const noexcept { return nDynamic_; }
+        label dynamicVersion() const noexcept { return dynamicVersion_; }
         bool zonalEnabled() const noexcept { return zonalEnabled_; }
 
         //- Write remediationFlag and the two cellSets for the current time
         //  (and zonalCflFactor if zonal factors are enabled)
         void write() const;
+
+        //- The same into the given instance (e.g. <iter>_lastValid of the
+        //  9.3 abort path, so that no incomplete time directory is created)
+        void write(const word& instance) const;
 
         //- Restart state: dynamic set and ages (local labels)
         void writeState(dictionary& dict) const;

@@ -5,9 +5,11 @@
 
 #include "coupledState.H"
 #include "coupledDefaults.H"
-#include "IOdictionary.H"
+#include "localIOdictionary.H"
 #include "fileOperation.H"
 #include "OSspecific.H"
+#include "surfaceFields.H"
+#include <limits>
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
@@ -39,12 +41,17 @@ bool Foam::coupledState::read(dictionary& state) const
         IOobject::NO_REGISTER
     );
 
-    if (!io.typeHeaderOk<IOdictionary>(true))
+    // localIOdictionary, not IOdictionary: an IOdictionary is a global
+    // object, read by the master (from processor0) and broadcast, so in a
+    // parallel restart every rank got the state of rank 0 - its dynamic
+    // set labels in particular (T0 np4: the lid-corner cells of ranks 2
+    // and 3 lost their remediation, R jumped from 5.6e-5 to 1.3e-2)
+    if (!io.typeHeaderOk<localIOdictionary>(true))
     {
         return false;
     }
 
-    IOdictionary d(io);
+    localIOdictionary d(io);
     state = d;
     return true;
 }
@@ -59,7 +66,8 @@ void Foam::coupledState::write(const dictionary& state) const
 
     const bool uncollated = (fileHandler().type() == "uncollated");
 
-    IOdictionary d
+    // Per-processor state: localIOdictionary (see read())
+    localIOdictionary d
     (
         IOobject
         (
@@ -72,7 +80,24 @@ void Foam::coupledState::write(const dictionary& state) const
         ),
         state
     );
-    d.regIOobject::write();
+
+    // Always ASCII, with round-trip precision: in a binary-format
+    // dictionary an empty labelList "0 ( )" is not read back (the native
+    // binary List reader consumes no brackets for zero size: "Entry
+    // 'dynamicSet' has 2 excess tokens" on restart), and the scalars of
+    // the state (CFL, R1, Rprev, ...) must restart bit-exactly.
+    {
+        const unsigned oldPrecision = IOstream::defaultPrecision
+        (
+            std::numeric_limits<doubleScalar>::max_digits10
+        );
+        d.regIOobject::writeObject
+        (
+            IOstreamOption(IOstreamOption::ASCII),
+            true
+        );
+        IOstream::defaultPrecision(oldPrecision);
+    }
 
     if (uncollated)
     {
@@ -114,6 +139,51 @@ void Foam::coupledState::writeD(const volScalarField& D) const
         D
     );
     Dw.write();
+}
+
+
+void Foam::coupledState::writeQ(const surfaceScalarField& q) const
+{
+    if (!writeState_)
+    {
+        return;
+    }
+
+    surfaceScalarField qw
+    (
+        IOobject
+        (
+            "coupledQ",
+            mesh_.time().timeName(),
+            mesh_,
+            IOobject::NO_READ,
+            IOobject::NO_WRITE,
+            IOobject::NO_REGISTER
+        ),
+        q
+    );
+    qw.write();
+}
+
+
+Foam::tmp<Foam::surfaceScalarField> Foam::coupledState::readQ() const
+{
+    IOobject io
+    (
+        "coupledQ",
+        mesh_.time().timeName(),
+        mesh_,
+        IOobject::MUST_READ,
+        IOobject::NO_WRITE,
+        IOobject::NO_REGISTER
+    );
+
+    if (!io.typeHeaderOk<surfaceScalarField>(true))
+    {
+        return nullptr;
+    }
+
+    return tmp<surfaceScalarField>::New(io, mesh_);
 }
 
 

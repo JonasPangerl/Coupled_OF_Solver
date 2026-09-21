@@ -19,7 +19,10 @@ Description
 
     Cd and Cl are read from the results of the first forceCoeffs function
     object found in the function-object properties (native
-    setResult("Cd"/"Cl")).
+    setResult("Cd"/"Cl")). One sample per new result: a repeated (Cd, Cl)
+    pair (function object not executed this iteration, executeInterval > 1,
+    or evaluated on the restored state after a rollback/skipped step) is
+    not recorded again.
 
     Dictionary: coupled.convergence { mode forceCoeffsWindow forceCoeffsTol
     residualTol }.
@@ -73,8 +76,14 @@ public:
 
         scalar residualTol() const noexcept { return residualTol_; }
 
-        //- Append the current Cd, Cl (if a forceCoeffs object exists)
+        //- Append the current Cd, Cl (if a forceCoeffs object exists and
+        //  produced a new result since the last sample, see the .C file)
         void record(const Time& runTime);
+
+        //- Restart state (subdictionary convergenceMonitor): the last
+        //  forceCoeffsWindow samples of Cd and Cl
+        void writeState(dictionary& dict) const;
+        void readState(const dictionary& dict);
 
         //- True if force coefficients are being monitored
         bool haveForces() const noexcept { return !foName_.empty(); }

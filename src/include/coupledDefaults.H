@@ -72,13 +72,21 @@ constexpr doubleScalar tuneRhoHigh = 0.7;
 constexpr doubleScalar tuneRhoLow = 0.3;
 constexpr doubleScalar tuneRhoDemote = 0.2;
 constexpr doubleScalar tuneRhoFail = 0.9;
+constexpr label tuneConsecutiveWindows = 2;      // 6.3.5 hysteresis/failure
+constexpr label minPostSweeps = 1;               // 6.3.5 lower bound
 constexpr doubleScalar maxOperatorComplexity = 1.5;
 constexpr label maxCopAttempts = 3;              // 6.3, D-008
 constexpr bool cacheAgglomeration = true;
 
 // Guards (spec 6.3, 9.2; D-008)
 constexpr doubleScalar pivotGuard = 1e-30;
-constexpr doubleScalar clampValue = 1e30;
+constexpr doubleScalar clampValue = 1e30;        // must be <= FLT_MAX
+
+// Strong pressure reference (D-021): the prescribed boundary fluxes of a
+// closed domain must balance to this relative tolerance, |sum U_b.S_f| <=
+// tol * sum |U_b.S_f|, otherwise a one-time Warning is printed. Same
+// relative tolerance as the native adjustPhi continuity check.
+constexpr doubleScalar refFluxBalanceTol = 1e-8;
 
 // Outer iteration (spec 11)
 constexpr label outerMaxIter = 2000;
@@ -162,9 +170,18 @@ constexpr bool andersonEnabled = false;
 constexpr label andersonM = 4;
 constexpr doubleScalar andersonBeta = 1.0;
 constexpr doubleScalar andersonMaxAlpha = 10;
+constexpr label andersonMaxCells = 35000000;     // B7: not enabled above
+// Numerical-rank tolerance of the Anderson QR update: sqrt(eps_double) =
+// 2^-26, i.e. an orthogonalised column must keep at least half of the
+// significant digits of the original column
+constexpr doubleScalar andersonRankTol = 1.490116119384765625e-08;
 
 // Zonal factors (amendment B6)
 constexpr bool zonalEnabled = false;
+constexpr doubleScalar zonalCflFactor = 1;       // entry default: neutral
+constexpr doubleScalar zonalBeta = 1;            // entry default: neutral
+constexpr label zonalNLayers = 1;                // patchDistance entry default
+                                                 // (layer 1 = patch cells)
 
 // Misc (spec 9.1, 10)
 constexpr bool ftz = true;

@@ -25,6 +25,10 @@ gradSchemes
 
 divSchemes
 {
+    // potentialFoam -writep (Allrun, potentialInit yes): pressure
+    // from the potential-flow velocity
+    div(div(phi,U)) Gauss linear;
+
     default         none;
 
     div(phi,U)          bounded Gauss linearUpwind grad(U);

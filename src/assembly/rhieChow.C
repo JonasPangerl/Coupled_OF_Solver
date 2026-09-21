@@ -222,7 +222,9 @@ void Foam::rhieChow::updateExplicit
 
     gradp_.correctBoundaryConditions();
 
-    const tmp<surfaceScalarField> tcorr = noc.correction(p);
+    // Limited non-orthogonal correction from the same gradient, so the
+    // cellLimited gradient of static cells (D-018) enters it as well
+    const tmp<surfaceScalarField> tcorr = noc.correctionFromGrad(p, gradp_);
     const surfaceScalarField& corr = tcorr();
 
     const surfaceScalarField& w = mesh_.weights();
@@ -276,9 +278,23 @@ void Foam::rhieChow::updateExplicit
 
             case patchKind::physical:
             {
+                // The implicit p-p term of the face is g (1 - viC_p)
+                // (p_b = viC p_P + vbC); the explicit gradient term carries
+                // the same weight, so that on a mixed p condition (all mixed
+                // types report fixesValue()) a face in zero-gradient mode
+                // (valueFraction 0, viC 1) gets no Rhie-Chow flux at all.
+                // fixedValue: viC = 0, weight 1; zeroGradient: D_f = 0.
+                const scalarField viCp
+                (
+                    p.boundaryField()[patchi].valueInternalCoeffs
+                    (
+                        w.boundaryField()[patchi]
+                    )
+                );
                 forAll(qp, pf)
                 {
-                    qp[pf] = Dfp[pf]*(gp[fc[pf]] & Sp[pf]);
+                    qp[pf] =
+                        (1 - viCp[pf])*Dfp[pf]*(gp[fc[pf]] & Sp[pf]);
                 }
                 break;
             }
@@ -292,10 +308,14 @@ void Foam::rhieChow::updateFlux
     surfaceScalarField& phi,
     const volVectorField& U,
     const volScalarField& p,
-    const nonOrthCorrection& noc
+    const nonOrthCorrection& noc,
+    const bool recomputeExplicit
 )
 {
-    updateExplicit(p, noc);
+    if (recomputeExplicit)
+    {
+        updateExplicit(p, noc);
+    }
 
     const surfaceScalarField& w = mesh_.weights();
     const surfaceVectorField& Sf = mesh_.Sf();

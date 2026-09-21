@@ -22,15 +22,19 @@ Description
       assembleContinuity(rDeltaTV)
                            PTC diagonal V/dt, abar, D, D_f, row 3 (divergence,
                            Rhie-Chow Laplacian, explicit RC source), pressure
-                           reference, narrowing to blockScalar, continuity
-                           row scaling (5.3f), residual and norms
+                           reference, continuity row scaling (5.3f, applied
+                           in double before the narrowing to blockScalar),
+                           residual and norms
 
     Diagonal blocks are accumulated in double; every off-diagonal block is
     complete after its own face and narrowed once. The residual b - A x is
     accumulated in double from the same double coefficients (D-012).
 
     Norms (after row scaling), see DECISIONS.md D-016:
-        normFactor = sum_i |(A x)_i| + |b_i| + SMALL  (all rows)
+        normFactor = sum_i |(A x)_i| + |b_i| + SMALL  (all rows except the
+                                                       replaced row of the
+                                                       pressure reference,
+                                                       D-021)
         residualL2 = ||b - A x||_2 / normFactor       (the R of 7.1 before
                                                        normalisation by R_1)
         rU, rp     = sum |r_i| / sum(|Ax_i|+|b_i|)   over rows 0-2 / row 3
@@ -90,6 +94,9 @@ class coupledAssembler
         label pRefCell_;
         scalar pRefValue_;
 
+        //- The one-time boundary flux balance check was made (A10)
+        bool refFluxChecked_;
+
         //- The block matrix (float) and the increment right-hand side
         blockLduMatrix4 A_;
         blockScalarList rhs_;
@@ -133,8 +140,14 @@ class coupledAssembler
         }
 
         //- True if the patch carries no flux by construction
-        //  (symmetry, symmetryPlane, wedge)
+        //  (symmetry, symmetryPlane). Wedge is not listed: its native
+        //  valueInternal/BoundaryCoeffs linearisation is exact and is what
+        //  the flux update (rhieChow::updateFlux) evaluates too.
         static bool zeroFluxPatch(const fvPatch& patch);
+
+        //- One-time Warning if the strong pressure reference is active and
+        //  the prescribed boundary fluxes do not sum to ~0 (collective)
+        void checkReferenceFluxBalance(const volVectorField& U);
 
 
 public:

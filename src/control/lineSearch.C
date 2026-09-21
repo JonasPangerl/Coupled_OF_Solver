@@ -31,6 +31,14 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
     maxCflCuts_ =
         d.getOrDefault<label>("maxCflCuts", coupledDefaults::maxCflCuts);
     beta_ = d.getOrDefault<scalar>("beta", coupledDefaults::lineSearchBeta);
+
+    // Negated comparison also rejects non-finite input
+    if (!(beta_ >= 1) || !std::isfinite(beta_))
+    {
+        FatalIOErrorInFunction(d)
+            << "lineSearch.beta (CFL boost on a full step) must be a finite"
+            << " value >= 1, got " << beta_ << exit(FatalIOError);
+    }
 }
 
 

@@ -22,7 +22,9 @@ Foam::boundaryCoupling::patchKind Foam::boundaryCoupling::kind
     if (isA<processorCyclicFvPatch>(patch))
     {
         // Transformation across the interface not handled by the block
-        // exchange: lagged like cyclic
+        // exchange: lagged like cyclic. blockLduInterface::isBlockCoupled
+        // excludes these interfaces accordingly (no block interface, no
+        // exchange in Amul).
         return patchKind::explicitCoupled;
     }
     if (isA<processorFvPatch>(patch))

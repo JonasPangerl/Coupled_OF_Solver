@@ -12,9 +12,21 @@ Description
     fixed (linear) preconditioner; use blockFGMRES with the K-cycle.
     Happy-breakdown guard as blockFGMRES.
 
+    Mixed-precision iterative refinement exactly as blockFGMRES (GMRES-IR):
+    the Krylov basis, the preconditioner and the matrix are blockScalar, the
+    iterate is kept in double and every restart cycle starts from the true
+    residual b - A x of that double iterate, evaluated in double
+    (blockLduMatrix4::residualDouble). Convergence is decided by that true
+    residual only; finalResidual is the true residual of the double iterate
+    and the returned x its rounding to blockScalar. With a blockScalar
+    iterate the attainable residual was bounded by the rounding of x
+    (Test-blockFGMRES, fixed preconditioner: stall at 1.6e-8).
+
     Dictionary: restart (default 10), legacy keyword gmresRestart.
 
-    Memory: m + 3 block vectors of 4*nCells blockScalar.
+    Memory: m + 3 block vectors of 4*nCells blockScalar, plus the double
+    iterate and, inside the matrix, the double residual accumulator and two
+    blockScalar split vectors.
 
 SourceFiles
     blockGMRES.C

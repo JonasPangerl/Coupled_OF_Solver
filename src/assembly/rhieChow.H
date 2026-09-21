@@ -21,8 +21,13 @@ Description
         q_f   = D_f ( gradp_f.S_f - |S_f| corr_f )   (explicit)
     with gradp_f the linear interpolate of the cell gradients ("average
     gradient") and corr_f the limited non-orthogonal correction of snGrad(p).
-    On physical patches U_f, p_N are the boundary values and gradp_f the
-    owner-cell gradient; corr_f = 0 there (native boundary snGrad).
+    On physical patches U_f, p_N are the boundary values and the explicit
+    term is (1 - viC_p) D_f gradp_P.S_f with viC_p the native
+    valueInternalCoeffs of p (1 for fixedValue, valueFraction for mixed
+    types, 0 for zeroGradient where D_f = 0 anyway), i.e. the same weight as
+    the implicit term g (1 - viC_p); corr_f = 0 there (native boundary
+    snGrad). In static cells gradp is cellLimited (D-018), for the average
+    gradient and for the non-orthogonal correction corr_f alike.
 
 SourceFiles
     rhieChow.C
@@ -114,14 +119,26 @@ public:
         //- g on a patch face
         scalar g(const label patchi, const label pf) const;
 
-        //- Flux update 5.3(e) from U, p; recomputes gradp and q
+        //- Flux update 5.3(e) from U, p.
+        //  recomputeExplicit false (outer loop): q_f of the last assembly
+        //  is reused, i.e. exactly the explicit term of the continuity row
+        //  that was solved, so sum_f phi_f per cell equals that row's
+        //  residual at the new (U, p) - conservative to the linear-solver
+        //  tolerance for omega = 1 (native: phiHbyA - pEqn.flux()).
+        //  recomputeExplicit true: gradp and q are evaluated from p first
+        //  (restart consistency check without a stored q).
         void updateFlux
         (
             surfaceScalarField& phi,
             const volVectorField& U,
             const volScalarField& p,
-            const nonOrthCorrection& noc
+            const nonOrthCorrection& noc,
+            const bool recomputeExplicit
         );
+
+        //- Set q_f directly (restart consistency check with the q_f stored
+        //  at the write time)
+        void setQ(const surfaceScalarField& q) { q_ = q; }
 
         //- Write D_f into a field for output/restart
         void writeFields() const;
