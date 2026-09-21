@@ -1,0 +1,609 @@
+/*---------------------------------------------------------------------------*\
+  coupledFoam - block-coupled p-U solver for OpenFOAM
+  License: GPL-3.0-or-later
+\*---------------------------------------------------------------------------*/
+
+#include "remediation.H"
+#include "coupledDefaults.H"
+#include "polyMeshTools.H"
+#include "primitiveMeshTools.H"
+#include "unitConversion.H"
+#include "calculatedFvPatchFields.H"
+#include "cellSet.H"
+#include "PstreamReduceOps.H"
+#include <cmath>
+
+// * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
+
+Foam::remediation::remediation
+(
+    const fvMesh& mesh,
+    const dictionary& coupledDict
+)
+:
+    mesh_(mesh),
+    staticEnabled_(coupledDefaults::staticEnabled),
+    nonOrthThreshold_(coupledDefaults::nonOrthThreshold),
+    skewThreshold_(coupledDefaults::skewThreshold),
+    volRatioThreshold_(coupledDefaults::volRatioThreshold),
+    aspectThreshold_(coupledDefaults::aspectThreshold),
+    staticBeta_(coupledDefaults::staticBeta),
+    staticCflFactor_(coupledDefaults::staticCflFactor),
+    dynamicEnabled_(coupledDefaults::dynamicEnabled),
+    cU_(coupledDefaults::cU),
+    cp_(coupledDefaults::cp),
+    cSpike_(coupledDefaults::cSpike),
+    nLayers_(coupledDefaults::nLayers),
+    nQuietIters_(coupledDefaults::nQuietIters),
+    dynamicCflFactor_(coupledDefaults::dynamicCflFactor),
+    clipToNeighbourMean_(coupledDefaults::clipToNeighbourMean),
+    warnFraction_(coupledDefaults::warnFraction),
+    warnInterval_(coupledDefaults::warnInterval),
+    isStatic_(mesh.nCells(), false),
+    age_(mesh.nCells(), -1),
+    pending_(mesh.nCells(), false),
+    nStatic_(0),
+    nDynamic_(0)
+{
+    const dictionary& r = coupledDict.subOrEmptyDict("remediation");
+
+    const dictionary& s = r.subOrEmptyDict("static");
+    staticEnabled_ = s.getOrDefault<bool>("enabled", staticEnabled_);
+    nonOrthThreshold_ =
+        s.getOrDefault<scalar>("nonOrthThreshold", nonOrthThreshold_);
+    skewThreshold_ = s.getOrDefault<scalar>("skewThreshold", skewThreshold_);
+    volRatioThreshold_ =
+        s.getOrDefault<scalar>("volRatioThreshold", volRatioThreshold_);
+    aspectThreshold_ =
+        s.getOrDefault<scalar>("aspectThreshold", aspectThreshold_);
+    staticBeta_ = s.getOrDefault<scalar>("beta", staticBeta_);
+    staticCflFactor_ = s.getOrDefault<scalar>("cflFactor", staticCflFactor_);
+
+    const dictionary& d = r.subOrEmptyDict("dynamic");
+    dynamicEnabled_ = d.getOrDefault<bool>("enabled", dynamicEnabled_);
+    cU_ = d.getOrDefault<scalar>("cU", cU_);
+    cp_ = d.getOrDefault<scalar>("cp", cp_);
+    cSpike_ = d.getOrDefault<scalar>("cSpike", cSpike_);
+    nLayers_ = d.getOrDefault<label>("nLayers", nLayers_);
+    nQuietIters_ = d.getOrDefault<label>("nQuietIters", nQuietIters_);
+    dynamicCflFactor_ = d.getOrDefault<scalar>("cflFactor", dynamicCflFactor_);
+    clipToNeighbourMean_ =
+        d.getOrDefault<bool>("clipToNeighbourMean", clipToNeighbourMean_);
+
+    warnFraction_ = r.getOrDefault<scalar>("warnFraction", warnFraction_);
+    warnInterval_ = r.getOrDefault<label>("warnInterval", warnInterval_);
+}
+
+
+// * * * * * * * * * * * * * Private Member Functions  * * * * * * * * * * * //
+
+Foam::tmp<Foam::vectorField> Foam::remediation::neighbourMean
+(
+    const volVectorField& U
+) const
+{
+    const labelUList& own = mesh_.owner();
+    const labelUList& nei = mesh_.neighbour();
+    const vectorField& Ui = U.primitiveField();
+
+    auto tsum = tmp<vectorField>::New(mesh_.nCells(), Zero);
+    vectorField& sum = tsum.ref();
+    labelField n(mesh_.nCells(), Zero);
+
+    forAll(own, facei)
+    {
+        sum[own[facei]] += Ui[nei[facei]];
+        sum[nei[facei]] += Ui[own[facei]];
+        ++n[own[facei]];
+        ++n[nei[facei]];
+    }
+
+    forAll(U.boundaryField(), patchi)
+    {
+        const fvPatchVectorField& Up = U.boundaryField()[patchi];
+        if (Up.coupled())
+        {
+            const vectorField Un(Up.patchNeighbourField());
+            const labelUList& fc = Up.patch().faceCells();
+            forAll(fc, pf)
+            {
+                sum[fc[pf]] += Un[pf];
+                ++n[fc[pf]];
+            }
+        }
+    }
+
+    forAll(sum, celli)
+    {
+        // GUARD: a cell without face neighbours keeps its own value
+        sum[celli] = (n[celli] > 0 ? sum[celli]/scalar(n[celli]) : Ui[celli]);
+    }
+
+    return tsum;
+}
+
+
+void Foam::remediation::growLayer(boolList& mark) const
+{
+    const labelUList& own = mesh_.owner();
+    const labelUList& nei = mesh_.neighbour();
+
+    boolList grown(mark);
+
+    forAll(own, facei)
+    {
+        if (mark[own[facei]]) grown[nei[facei]] = true;
+        if (mark[nei[facei]]) grown[own[facei]] = true;
+    }
+
+    // Across processor (and other coupled) faces
+    volScalarField m
+    (
+        IOobject
+        (
+            "remediation::mark",
+            mesh_.time().timeName(),
+            mesh_,
+            IOobject::NO_READ,
+            IOobject::NO_WRITE,
+            IOobject::NO_REGISTER
+        ),
+        mesh_,
+        dimensionedScalar(dimless, Zero),
+        calculatedFvPatchScalarField::typeName
+    );
+    forAll(mark, celli)
+    {
+        m[celli] = mark[celli] ? 1 : 0;
+    }
+    m.correctBoundaryConditions();
+
+    forAll(m.boundaryField(), patchi)
+    {
+        const fvPatchScalarField& mp = m.boundaryField()[patchi];
+        if (mp.coupled())
+        {
+            const scalarField mn(mp.patchNeighbourField());
+            const labelUList& fc = mp.patch().faceCells();
+            forAll(fc, pf)
+            {
+                if (mn[pf] > 0) grown[fc[pf]] = true;
+            }
+        }
+    }
+
+    mark.transfer(grown);
+}
+
+
+// * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
+
+void Foam::remediation::buildStatic()
+{
+    isStatic_ = false;
+    nStatic_ = 0;
+
+    if (!staticEnabled_)
+    {
+        Info<< "remediation: static set disabled" << endl;
+        return;
+    }
+
+    const tmp<scalarField> tortho = polyMeshTools::faceOrthogonality
+    (
+        mesh_,
+        mesh_.faceAreas(),
+        mesh_.cellCentres()
+    );
+    const tmp<scalarField> tskew = polyMeshTools::faceSkewness
+    (
+        mesh_,
+        mesh_.points(),
+        mesh_.faceCentres(),
+        mesh_.faceAreas(),
+        mesh_.cellCentres()
+    );
+    const tmp<scalarField> tvolR = polyMeshTools::volRatio
+    (
+        mesh_,
+        mesh_.cellVolumes()
+    );
+
+    scalarField openness(mesh_.nCells(), Zero);
+    scalarField aratio(mesh_.nCells(), Zero);
+    primitiveMeshTools::cellClosedness
+    (
+        mesh_,
+        mesh_.geometricD(),
+        mesh_.faceAreas(),
+        mesh_.cellVolumes(),
+        openness,
+        aratio
+    );
+
+    const scalarField& ortho = tortho();
+    const scalarField& skew = tskew();
+    const scalarField& volR = tvolR();
+
+    const scalar cosThreshold = std::cos(degToRad(nonOrthThreshold_));
+    // volRatio is min/max <= 1; GUARD: threshold > 0
+    const scalar volRatioMin = 1.0/max(volRatioThreshold_, VSMALL);
+
+    const labelUList& own = mesh_.faceOwner();
+    const labelUList& nei = mesh_.faceNeighbour();
+
+    label nOrtho = 0, nSkew = 0, nVol = 0, nAspect = 0;
+
+    forAll(ortho, facei)
+    {
+        const bool bOrtho = ortho[facei] < cosThreshold;
+        const bool bSkew = skew[facei] > skewThreshold_;
+        const bool bVol = volR[facei] < volRatioMin;
+
+        if (bOrtho || bSkew || bVol)
+        {
+            isStatic_[own[facei]] = true;
+            if (facei < mesh_.nInternalFaces())
+            {
+                isStatic_[nei[facei]] = true;
+            }
+        }
+        nOrtho += bOrtho;
+        nSkew += bSkew;
+        nVol += bVol;
+    }
+
+    forAll(aratio, celli)
+    {
+        if (aratio[celli] > aspectThreshold_)
+        {
+            isStatic_[celli] = true;
+            ++nAspect;
+        }
+    }
+
+    forAll(isStatic_, celli)
+    {
+        nStatic_ += isStatic_[celli];
+    }
+
+    reduce(nOrtho, sumOp<label>());
+    reduce(nSkew, sumOp<label>());
+    reduce(nVol, sumOp<label>());
+    reduce(nAspect, sumOp<label>());
+    reduce(nStatic_, sumOp<label>());
+
+    Info<< "remediation: static set " << nStatic_ << " cells ("
+        << 100.0*scalar(nStatic_)
+          /max(scalar(returnReduce(mesh_.nCells(), sumOp<label>())), scalar(1))
+        << " %); faces nonOrth>" << nonOrthThreshold_ << "deg: " << nOrtho
+        << ", skew>" << skewThreshold_ << ": " << nSkew
+        << ", volRatio>" << volRatioThreshold_ << ": " << nVol
+        << "; cells aspect>" << aspectThreshold_ << ": " << nAspect << endl;
+}
+
+
+void Foam::remediation::markDynamic(const labelUList& cells)
+{
+    for (const label celli : cells)
+    {
+        pending_[celli] = true;
+    }
+}
+
+
+void Foam::remediation::updateDynamic
+(
+    const volVectorField& U,
+    const volScalarField& p,
+    const volScalarField* kPtr,
+    const volScalarField* omegaPtr,
+    const scalar Uref,
+    const scalar pref,
+    const label iter
+)
+{
+    if (!dynamicEnabled_)
+    {
+        pending_ = false;
+        age_ = -1;
+        nDynamic_ = 0;
+        return;
+    }
+
+    boolList mark(pending_);
+
+    const vectorField& Ui = U.primitiveField();
+    const scalarField& pi = p.primitiveField();
+    const tmp<vectorField> tUbar = neighbourMean(U);
+    const vectorField& Ubar = tUbar();
+
+    forAll(mark, celli)
+    {
+        bool m = mark[celli];
+
+        const vector& Uc = Ui[celli];
+        const bool finiteU =
+            std::isfinite(Uc.x()) && std::isfinite(Uc.y())
+         && std::isfinite(Uc.z());
+        const bool finiteP = std::isfinite(pi[celli]);
+        bool finiteT = true;
+        if (kPtr) finiteT = finiteT && std::isfinite((*kPtr)[celli]);
+        if (omegaPtr) finiteT = finiteT && std::isfinite((*omegaPtr)[celli]);
+
+        if (!finiteU || !finiteP || !finiteT)
+        {
+            m = true;
+        }
+        else
+        {
+            m = m
+             || mag(Uc) > cU_*Uref
+             || pi[celli] < -cp_*pref
+             || pi[celli] > cp_*pref
+             || mag(Uc - Ubar[celli]) > cSpike_*Uref;
+        }
+        mark[celli] = m;
+    }
+
+    for (label layer = 0; layer < nLayers_; ++layer)
+    {
+        growLayer(mark);
+    }
+
+    // Hysteresis
+    nDynamic_ = 0;
+    forAll(age_, celli)
+    {
+        if (mark[celli])
+        {
+            age_[celli] = 0;
+        }
+        else if (age_[celli] >= 0)
+        {
+            ++age_[celli];
+            if (age_[celli] >= nQuietIters_)
+            {
+                age_[celli] = -1;
+            }
+        }
+        nDynamic_ += (age_[celli] >= 0);
+    }
+
+    pending_ = false;
+
+    label nUnion = 0;
+    forAll(age_, celli)
+    {
+        nUnion += (age_[celli] >= 0 || isStatic_[celli]);
+    }
+
+    reduce(nDynamic_, sumOp<label>());
+    reduce(nUnion, sumOp<label>());
+
+    const label nTotal = returnReduce(mesh_.nCells(), sumOp<label>());
+    if
+    (
+        scalar(nUnion) > warnFraction_*scalar(nTotal)
+     && warnInterval_ > 0
+     && iter % warnInterval_ == 0
+    )
+    {
+        WarningInFunction
+            << "Remediation sets cover " << nUnion << " of " << nTotal
+            << " cells (> " << 100*warnFraction_ << " %) at iteration "
+            << iter << endl;
+    }
+}
+
+
+Foam::tmp<Foam::scalarField> Foam::remediation::beta
+(
+    const scalar betaGlobal
+) const
+{
+    auto tb = tmp<scalarField>::New(mesh_.nCells(), betaGlobal);
+    scalarField& b = tb.ref();
+
+    forAll(b, celli)
+    {
+        if (isStatic_[celli])
+        {
+            b[celli] = min(b[celli], staticBeta_);
+        }
+        if (age_[celli] >= 0)
+        {
+            b[celli] = 0;
+        }
+    }
+    return tb;
+}
+
+
+Foam::tmp<Foam::scalarField> Foam::remediation::cflFactor() const
+{
+    auto tf = tmp<scalarField>::New(mesh_.nCells(), scalar(1));
+    scalarField& f = tf.ref();
+
+    forAll(f, celli)
+    {
+        if (isStatic_[celli])
+        {
+            f[celli] = min(f[celli], staticCflFactor_);
+        }
+        if (age_[celli] >= 0)
+        {
+            f[celli] = min(f[celli], dynamicCflFactor_);
+        }
+    }
+    return tf;
+}
+
+
+Foam::label Foam::remediation::clipIncrement
+(
+    blockScalarUList& dx,
+    const volVectorField& U,
+    const scalar omega,
+    const scalar Uref
+) const
+{
+    if (!dynamicEnabled_ || !clipToNeighbourMean_)
+    {
+        return 0;
+    }
+
+    const tmp<vectorField> tUbar = neighbourMean(U);
+    const vectorField& Ubar = tUbar();
+    const vectorField& Ui = U.primitiveField();
+    const scalar lim = cSpike_*Uref;
+    // GUARD: omega > 0 (>= omegaMin)
+    const scalar rOmega = 1.0/max(omega, VSMALL);
+
+    label nClipped = 0;
+
+    forAll(age_, celli)
+    {
+        if (age_[celli] < 0)
+        {
+            continue;
+        }
+
+        blockScalar* d = dx.data() + celli*blockDim;
+        const vector dU(d[0], d[1], d[2]);
+        const vector Unew = Ui[celli] + omega*dU;
+        const vector e = Unew - Ubar[celli];
+        const scalar me = mag(e);
+
+        if (me > lim)
+        {
+            // GUARD: me > lim >= 0
+            const vector Uclip = Ubar[celli] + e*(lim/me);
+            const vector dUclip = (Uclip - Ui[celli])*rOmega;
+            for (label c = 0; c < blockP; ++c)
+            {
+                d[c] = narrow(dUclip[c]);
+            }
+            ++nClipped;
+        }
+    }
+
+    return nClipped;
+}
+
+
+void Foam::remediation::write() const
+{
+    volScalarField flag
+    (
+        IOobject
+        (
+            "remediationFlag",
+            mesh_.time().timeName(),
+            mesh_,
+            IOobject::NO_READ,
+            IOobject::NO_WRITE,
+            IOobject::NO_REGISTER
+        ),
+        mesh_,
+        dimensionedScalar(dimless, Zero),
+        calculatedFvPatchScalarField::typeName
+    );
+
+    labelHashSet stat, dyn;
+    forAll(flag, celli)
+    {
+        const bool s = isStatic_[celli];
+        const bool d = age_[celli] >= 0;
+        flag[celli] = (s ? 1 : 0) + (d ? 2 : 0);
+        if (s) stat.insert(celli);
+        if (d) dyn.insert(celli);
+    }
+    flag.correctBoundaryConditions();
+    flag.write();
+
+    cellSet cs(mesh_, "remediationStatic", stat);
+    cs.instance() = mesh_.time().timeName();
+    cs.write();
+
+    cellSet cd(mesh_, "remediationDynamic", dyn);
+    cd.instance() = mesh_.time().timeName();
+    cd.write();
+}
+
+
+void Foam::remediation::writeState(dictionary& dict) const
+{
+    DynamicList<label> cells, ages;
+    forAll(age_, celli)
+    {
+        if (age_[celli] >= 0)
+        {
+            cells.append(celli);
+            ages.append(age_[celli]);
+        }
+    }
+    dict.set("dynamicSet", labelList(cells));
+    dict.set("dynamicSetAge", labelList(ages));
+}
+
+
+void Foam::remediation::readState(const dictionary& dict)
+{
+    age_ = -1;
+    const labelList cells(dict.getOrDefault<labelList>("dynamicSet", labelList()));
+    const labelList ages(dict.getOrDefault<labelList>("dynamicSetAge", labelList()));
+
+    if (cells.size() != ages.size())
+    {
+        FatalIOErrorInFunction(dict)
+            << "dynamicSet and dynamicSetAge differ in size"
+            << exit(FatalIOError);
+    }
+
+    forAll(cells, i)
+    {
+        if (cells[i] < 0 || cells[i] >= mesh_.nCells())
+        {
+            FatalIOErrorInFunction(dict)
+                << "dynamicSet cell " << cells[i] << " out of range (restart"
+                << " with a different decomposition?)" << exit(FatalIOError);
+        }
+        age_[cells[i]] = ages[i];
+    }
+
+    nDynamic_ = returnReduce(cells.size(), sumOp<label>());
+}
+
+
+void Foam::remediation::writeSettings(dictionary& dict) const
+{
+    dictionary s;
+    s.add("enabled", staticEnabled_);
+    s.add("nonOrthThreshold", nonOrthThreshold_);
+    s.add("skewThreshold", skewThreshold_);
+    s.add("volRatioThreshold", volRatioThreshold_);
+    s.add("aspectThreshold", aspectThreshold_);
+    s.add("beta", staticBeta_);
+    s.add("cflFactor", staticCflFactor_);
+
+    dictionary d;
+    d.add("enabled", dynamicEnabled_);
+    d.add("cU", cU_);
+    d.add("cp", cp_);
+    d.add("cSpike", cSpike_);
+    d.add("nLayers", nLayers_);
+    d.add("nQuietIters", nQuietIters_);
+    d.add("cflFactor", dynamicCflFactor_);
+    d.add("clipToNeighbourMean", clipToNeighbourMean_);
+
+    dictionary r;
+    r.add("static", s);
+    r.add("dynamic", d);
+    r.add("warnFraction", warnFraction_);
+    r.add("warnInterval", warnInterval_);
+    dict.add("remediation", r);
+}
+
+
+// ************************************************************************* //

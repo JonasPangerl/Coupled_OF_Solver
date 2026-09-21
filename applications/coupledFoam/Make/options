@@ -1,0 +1,27 @@
+COUPLEDFOAM_MARCH ?= -march=native
+WM_OSTYPE ?= POSIX
+
+EXE_INC = \
+    -Wfloat-conversion -Werror -fno-math-errno $(COUPLEDFOAM_MARCH) \
+    -I../../src/lnInclude \
+    -isystem $(LIB_SRC)/OpenFOAM/lnInclude \
+    -isystem $(LIB_SRC)/OSspecific/$(WM_OSTYPE)/lnInclude \
+    -isystem $(LIB_SRC)/finiteVolume/lnInclude \
+    -isystem $(LIB_SRC)/finiteVolume/cfdTools \
+    -isystem $(LIB_SRC)/meshTools/lnInclude \
+    -isystem $(LIB_SRC)/sampling/lnInclude \
+    -isystem $(LIB_SRC)/TurbulenceModels/turbulenceModels/lnInclude \
+    -isystem $(LIB_SRC)/TurbulenceModels/incompressible/lnInclude \
+    -isystem $(LIB_SRC)/transportModels \
+    -isystem $(LIB_SRC)/transportModels/incompressible/lnInclude \
+    -isystem $(LIB_SRC)/transportModels/incompressible/singlePhaseTransportModel
+
+EXE_LIBS = \
+    -L$(FOAM_USER_LIBBIN) -lcoupledFoam \
+    -lfiniteVolume \
+    -lfvOptions \
+    -lmeshTools \
+    -lsampling \
+    -lturbulenceModels \
+    -lincompressibleTurbulenceModels \
+    -lincompressibleTransportModels

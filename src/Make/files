@@ -13,6 +13,21 @@ blockSolvers/blockSmoothers/blockSmoother.C
 blockSolvers/blockSmoothers/blockGaussSeidel.C
 blockSolvers/blockSmoothers/blockILU0.C
 
+assembly/boundaryCoupling.C
+assembly/MRFCoupling.C
+assembly/convection.C
+assembly/nonOrthCorrection.C
+assembly/rhieChow.C
+assembly/coupledAssembler.C
+
+control/ptcControl.C
+control/lineSearch.C
+control/remediation.C
+control/sentinel.C
+control/convergenceMonitor.C
+
 io/jsonWriter.C
+io/runInfo.C
+io/coupledState.C
 
 LIB = $(FOAM_USER_LIBBIN)/libcoupledFoam
