@@ -388,3 +388,50 @@ step repeated (counting toward maxCflCuts); maxLinFails consecutive
 failures abort through the 9.3 diagnostic path (last-valid fields written,
 FatalError). D-020 item 1 (best-iterate return) stays. The "skip the step"
 fallback of D-020 remains only for the case maxCflCuts < maxLinFails.
+
+## D-030 - Processor agglomeration (6.3.4): keywords, mechanism, level 0
+
+`blockGAMG.processorAgglomerator`: `masterCoarsest` (default) applies rule
+6.3.4 - T(N) = nRanks, max(1, nRanks/procAgglomDivisor) for
+N < procAgglomCellsPerRank*nRanks, 1 for N < procAgglomCellsPerRank -
+through a native GAMGProcAgglomeration subclass (runtime name
+`blockGAMGRule`, header blockGAMGProcAgglomeration.H); `none` disables
+processor agglomeration; `nativeMasterCoarsest` selects the native class;
+any other word is passed verbatim to the native selector (`manual`,
+`procFaces`, `eager`). Parameters `procAgglomCellsPerRank` (5000) and
+`procAgglomDivisor` (4) from coupledDefaults. Groups are contiguous,
+balanced rank blocks (master = lowest rank), like the native
+masterCoarsest. The coarsest level is gathered by blockGAMG itself
+(lduPrimitiveMesh::gather; the native mechanism cannot gather the coarsest
+level alone). Level 0 is never agglomerated - a native restriction - so
+ranks-per-level reports nRanks at level 0 even where the formula asks for
+less; the unit-test rule check excepts level 0.
+
+Verification (run/unit_cavity, 16 k cells): serial bit-identical to the
+pre-change build; 4 ranks on/off relDiff <= 2.0e-6 across V/F/W cycles,
+two-stage (4->2->1) and multi-stage (4 4 2 1 1) gathers and the dense-LU
+coarsest solve; `nativeMasterCoarsest` pass-through works. Known issue
+found during this verification: the K cycle stalls just above tolerance
+on unit_cavity (1.8e-8 vs 1e-9) in the pre-change baseline too -
+pre-existing, tracked in HANDOFF 4.1, unrelated to 6.3.4.
+
+## D-031 - User directives of 2026-09-21 (resources, meshes, deliverables)
+
+- Heavy tests use at most 10 cores: CF_HEAVY_NP default is now 10 (was
+  16), with MPI core binding on a free machine. The earlier arrangement
+  next to the F1 job (CF_MPI_CPUSET=10-15, CF_HEAVY_NP=6) is obsolete
+  once that job is stopped; CF_MPI_CPUSET remains available.
+- T-scaling therefore runs ranks 1, 2, 4, 8, 10 by default instead of the
+  spec's 1, 2, 4, 8, 16 (recorded as specRanks=false in the result; the
+  0.8 relative-efficiency pass threshold is unchanged).
+- T4 mesh variant b is retargeted from 3-5 M to 1-2 M cells (surface
+  level (6 6), features 7, refinementBox 5): the user wants a presentable
+  motorBike case, reusable as demonstration material for their
+  post-processing tool. Not a threshold change; all pass criteria stay.
+- Every snappyHexMesh mesh is built once (run/T4a_mesh, run/T4b_mesh,
+  run/T5_mesh) and reused by all tests and benchmarks - this was already
+  the design (test_T4_motorBike.mesh_dir) and is now an explicit user
+  requirement.
+- The paper is delivered as a compiled PDF (LaTeX installed 2026-09-21:
+  pdflatex, latexmk, bison present), with intermediate PDF builds during
+  the work so the user can inspect drafts.
