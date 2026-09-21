@@ -9,6 +9,7 @@
 #include <fstream>
 #include <string>
 #include <cstdlib>
+#include <sys/resource.h>
 
 #if defined(__SSE__) || defined(__x86_64__)
     #include <xmmintrin.h>
@@ -30,6 +31,19 @@ Foam::label Foam::runInfo::peakRSSkB()
         }
     }
     return 0;
+}
+
+
+double Foam::runInfo::cpuSeconds()
+{
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) != 0)
+    {
+        return 0;
+    }
+    return
+        double(ru.ru_utime.tv_sec) + 1e-6*double(ru.ru_utime.tv_usec)
+      + double(ru.ru_stime.tv_sec) + 1e-6*double(ru.ru_stime.tv_usec);
 }
 
 

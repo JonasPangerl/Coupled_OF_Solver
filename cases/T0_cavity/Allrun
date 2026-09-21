@@ -41,7 +41,15 @@ if [ "$np" -gt 1 ]
 then
     foamDictionary -entry numberOfSubdomains -set "$np" system/decomposeParDict > /dev/null
     runApplication decomposePar -force
-    mpirun --bind-to core --map-by core -np "$np" "$solver" -parallel > "log.$solver" 2>&1
+    # Core binding (spec 3); CF_MPI_BIND=none on a shared machine
+    bind="${CF_MPI_BIND:-core}"
+    if [ "$bind" = core ]
+    then
+        mpiOpts="--bind-to core --map-by core"
+    else
+        mpiOpts="--bind-to $bind"
+    fi
+    mpirun $mpiOpts -np "$np" "$solver" -parallel > "log.$solver" 2>&1
 else
     runApplication "$solver"
 fi

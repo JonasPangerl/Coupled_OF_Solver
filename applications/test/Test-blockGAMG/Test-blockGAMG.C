@@ -44,6 +44,7 @@ static constexpr label maxAllowedIters = 20;
 
 struct solveResult
 {
+    blockScalarList x;
     blockSolverPerformance perf;
     FixedList<doubleScalar, 4> intX;
     FixedList<doubleScalar, 4> intX2;
@@ -82,6 +83,8 @@ static solveResult runSolve
         gamgStats = gp->gamg().statsDict();
     }
 
+    res.x = x;
+
     const scalarField& V = mesh.V();
     res.intX = Zero;
     res.intX2 = Zero;
@@ -112,6 +115,19 @@ int main(int argc, char *argv[])
 {
     argList::addOption("json", "file", "Write results as JSON");
     argList::addOption("solver", "name", "blockBiCGStab (default) | blockGMRES");
+    argList::addOption
+    (
+        "tolerance",
+        "value",
+        "Solver tolerance (default 1e-8, spec 6.4; tighter values allowed)"
+    );
+    argList::addOption
+    (
+        "dumpSolution",
+        "file",
+        "Write the blockGAMG solution gathered on the master as CSV"
+        " (x y z x0 x1 x2 x3), for the 1-vs-N-rank comparison"
+    );
 
     #include "setRootCase.H"
     #include "createTime.H"
@@ -133,7 +149,15 @@ int main(int argc, char *argv[])
     }
     solverDict.set("solver", args.getOrDefault<word>("solver", "blockBiCGStab"));
     solverDict.set("preconditioner", word("blockGAMG"));
-    solverDict.set("tolerance", testTolerance);
+    const doubleScalar tol =
+        args.getOrDefault<doubleScalar>("tolerance", testTolerance);
+    if (tol > testTolerance)
+    {
+        FatalErrorInFunction
+            << "tolerance " << tol << " looser than the spec value "
+            << testTolerance << exit(FatalError);
+    }
+    solverDict.set("tolerance", tol);
     solverDict.set("relTol", doubleScalar(0));
 
     dictionary settingsGAMG, statsGAMG;
@@ -164,6 +188,39 @@ int main(int argc, char *argv[])
         << " s" << nl
         << (pass ? "PASS" : "FAIL") << endl;
 
+    if (args.found("dumpSolution"))
+    {
+        // Gather cell centres and solution values on the master
+        List<pointField> allC(UPstream::nProcs());
+        List<List<blockScalar>> allX(UPstream::nProcs());
+        allC[UPstream::myProcNo()] = mesh.C().primitiveField();
+        allX[UPstream::myProcNo()] = rG.x;
+        Pstream::gatherList(allC);
+        Pstream::gatherList(allX);
+
+        if (UPstream::master())
+        {
+            const fileName f(args.get<fileName>("dumpSolution"));
+            mkDir(f.path());
+            OFstream os(f);
+            os.precision(12);
+            forAll(allC, proci)
+            {
+                const pointField& C = allC[proci];
+                const List<blockScalar>& X = allX[proci];
+                forAll(C, i)
+                {
+                    os  << C[i].x() << ' ' << C[i].y() << ' ' << C[i].z();
+                    for (label k = 0; k < blockDim; ++k)
+                    {
+                        os  << ' ' << toDouble(X[i*blockDim + k]);
+                    }
+                    os  << nl;
+                }
+            }
+        }
+    }
+
     if (args.found("json"))
     {
         jsonWriter j;
@@ -171,6 +228,7 @@ int main(int argc, char *argv[])
         j.add("nProcs", UPstream::nProcs());
         j.add("nCells", returnReduce(mesh.nCells(), sumOp<label>()));
         j.add("solver", solverDict.get<word>("solver"));
+        j.add("tolerance", tol);
         j.add("converged", rG.perf.converged);
         j.add("nIterations", rG.perf.nIterations);
         j.add("maxAllowedIterations", maxAllowedIters);

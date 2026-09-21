@@ -1,0 +1,111 @@
+"""T0 - lid-driven cavity 128x128, laminar, Re 100 and 1000 (spec 13).
+
+Pass: R < 1e-8 within 300 iterations; centreline u(y), v(x) (129 points)
+vs. the simpleFoam SIMPLEC reference (converged to 1e-8): L2 relative
+difference < 1e-3; no FPE trap (FOAM_SIGFPE on); nClamped == 0; 1 vs 4
+ranks: 1e-4 relative on the profiles.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from cflib import case as cfcase
+from cflib import env as cfenv
+from cflib import logs, post, results
+
+MAX_ITERS = 300
+R_TARGET = 1e-8
+TOL_PROFILE = 1e-3
+TOL_CROSS = 1e-4
+REYNOLDS = (100, 1000)
+
+
+def _reference(re: int):
+    """simpleFoam reference, serial, cached in run/ref_T0_Re<re>."""
+    case = cfcase.prepare("T0_cavity", f"ref_T0_Re{re}", reuse=True)
+    if not cfcase.solver_ok(case, "simpleFoam"):
+        case = cfcase.prepare("T0_cavity", f"ref_T0_Re{re}")
+        assert cfcase.allrun(case, ["-solver", "simpleFoam", "-Re", str(re)],
+                             fpe=False) == 0
+    assert cfcase.solver_ok(case, "simpleFoam")
+    return case
+
+
+def _profiles(case):
+    v = post.read_xy(post.sets_file(case, "centreLines", "vertical"))
+    h = post.read_xy(post.sets_file(case, "centreLines", "horizontal"))
+    # columns: coordinate, p, Ux, Uy, Uz
+    return v[:, 2], h[:, 3]
+
+
+@pytest.mark.case
+@pytest.mark.parametrize("re", REYNOLDS, ids=[f"Re{r}" for r in REYNOLDS])
+def test_T0(foam, re, nprocs):
+    ref = _reference(re)
+    ref_u, ref_v = _profiles(ref)
+    ref_log = logs.parse_native(ref / "log.simpleFoam")
+
+    name = f"T0_Re{re}_np{nprocs}"
+    case = cfcase.prepare("T0_cavity", name, {
+        "system/fvSolution": {"coupled.maxIter": MAX_ITERS},
+    })
+    rc = cfcase.allrun(case, ["-solver", "coupledFoam", "-Re", str(re),
+                              "-np", str(nprocs)], fpe=True)
+    timing = cfenv.last_timing.as_dict()
+    text = (case / "log.coupledFoam").read_text(errors="replace")
+    rows = logs.parse_cf(case / "log.coupledFoam")
+    summ = logs.coupled_summary(case)
+
+    fpe_trap = logs.fpe_trapped(case / "log.coupledFoam")
+    it_conv = logs.coupled_iterations_to(rows, R_TARGET)
+    n_clamped = max((r.get("nClamped", 0) for r in rows), default=-1)
+
+    u, v = _profiles(case)
+    du = post.l2rel(u, ref_u)
+    dv = post.l2rel(v, ref_v)
+
+    rec = {
+        "Re": re, "nProcs": nprocs, "rc": rc,
+        "iterationsToR": it_conv, "maxIters": MAX_ITERS, "Rtarget": R_TARGET,
+        "finalR": rows[-1]["R"] if rows else None,
+        "iterations": len(rows),
+        "l2rel_u": du, "l2rel_v": dv, "tolProfile": TOL_PROFILE,
+        "fpeTrap": fpe_trap, "fpeEnabled": "trapFpe" in text,
+        "nClampedMax": n_clamped,
+        "rollbacks": summ.get("rollbacks"),
+        "wallSeconds": summ.get("wallSeconds"),
+        "timingAllrun": timing,
+        "peakRSS_MB_sum": summ.get("peakRSS_MB_sum"),
+        "reference": {"solver": "simpleFoam", "iterations": ref_log["iterations"],
+                      "convergedAt": ref_log["convergedAt"],
+                      "wallSeconds": ref_log["wall"]},
+        "history": {"R": [r["R"] for r in rows], "CFL": [r["CFL"] for r in rows],
+                    "omega": [r["omega"] for r in rows]},
+    }
+
+    if nprocs > 1:
+        serial = results.read("tests", f"T0_Re{re}_np1")
+        if serial is not None:
+            su, sv = _profiles(cfcase.RUN_ROOT / f"T0_Re{re}_np1")
+            rec["crossRank_u"] = post.l2rel(u, su)
+            rec["crossRank_v"] = post.l2rel(v, sv)
+
+    passed = (
+        rc == 0 and it_conv is not None and it_conv <= MAX_ITERS
+        and du < TOL_PROFILE and dv < TOL_PROFILE
+        and not fpe_trap and n_clamped == 0
+        and rec.get("crossRank_u", 0) < TOL_CROSS
+        and rec.get("crossRank_v", 0) < TOL_CROSS
+    )
+    rec["pass"] = passed
+    results.write("tests", name, rec)
+
+    assert rc == 0, "coupledFoam failed"
+    assert not fpe_trap, "FPE trap"
+    assert n_clamped == 0, "clamped coefficients"
+    assert it_conv is not None and it_conv <= MAX_ITERS, \
+        f"R < {R_TARGET} not reached in {MAX_ITERS} iterations (final {rec['finalR']})"
+    assert du < TOL_PROFILE and dv < TOL_PROFILE, (du, dv)
+    assert rec.get("crossRank_u", 0) < TOL_CROSS, rec.get("crossRank_u")
+    assert rec.get("crossRank_v", 0) < TOL_CROSS, rec.get("crossRank_v")

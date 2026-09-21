@@ -33,6 +33,9 @@ namespace runInfo
 //- Peak resident set size of this process in kB (VmHWM), 0 if unknown
 label peakRSSkB();
 
+//- CPU time (user + system) of this process in seconds
+double cpuSeconds();
+
 //- Enable FTZ and DAZ (x86 SSE). Returns true if applied.
 bool enableFTZ();
 

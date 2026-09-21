@@ -273,3 +273,25 @@ iteration stalls (observed: R frozen at 7.0e-8). The T0 case therefore uses
 `tolerance 1e-12` (a tightening, allowed by rule 0.2). The default stays at
 1e-8; cases with a tighter outer target set the linear tolerance
 accordingly.
+
+## D-023 - Test-blockGAMG solve tolerance 1e-9
+
+Spec 6.4: "solve to 1e-8; iteration count <= 20; identical solution 1 vs 4
+ranks to 1e-5". With the 6.1 norm (||r||_2 / normFactor, normFactor an L1
+sum over all rows) 1e-8 is only a ~5e-6 relative L2 reduction, and two
+solutions stopped there differ by 1.3e-5 (measured, cells matched by
+centre), so the cross-rank criterion fails although both solves are correct.
+Measured on the T0 mesh:
+
+| tolerance | iterations np1/np4 | ||x1-x4||/||x1|| |
+|---|---|---|
+| 1e-8  | 9 / 10  | 1.32e-5 |
+| 1e-9  | 11 / 13 | 9.3e-7  |
+| 1e-10 | 13 / 14 | 6.0e-7  |
+| 1e-11 | 15 / 16 | 6.0e-7 (float floor) |
+
+The test uses 1e-9: a tightening (rule 0.2) that meets both remaining
+criteria. The cross-rank metric is the relative L2 difference of the whole
+solution vector; per-component integrals are recorded too but not used,
+because the pressure-component integral nearly cancels (~2e-6 against ~8e-5)
+and its relative difference is not a measure of solution identity.

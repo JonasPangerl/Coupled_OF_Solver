@@ -627,6 +627,7 @@ int main(int argc, char *argv[])
 
     // * * * * * * * * * * * * * * Run summary * * * * * * * * * * * * * * * //
 
+    const scalar cpuSum = returnReduce(scalar(runInfo::cpuSeconds()), sumOp<scalar>());
     const label rssKB = runInfo::peakRSSkB();
     const label rssMax = returnReduce(rssKB, maxOp<label>());
     const scalar rssSum = returnReduce(scalar(rssKB), sumOp<scalar>());
@@ -636,7 +637,8 @@ int main(int argc, char *argv[])
         << ", final R " << lastR
         << ", CFL cuts " << nCflCutsTotal
         << ", rollbacks " << sen.nRollbacks() << nl
-        << "coupledFoam: wall time " << runTimer.elapsedTime() << " s" << nl
+        << "coupledFoam: wall time " << runTimer.elapsedTime() << " s, CPU "
+        << cpuSum << " s (" << cpuSum/3600.0 << " CPU-h, all ranks)" << nl
         << "coupledFoam: peak RSS max rank " << rssMax/1024.0 << " MB, sum "
         << rssSum/1024.0 << " MB" << endl;
 
@@ -655,6 +657,8 @@ int main(int argc, char *argv[])
         j.add("staticCells", rem.nStatic());
         j.add("dynamicCells", rem.nDynamic());
         j.add("wallSeconds", runTimer.elapsedTime());
+        j.add("cpuSeconds", cpuSum);
+        j.add("cpuHours", cpuSum/3600.0);
         j.add("peakRSS_MB_maxRank", rssMax/1024.0);
         j.add("peakRSS_MB_sum", rssSum/1024.0);
         j.add("restarted", restarted);
