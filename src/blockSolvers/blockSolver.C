@@ -1,0 +1,204 @@
+/*---------------------------------------------------------------------------*\
+  coupledFoam - block-coupled p-U solver for OpenFOAM
+  License: GPL-3.0-or-later
+\*---------------------------------------------------------------------------*/
+
+#include "blockSolver.H"
+#include "blockPreconditioner.H"
+#include "doubleReduce.H"
+#include "coupledDefaults.H"
+#include <cmath>
+
+// * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * //
+
+namespace Foam
+{
+    defineTypeNameAndDebug(blockSolver, 0);
+    defineRunTimeSelectionTable(blockSolver, dictionary);
+}
+
+
+// * * * * * * * * * * * * blockSolverPerformance  * * * * * * * * * * * * * //
+
+void Foam::blockSolverPerformance::print(Ostream& os) const
+{
+    os  << solverName
+        << ": initial residual = " << initialResidual
+        << ", final residual = " << finalResidual
+        << ", no. iterations " << nIterations;
+    if (nRestarts)
+    {
+        os  << ", restarts " << nRestarts;
+    }
+    if (breakdown)
+    {
+        os  << ", BREAKDOWN";
+    }
+    os  << endl;
+}
+
+
+// * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
+
+Foam::blockSolver::blockSolver
+(
+    const blockLduMatrix4& matrix,
+    const dictionary& dict
+)
+:
+    matrix_(matrix),
+    controlDict_(dict),
+    tolerance_
+    (
+        dict.getOrDefault<doubleScalar>("tolerance", coupledDefaults::tolerance)
+    ),
+    relTol_(dict.getOrDefault<doubleScalar>("relTol", coupledDefaults::relTol)),
+    maxIter_(dict.getOrDefault<label>("maxIter", coupledDefaults::maxIter)),
+    minIter_(dict.getOrDefault<label>("minIter", coupledDefaults::minIter)),
+    maxRestarts_
+    (
+        dict.getOrDefault<label>("maxRestarts", coupledDefaults::maxRestarts)
+    ),
+    preconPtr_(),
+    preconVersion_(-1)
+{
+    const word preconName =
+        dict.getOrDefault<word>("preconditioner", "none");
+
+    if (preconName != "none")
+    {
+        preconPtr_ = blockPreconditioner::New(*this, dict);
+    }
+}
+
+
+// * * * * * * * * * * * * * * * * Selectors * * * * * * * * * * * * * * * * //
+
+Foam::autoPtr<Foam::blockSolver> Foam::blockSolver::New
+(
+    const blockLduMatrix4& matrix,
+    const dictionary& dict
+)
+{
+    const word solverType(dict.get<word>("solver"));
+
+    auto* ctorPtr = dictionaryConstructorTable(solverType);
+
+    if (!ctorPtr)
+    {
+        FatalIOErrorInLookup
+        (
+            dict,
+            "blockSolver",
+            solverType,
+            *dictionaryConstructorTablePtr_
+        ) << exit(FatalIOError);
+    }
+
+    return autoPtr<blockSolver>(ctorPtr(matrix, dict));
+}
+
+
+// * * * * * * * * * * * * * * * * Destructor  * * * * * * * * * * * * * * * //
+
+Foam::blockSolver::~blockSolver()
+{}
+
+
+// * * * * * * * * * * * * Protected Member Functions  * * * * * * * * * * * //
+
+bool Foam::blockSolver::converged
+(
+    const reduceScalar residual,
+    const reduceScalar initialResidual,
+    const label nIter
+) const
+{
+    if (nIter < minIter_)
+    {
+        return false;
+    }
+    return
+    (
+        residual < tolerance_
+     || (relTol_ > 0 && residual < relTol_*initialResidual)
+    );
+}
+
+
+void Foam::blockSolver::updatePreconditioner() const
+{
+    if (preconPtr_ && preconVersion_ != matrix_.version())
+    {
+        preconPtr_->update();
+        preconVersion_ = matrix_.version();
+    }
+}
+
+
+void Foam::blockSolver::precondition
+(
+    blockScalarUList& w,
+    const blockScalarUList& r
+) const
+{
+    if (preconPtr_)
+    {
+        preconPtr_->precondition(w, r);
+    }
+    else
+    {
+        const label n = r.size();
+        for (label i = 0; i < n; ++i)
+        {
+            w[i] = r[i];
+        }
+    }
+}
+
+
+Foam::reduceScalar Foam::blockSolver::normFactor
+(
+    const blockScalarUList& x,
+    const blockScalarUList& b
+) const
+{
+    blockScalarList Ax(matrix_.nRows());
+    matrix_.Amul(Ax, x);
+
+    reduceScalar s = 0;
+    const label n = matrix_.nRows();
+    for (label i = 0; i < n; ++i)
+    {
+        s += std::abs(toDouble(Ax[i])) + std::abs(toDouble(b[i]));
+    }
+
+    // GUARD: normFactor >= SMALL (spec 9.2)
+    return doubleReduce::parSum(s, matrix_.comm()) + doubleScalarSMALL;
+}
+
+
+// * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
+
+void Foam::blockSolver::writeSettings(dictionary& dict) const
+{
+    dict.add("solver", type());
+    dict.add("tolerance", tolerance_);
+    dict.add("relTol", relTol_);
+    dict.add("maxIter", maxIter_);
+    dict.add("minIter", minIter_);
+    dict.add("maxRestarts", maxRestarts_);
+    if (preconPtr_)
+    {
+        dictionary pd;
+        preconPtr_->writeSettings(pd);
+        dict.add("preconditioner", pd);
+    }
+    else
+    {
+        dict.add("preconditioner", word("none"));
+    }
+}
+
+
+// ************************************************************************* //
