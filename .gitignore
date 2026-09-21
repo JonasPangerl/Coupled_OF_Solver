@@ -1,0 +1,50 @@
+# wmake build products
+lnInclude/
+Make/linux*/
+Make/darwin*/
+platforms/
+*.o
+*.so
+*.dep
+
+# Generated results (gates are versioned, everything else is regenerated)
+results/*
+!results/gates/
+!results/gates/**
+!results/.gitkeep
+
+# Case run products (the case templates are versioned, runs are not)
+cases/**/processor*/
+cases/**/postProcessing/
+cases/**/log.*
+cases/**/[1-9]*/
+cases/**/0.[0-9]*/
+cases/**/constant/polyMesh/
+cases/**/constant/extendedFeatureEdgeMesh/
+cases/**/constant/triSurface/*.eMesh
+cases/**/dynamicCode/
+cases/**/*.foam
+cases/T5_ahmed/geometry/*.stl
+cases/**/0/
+
+# LaTeX build products
+report/paper/*.aux
+report/paper/*.bbl
+report/paper/*.blg
+report/paper/*.log
+report/paper/*.out
+report/paper/*.fdb_latexmk
+report/paper/*.fls
+report/paper/*.synctex.gz
+report/paper/*.toc
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+
+# Editors and helpers
+*~
+*.own~
+.vscode/

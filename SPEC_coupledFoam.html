@@ -1,0 +1,764 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}</style><style>:root{color-scheme:light dark;--md-bg:#fff;--md-text:rgba(0,0,0,.8);--md-muted:rgba(0,0,0,.6);--md-fill:rgba(0,0,0,.04);--md-fill-strong:rgba(0,0,0,.06);--md-rule:rgba(0,0,0,.1);--md-rule-strong:rgba(0,0,0,.16);--md-link:hsl(210 100% 45%)}@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){--md-bg:#0d0d0d;--md-text:rgba(255,255,255,.85);--md-muted:rgba(255,255,255,.6);--md-fill:rgba(255,255,255,.06);--md-fill-strong:rgba(255,255,255,.09);--md-rule:rgba(255,255,255,.14);--md-rule-strong:rgba(255,255,255,.22);--md-link:hsl(210 100% 72%)}}:root[data-theme="dark"]{color-scheme:dark;--md-bg:#0d0d0d;--md-text:rgba(255,255,255,.85);--md-muted:rgba(255,255,255,.6);--md-fill:rgba(255,255,255,.06);--md-fill-strong:rgba(255,255,255,.09);--md-rule:rgba(255,255,255,.14);--md-rule-strong:rgba(255,255,255,.22);--md-link:hsl(210 100% 72%)}:root[data-theme="light"]{color-scheme:light}@media print{:root,:root[data-theme="dark"]{color-scheme:light;--md-bg:#fff;--md-text:rgba(0,0,0,.8);--md-muted:rgba(0,0,0,.6);--md-fill:rgba(0,0,0,.04);--md-fill-strong:rgba(0,0,0,.06);--md-rule:rgba(0,0,0,.1);--md-rule-strong:rgba(0,0,0,.16);--md-link:hsl(210 100% 45%)}}body{background:var(--md-bg);color:var(--md-text);max-width:720px;margin:0 auto;padding:32px;display:flex;flex-direction:column;gap:10px;font:14px/1.55 -apple-system,BlinkMacSystemFont,'SF Pro','Segoe UI',sans-serif;overflow-wrap:break-word}body>:first-child{margin-top:0}h1,h2,h3,h4,h5,h6{margin:6px 0 0;line-height:1.25;font-weight:600;text-wrap:balance}h1{font-size:1.35em}h2{font-size:1.15em;color:var(--md-muted)}h3,h4,h5,h6{font-size:1em}p,ul,ol,blockquote,table,pre,hr{margin:0}strong{font-weight:600}a{color:var(--md-link);text-decoration:none}a:hover{text-decoration:underline}ul,ol{display:flex;flex-direction:column;gap:6px;padding-left:22px}ul{list-style:disc}ol{list-style:decimal}:is(li,td,th)>*+:is(p,ul,ol,blockquote){margin-top:6px}blockquote{display:flex;flex-direction:column;gap:10px;border-left:2px solid var(--md-rule);padding-left:10px;color:var(--md-muted)}:not(pre)>code{background:var(--md-fill);padding:1px 3px;border-radius:4px;font:.92em 'SF Mono',ui-monospace,Menlo,Consolas,monospace}a>code{background:none;color:inherit}pre{background:var(--md-fill);padding:10px 12px;border-radius:6px;overflow-x:auto;font:12px/1.5 'SF Mono',ui-monospace,Menlo,Consolas,monospace;margin-block:4px}pre code{background:none;padding:0;font:inherit}table{width:100%;border-collapse:separate;border-spacing:2px;font:inherit}th,td{padding:6px 8px;border-radius:3px;text-align:left;vertical-align:top}th{background:var(--md-fill-strong);font-weight:600}td{background:var(--md-fill)}:is(th,td) :not(pre)>code{background:transparent}hr{border:0;border-top:1px solid var(--md-rule-strong);margin-block:10px}img{max-width:100%;height:auto;border-radius:4px}</style>
+</head><body>
+<h1>coupledFoam — Implementation Specification v2</h1>
+<p><strong>Status:</strong> Reviewed and corrected version of <code>plan_coupled_solver.md</code> (v1). This document is the single source of truth for a one-shot implementation by an autonomous coding agent. It is written to leave no room for interpretation. Where v1 and v2 disagree, v2 wins.</p>
+<p><strong>Target:</strong> Block-coupled p–U solver for steady, incompressible, turbulent external aerodynamics in OpenFOAM ESI <strong>v2606</strong>, CPU-only, single-precision linear algebra (SPDP), 16 cores / 128 GB RAM, meshes up to 45 M cells.</p>
+<p><strong>Deliverables:</strong> (1) the solver + library, (2) a fully automated test suite, (3) a benchmark harness against native OpenFOAM solvers, (4) an English report with comparisons and plots.</p>
+<hr>
+<h2>0. Rules for the implementing agent</h2>
+<p>These rules are mandatory and override any implicit judgement.</p>
+<ol>
+<li><strong>Phases and gates are sequential.</strong> Do not start phase N+1 before every acceptance criterion of phase N is met and recorded in <code>results/gates/phase_N.json</code>. If a gate cannot be passed, stop, write <code>results/gates/phase_N_FAILED.md</code> with the root cause and the exact reproduction command, and do not proceed.</li>
+<li><strong>Never change an acceptance threshold</strong> in this document to make a gate pass. Thresholds may only be tightened.</li>
+<li><strong>Never silently drop a feature.</strong> If something is infeasible, record it in <code>DECISIONS.md</code> with the reason and the impact.</li>
+<li><strong>Every numerical result</strong> (residuals, force coefficients, timings, memory) is written to JSON under <code>results/</code> by the harness scripts, never only to stdout.</li>
+<li><strong>All parameters</strong> are runtime dictionary entries with defaults defined in Section 11. No hard-coded magic numbers in source.</li>
+<li><strong>Compile with warnings as errors</strong> for the project code (<code>-Wall -Wextra -Werror</code> in <code>Make/options</code>, OpenFOAM headers excluded via <code>-isystem</code>).</li>
+<li><strong>Commit after every completed subsection</strong> with the message pattern <code>phase-&lt;N&gt;: &lt;what&gt;</code>; keep <code>CHANGELOG.md</code> current.</li>
+<li><strong>Reproducibility:</strong> every case has an <code>Allrun</code>, an <code>Allclean</code>, and produces deterministic outputs given the same rank count.</li>
+<li><strong>Floating-point exceptions are bugs in development builds.</strong> Every development run sets <code>FOAM_SIGFPE=true FOAM_SETNAN=true</code>. A run that dies from a FPE is a failed test, not an acceptable outcome.</li>
+<li><strong>Read before writing:</strong> before implementing any block-matrix or AMG component, read the corresponding native OpenFOAM source (<code>src/OpenFOAM/matrices/lduMatrix/</code>, <code>src/OpenFOAM/matrices/LduMatrix/</code>, <code>GAMG/</code>) and follow its conventions (LDU addressing, interface handling, <code>solveScalar</code>).</li>
+</ol>
+<hr>
+<h2>1. Review of the v1 plan — what changed and why</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>v1 statement</th>
+<th>v2 decision</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>R1</td>
+<td>Port ICSFoam as the code base</td>
+<td><strong>Clean-room implementation</strong>; ICSFoam is a <em>design reference only</em> (read it, do not depend on it)</td>
+<td>ICSFoam targets an older ESI release, is density-based first, and stores in <code>scalar</code>. A port of unknown cost is not acceptable in a one-shot. Clean-room gives full control over single-precision block storage and SPDP.</td>
+</tr>
+<tr>
+<td>R2</td>
+<td>Selective block-AMG (SAMG, Uroić/Jasak) as primary linear solver</td>
+<td><strong>Additive-correction block-AMG (&quot;block-GAMG&quot;) reusing native <code>GAMGAgglomeration</code></strong> as primary; SAMG is Phase 2</td>
+<td>Native agglomeration (faceAreaPair, processor-aware) already exists and is proven; only the coarse-operator (block Galerkin sum) and block smoothers are new. SAMG needs a full coarsening/interpolation implementation plus parallel setup — it is the biggest risk item and belongs behind a working baseline. This is the Mangani et al. (2014) approach, which already demonstrated near-linear scaling.</td>
+</tr>
+<tr>
+<td>R3</td>
+<td>petsc4Foam FieldSplit as reference</td>
+<td><strong>Optional</strong> (Phase 2), not part of the gate path</td>
+<td>External dependency (PETSc single-precision build) must not block delivery. Native <code>simpleFoam</code> is the mandatory benchmark reference.</td>
+</tr>
+<tr>
+<td>R4</td>
+<td>Memory budget 100–115 GB at 45 M cells</td>
+<td>Kept, but <strong>measured at every gate</strong>; the 45 M case is not part of the one-shot — the largest one-shot case is ~8 M cells</td>
+<td>Nothing above ~8 M cells is needed to validate correctness and measure speedup; the 45 M run is a user acceptance step after delivery.</td>
+</tr>
+<tr>
+<td>R5</td>
+<td>AMR as Phase 2</td>
+<td>Kept as Phase 2, <strong>and</strong> the restart format is designed AMR-capable from day 1 (Section 10)</td>
+<td>Unchanged.</td>
+</tr>
+<tr>
+<td>R6</td>
+<td>Tests listed as levels</td>
+<td><strong>Concrete cases, commands, acceptance numbers, and a benchmark protocol</strong> (Sections 13–15)</td>
+<td>v1 was not executable.</td>
+</tr>
+<tr>
+<td>R7</td>
+<td>CFL strategy &quot;mRDM default&quot;</td>
+<td>Kept, <strong>with exact formulas</strong> (Section 7)</td>
+<td>v1 named methods without defining them.</td>
+</tr>
+<tr>
+<td>R8</td>
+<td>Remediation cell sets</td>
+<td>Kept, <strong>with exact detection formulas, hysteresis, and diagnostics</strong> (Section 8)</td>
+<td>Same.</td>
+</tr>
+<tr>
+<td>R9</td>
+<td>FPE section</td>
+<td>Extended with <strong>exact guard list, double-accumulated reductions, and a rollback protocol</strong> (Section 9)</td>
+<td>Same.</td>
+</tr>
+<tr>
+<td>R10</td>
+<td>Ahmed body / motorBike</td>
+<td>Added as <strong>T5/T4</strong> with geometry generation script and mesh targets</td>
+<td>Requested.</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2>2. Scope</h2>
+<h3>2.1 In scope (one-shot)</h3>
+<ul>
+<li>Library <code>libcoupledFoam</code> and application <code>coupledFoam</code> (steady, incompressible, RANS, block-coupled p–U, segregated turbulence).</li>
+<li>Single-precision block linear algebra (<code>solveScalar</code>) with double-precision reductions.</li>
+<li>Block-GAMG preconditioned block-BiCGStab / block-GMRES(10).</li>
+<li>Pseudo-transient continuation (PTC) with adaptive CFL (mRDM, EXP), physicality line search, solution-limited local CFL.</li>
+<li>Two-tier remediation cell sets (static mesh-quality, dynamic solution-spike).</li>
+<li>Implicit boundary conditions, implicit MRF, cyclic/AMI as explicit-coupled (see 5.5).</li>
+<li>FPE safety: trapping in dev builds, guards in production builds, sentinel + rollback.</li>
+<li>Restart (exact resume of CFL state, remediation set, phi consistency).</li>
+<li>Test suite (unit + cases T0–T5), benchmark harness, English report.</li>
+</ul>
+<h3>2.2 Out of scope (Phase 2, Section 17)</h3>
+<ul>
+<li>AMR, SAMG, PETSc reference, GPU, compressible, transient/ALE.</li>
+</ul>
+<hr>
+<h2>3. Environment and toolchain (exact)</h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Requirement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OS</td>
+<td>Linux x86_64 (Ubuntu 24.04 or equivalent)</td>
+</tr>
+<tr>
+<td>Compiler</td>
+<td>GCC ≥ 13 (<code>WM_COMPILER=Gcc</code>), flags for project code: <code>-O3 -march=native -fno-math-errno</code> (no <code>-ffast-math</code>: it breaks NaN/Inf detection)</td>
+</tr>
+<tr>
+<td>MPI</td>
+<td>OpenMPI ≥ 4.1, <code>WM_MPLIB=SYSTEMOPENMPI</code></td>
+</tr>
+<tr>
+<td>OpenFOAM</td>
+<td><strong>ESI v2606</strong>, built from source with <code>WM_PRECISION_OPTION=SPDP</code>, <code>WM_LABEL_SIZE=32</code>, <code>WM_COMPILE_OPTION=Opt</code>. <strong>A second build</strong> with <code>WM_COMPILE_OPTION=Debug</code> and SPDP is required for FPE-trapping test runs. Both builds live side by side (<code>OpenFOAM-v2606-Opt</code>, <code>OpenFOAM-v2606-Debug</code>).</td>
+</tr>
+<tr>
+<td>Python</td>
+<td>3.11+, packages: <code>numpy</code>, <code>pandas</code>, <code>matplotlib</code>, <code>pytest</code>, <code>pyyaml</code>, <code>numpy-stl</code> (for Ahmed STL generation)</td>
+</tr>
+<tr>
+<td>Hardware</td>
+<td>16 physical cores, 128 GB RAM. All benchmarks: <code>mpirun --bind-to core --map-by core -np &lt;N&gt;</code>; hyper-threading disabled or ranks pinned to physical cores.</td>
+</tr>
+<tr>
+<td>Native reference solver</td>
+<td><code>simpleFoam</code> from the same v2606-SPDP-Opt build (identical precision, identical compiler flags).</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Phase 0 must verify</strong> with <code>Test-precision</code> (write a 5-line app) that <code>sizeof(Foam::solveScalar)==4</code> and <code>sizeof(Foam::scalar)==8</code>.</p>
+<hr>
+<h2>4. Repository layout</h2>
+<pre><code>coupledFoam/
+├── README.md                     # build + run quickstart
+├── CHANGELOG.md
+├── DECISIONS.md                  # every deviation/decision with reason
+├── SPEC_coupledFoam.md           # this document (copied in)
+├── Allwmake / Allwclean
+├── src/
+│   ├── blockMatrix/              # lib: block LDU storage, ops, interfaces
+│   │   ├── blockLduMatrix4.{H,C}
+│   │   ├── blockLduInterface*.{H,C}
+│   │   ├── block4Ops.H          # inline 4x4 dense ops (LU, inverse, matvec) in solveScalar
+│   │   └── doubleReduce.{H,C}   # double-accumulated norms / dots with MPI reduce
+│   ├── blockSolvers/
+│   │   ├── blockSolver.{H,C}     # base class, runtime selection
+│   │   ├── blockBiCGStab.{H,C}
+│   │   ├── blockGMRES.{H,C}
+│   │   ├── blockGAMG.{H,C}       # additive-correction block AMG (V-cycle)
+│   │   ├── blockSmoothers/{blockGaussSeidel,blockILU0}.{H,C}
+│   │   └── blockPreconditioners/{blockDiagonal,blockGAMGPrecon}.{H,C}
+│   ├── assembly/
+│   │   ├── coupledAssembler.{H,C}  # builds the 4x4 system from fvMesh + fields
+│   │   ├── convection.{H,C}        # deferred correction
+│   │   ├── rhieChow.{H,C}
+│   │   ├── boundaryCoupling.{H,C}  # implicit BC rows/cols
+│   │   └── MRFCoupling.{H,C}
+│   ├── control/
+│   │   ├── ptcControl.{H,C}        # local dt, CFL strategies
+│   │   ├── lineSearch.{H,C}        # physicality omega
+│   │   ├── remediation.{H,C}       # static + dynamic cell sets
+│   │   └── sentinel.{H,C}          # finite checks, rollback
+│   └── io/
+│       └── coupledState.{H,C}      # restart state dictionary
+├── applications/
+│   ├── coupledFoam/                # the solver
+│   └── test/                       # OpenFOAM-style unit-test apps (Test-block4Ops, Test-blockMatrix, Test-blockGAMG, Test-precision)
+├── cases/                          # T0..T5 case templates (Allrun/Allclean)
+├── tests/                          # pytest: unit + case tests, JSON outputs
+├── bench/                          # benchmark harness + report generator
+│   ├── run_bench.py
+│   ├── rank_wrapper.sh             # /usr/bin/time -v per rank -&gt; RSS
+│   ├── parse_forces.py
+│   └── make_report.py
+├── results/                        # generated JSON, figures (git-ignored except gates/)
+└── report/REPORT.md                # generated
+</code></pre>
+<hr>
+<h2>5. Numerical specification</h2>
+<h3>5.1 Equations and notation</h3>
+<p>Steady incompressible RANS, kinematic pressure p (m²/s²), velocity U, effective viscosity ν_eff = ν + ν_t.</p>
+<ul>
+<li>Momentum: ∇·(U U) − ∇·(ν_eff ∇U) − ∇·(ν_eff (∇U)ᵀ) + ∇p = S_MRF</li>
+<li>Continuity: ∇·U = 0</li>
+</ul>
+<p>Turbulence (k, ω, ν_t) is frozen during the coupled solve and updated segregated after it (5.8).</p>
+<p>Notation: cell P, neighbour N, face f with area vector S_f (outward from owner), |S_f|, face distance vector d_f = x_N − x_P, interpolation weight w_f (owner weight, from <code>mesh.weights()</code>), face flux φ_f (m³/s), cell volume V_P.</p>
+<p>Unknown vector per cell: x_P = (u, v, w, p)ᵀ.</p>
+<h3>5.2 Block system layout and storage</h3>
+<p><code>blockLduMatrix4</code> stores, for <code>nCells</code> cells and <code>nFaces</code> internal faces (LDU addressing from <code>mesh.lduAddr()</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Array</th>
+<th>Type</th>
+<th>Size</th>
+<th>Layout</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>diag_</code></td>
+<td><code>solveScalar</code></td>
+<td>16·nCells</td>
+<td>row-major 4×4 per cell, index <code>cell*16 + r*4 + c</code></td>
+</tr>
+<tr>
+<td><code>upper_</code></td>
+<td><code>solveScalar</code></td>
+<td>16·nFaces</td>
+<td>coefficient of owner-row / neighbour-column, same 4×4 layout</td>
+</tr>
+<tr>
+<td><code>lower_</code></td>
+<td><code>solveScalar</code></td>
+<td>16·nFaces</td>
+<td>neighbour-row / owner-column</td>
+</tr>
+<tr>
+<td><code>source_</code></td>
+<td><code>solveScalar</code></td>
+<td>4·nCells</td>
+<td>RHS</td>
+</tr>
+<tr>
+<td>interface coeffs</td>
+<td><code>solveScalar</code></td>
+<td>16·nPatchFaces per coupled patch</td>
+<td>as native <code>interfaceBouCoeffs</code>/<code>interfaceIntCoeffs</code>, but 4×4</td>
+</tr>
+</tbody>
+</table>
+<p>Row/column meaning: rows 0–2 = momentum x,y,z; row 3 = continuity. Columns 0–2 = u,v,w; column 3 = p.</p>
+<p>All matrix coefficients are assembled in <code>scalar</code> (double) locally and <strong>stored</strong> as <code>solveScalar</code> (float) — the conversion happens once per outer iteration at store time. Fields U, p, phi stay <code>scalar</code>.</p>
+<h3>5.3 Assembly (per outer iteration)</h3>
+<p>All contributions are written into the four sub-blocks. Sign convention: A x = b, with A the full block matrix.</p>
+<p><strong>(a) Momentum–momentum (rows 0–2, cols 0–2):</strong></p>
+<ol>
+<li>Convection, <em>deferred correction</em>: implicit part first-order upwind on φ_f (from previous iteration, Rhie–Chow consistent): <code>upper[f] += max(-φ_f,0)</code>... precisely: owner diag <code>a_P += max(φ_f, 0)</code>, owner/neighbour coupling <code>upper[f] = −max(−φ_f, 0)</code>, <code>lower[f] = −max(φ_f, 0)</code>, neighbour diag <code>a_N += max(−φ_f, 0)</code> (standard OpenFOAM upwind <code>fvm::div</code>). Explicit high-order correction: <code>b_P −= β_P · Σ_f φ_f (U_f^{HO} − U_f^{UD})</code> where <code>U_f^{HO}</code> is evaluated with the user scheme (default <code>linearUpwind grad(U)</code>), and β_P ∈ [0,1] is the per-cell blending factor (1 = full high order; reduced by remediation, Section 8, and by the start-up switch, 7.4). This is implemented by evaluating <code>fvc::div(phi, U, &quot;div(phi,U)&quot;)</code> minus <code>fvc::div(phi, U, &quot;div(phi,U)_upwind&quot;)</code> and multiplying by β.</li>
+<li>Diffusion: standard <code>fvm::laplacian(ν_eff, U)</code> coefficients (scalar, applied identically to the three momentum rows on the diagonal of the 3×3 sub-block), including non-orthogonal correction as explicit source (limited by <code>nonOrthLimiter</code>, default 0.5). The transpose term <code>∇·(ν_eff (∇U)ᵀ)</code> is explicit (<code>fvc::div(ν_eff · dev2(T(grad(U))))</code>).</li>
+<li>PTC: <code>a_P += V_P / Δt_P</code> on all three momentum diagonals; <code>b_P += (V_P / Δt_P) U_P^{old}</code> (Section 5.4).</li>
+<li>MRF: 5.6.</li>
+</ol>
+<p><strong>(b) Momentum–pressure (rows 0–2, col 3):</strong> pressure gradient, Green–Gauss face-based: contribution of face f to owner row: <code>+ w_f S_f</code> on the owner column-3 diag entry and <code>+ (1−w_f) S_f</code> on the upper block (owner row, neighbour column 3); for the neighbour row the signs are reversed (S_f points out of owner). Boundary faces: 5.5.</p>
+<p><strong>(c) Pressure–momentum (row 3, cols 0–2):</strong> divergence of interpolated velocity: face f contributes <code>+ w_f S_fᵀ</code> to the owner diag (row 3, cols 0–2), <code>+ (1−w_f) S_fᵀ</code> to upper (owner row 3, neighbour cols 0–2); reversed sign for neighbour row.</p>
+<p><strong>(d) Pressure–pressure (row 3, col 3):</strong> Rhie–Chow Laplacian: <code>D_f = interpolate(V/ā_P)_f</code> where <code>ā_P</code> is the average of the three momentum diagonal coefficients of cell P <strong>after</strong> step (a) (including PTC term, excluding the pressure column). Coefficient <code>−D_f |S_f|² / |d_f · n_f|</code> with the standard <code>fvm::laplacian(D, p)</code> assembly (non-orthogonal correction explicit). Explicit RC source on row 3: <code>b_P^{(3)} = − Σ_f D_f [ (∇p)_f^{avg} · S_f ]</code> where <code>(∇p)_f^{avg}</code> is the linear interpolate of cell gradients (the &quot;average gradient&quot; term of Rhie–Chow). The implicit face gradient term is what the Laplacian block represents.</p>
+<p><strong>(e) Flux update after solve:</strong> <code>φ_f = (w_f U_P + (1−w_f) U_N) · S_f − D_f [ (p_N − p_P)|S_f|/|d_f·n_f| − (∇p)_f^{avg} · S_f ]</code>, then <code>fvc::makeAbsolute</code> where MRF applies. This φ_f is used for the next assembly, for turbulence, and is written on output.</p>
+<p><strong>(f) Row scaling:</strong> before the solve, scale the continuity row by <code>s_p = 1/max(D_ref, VSMALL)</code> with <code>D_ref = gAverage(V/ā_P)</code> (dimensional balancing of the block for single precision). Unscale x after the solve. Record <code>s_p</code> in the log.</p>
+<h3>5.4 Pseudo-transient continuation, local time step</h3>
+<p>Per cell: <code>Δt_P = CFL · V_P / max( ½ Σ_f |φ_f| + ν_eff,P · V_P^{1/3} , VSMALL )</code> (convective + diffusive limit). CFL is the global adaptive value from Section 7; the local cap of 7.3 may reduce Δt_P further. <strong>No PTC term on the continuity row.</strong></p>
+<h3>5.5 Boundary conditions (implicit treatment)</h3>
+<p>For every boundary face f of patch cell P, the block row of P receives the following. Keep exactly this table; add to <code>DECISIONS.md</code> if a new BC type is needed.</p>
+<table>
+<thead>
+<tr>
+<th>Patch type (U / p)</th>
+<th>Momentum rows</th>
+<th>Continuity row</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fixedValue</code> U / <code>zeroGradient</code> p (inlet, wall, MRF wall)</td>
+<td>convection: <code>a_P += max(φ_f,0)</code>, <code>b_P += max(−φ_f,0) U_b</code>; diffusion: `a_P += ν_eff</td>
+<td>S_f</td>
+</tr>
+<tr>
+<td><code>zeroGradient</code> U / <code>fixedValue</code> p (outlet)</td>
+<td>convection: <code>a_P += φ_f</code> (U_f = U_P); pressure gradient: <code>b_P −= S_f p_b</code>; diffusion: none</td>
+<td>divergence: <code>+ S_fᵀ</code> on own U columns; p-p: `a_P^{(3,3)} −= D_f</td>
+</tr>
+<tr>
+<td><code>slip</code> / <code>symmetry</code></td>
+<td>normal component removed via projection: assemble as <code>fixedValue</code> with <code>U_b = U_P − (U_P·n)n</code> treated implicitly by adding `ν_eff</td>
+<td>S_f</td>
+</tr>
+<tr>
+<td><code>inletOutlet</code> U / <code>totalPressure</code> p</td>
+<td>treat per face by sign of φ_f as inlet (fixedValue) or outlet (fixedValue p with p_b = p0 − ½</td>
+<td>U_P</td>
+</tr>
+<tr>
+<td><code>cyclic</code> / <code>cyclicAMI</code></td>
+<td><strong>explicit-coupled</strong> in v2: neighbour values lagged from previous iteration (source), full implicit block coupling across cyclic interfaces is Phase 2</td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>processor</code></td>
+<td>fully implicit via block interface coefficients (as native)</td>
+<td>same</td>
+</tr>
+</tbody>
+</table>
+<p>Wall-function BCs for ν_t (<code>nutkWallFunction</code>, <code>nutUSpaldingWallFunction</code>) act through ν_eff on the wall face and need no special block handling.</p>
+<h3>5.6 MRF (implicit)</h3>
+<p>Inside MRF zones, the Coriolis term <code>2Ω × U</code> is added implicitly to the 3×3 momentum diagonal block as the skew-symmetric matrix <code>[Ω]_×</code> scaled by <code>2 V_P</code>; the centrifugal term is absorbed in p (relative frame formulation as native <code>MRF.DDt</code>). Fluxes on MRF-zone faces are made relative before assembly (<code>MRF.makeRelative(phi)</code>) and absolute after the flux update. Native <code>IOMRFZoneList</code> is reused for zone definitions.</p>
+<h3>5.7 Outer iteration algorithm</h3>
+<pre><code>read fields U, p, phi, k, omega, nut; read coupledState (restart) or init
+if not restart and potentialInit: run potentialFoam-equivalent init (native potentialFoam call via Allrun)
+build static remediation set (Section 8.1)
+for iter = 1 .. maxIter:
+    turbulence-&gt;correct() is NOT called here (see below)
+    compute nu_eff, grad(U), grad(p)
+    compute local dt (5.4) with current CFL and local caps
+    assemble block system (5.3) with beta field
+    scale rows (5.3f)
+    solve  A dx = b - A x   (solve for the increment dx, tolerance per Section 6)
+    unscale
+    omega = lineSearch(dx)                       (Section 7.2)
+    if omega &lt; omegaMin and cflCuts &lt; maxCflCuts:
+        CFL *= kappa; cflCuts++; goto assemble   (repeat the step; fields unchanged)
+    U += omega dx_U ; p += omega dx_p
+    update phi (5.3e)
+    sentinel check (Section 9.3); on failure: rollback + CFL*=0.25 + mark cells; continue
+    dynamic remediation update (Section 8.2)
+    turbulence-&gt;correct()  (segregated k, omega, nut update; Section 5.8)
+    residual bookkeeping (Section 12), CFL update (Section 7.1)
+    write if writeTime; write coupledState
+    check convergence (Section 12.3); break if converged
+</code></pre>
+<p>Solving for the increment (not the full vector) is mandatory: it keeps the single-precision solve well-conditioned relative to the field magnitude.</p>
+<h3>5.8 Turbulence coupling</h3>
+<ul>
+<li>Turbulence models are used unmodified via <code>incompressible::turbulenceModel</code> (SST, GEKO, and any user model such as SST-sf). <code>turbulence-&gt;correct()</code> is called once per outer iteration after the coupled update.</li>
+<li>The k and ω matrices use native <code>fvMatrix&lt;scalar&gt;</code> with the native solvers from <code>fvSolution</code> (default: <code>smoothSolver</code> symGaussSeidel, relTol 0.1), with native <code>relaxationFactors</code> for equations k and ω (default 0.7). The pseudo-time term for k/ω is native <code>fvm::ddt</code> disabled (steady); stability comes from equation relaxation.</li>
+<li>Bounds: after <code>correct()</code>, enforce <code>k ≥ kMin</code>, <code>ω ≥ omegaMin</code> from <code>fvSolution.coupled.bounds</code> (defaults <code>kMin 1e-12</code>, <code>omegaMin 1e-6</code>) using <code>bound()</code>.</li>
+</ul>
+<hr>
+<h2>6. Linear solver specification</h2>
+<p>All operations on <code>solveScalar</code> (float). <strong>All reductions (dot products, norms) accumulate in <code>double</code></strong> via <code>doubleReduce::dot()</code> / <code>::norm2()</code> and use <code>MPI_DOUBLE</code> in <code>reduce</code>. This is non-negotiable (float sums over 10⁷–10⁸ entries lose 3–4 digits and can overflow in ‖·‖²).</p>
+<h3>6.1 Runtime selection (<code>fvSolution.solvers.coupled</code>)</h3>
+<pre><code>coupled
+{
+    solver          blockBiCGStab;   // blockBiCGStab | blockGMRES
+    preconditioner  blockGAMG;       // blockDiagonal | blockGAMG
+    tolerance       1e-8;            // absolute, on ||r||_2 / normFactor
+    relTol          0.05;            // relative to initial residual of this outer iteration
+    maxIter         200;
+    gmresRestart    10;              // only blockGMRES
+    blockGAMG
+    {
+        agglomerator      faceAreaPair;   // native GAMGAgglomeration
+        nCellsInCoarsestLevel 500;
+        mergeLevels       1;
+        smoother          blockGaussSeidel;   // blockGaussSeidel | blockILU0
+        nPreSweeps        1;
+        nPostSweeps       2;
+        nFinestSweeps     2;
+        coarsestSolver    blockBiCGStab;
+        coarsestTolerance 1e-3;
+        maxOperatorComplexity 1.5;      // hard cap, see 6.3
+        cacheAgglomeration true;
+    }
+}
+</code></pre>
+<p>Residual norm definition: <code>‖r‖ = sqrt( Σ_rows r_i² )</code> over all 4 components, with <code>normFactor = Σ_i |A x_i| + |b_i| + SMALL</code> computed once per outer iteration (analogue of native <code>lduMatrix::solver::normFactor</code>).</p>
+<h3>6.2 Block-BiCGStab / block-GMRES</h3>
+<p>Standard algorithms (Saad, <em>Iterative Methods</em>, Alg. 7.7 and 6.9) applied to the 4·nCells unknown vector, with the block matvec <code>blockLduMatrix4::Amul()</code> (LDU traversal, interface update as native <code>lduMatrix::Amul</code> with <code>initMatrixInterfaces</code>/<code>updateMatrixInterfaces</code>). Breakdown guards: if <code>|ρ| &lt; VSMALL·‖r₀‖²</code> or <code>|ω| &lt; VSMALL</code> → restart from current x (max 3 restarts, then return with <code>converged=false</code>).</p>
+<h3>6.3 Block-GAMG (additive correction, V-cycle)</h3>
+<ul>
+<li><strong>Agglomeration:</strong> obtained from native <code>GAMGAgglomeration::New(mesh, dict)</code> on the p–p sub-block (<code>faceAreaPair</code> uses only geometry, so any sub-block works; use the p–p block's scalar coefficients if <code>algebraicPair</code> is selected). Reuse <code>restrictAddressing</code>, <code>faceRestrictAddressing</code>, <code>nCells(level)</code>, and the native <code>GAMGInterface</code> objects for processor boundaries.</li>
+<li><strong>Coarse operators:</strong> Galerkin by summation (additive correction): coarse diag = Σ fine diag of agglomerated cells + Σ fine upper/lower of internal faces that become intra-coarse-cell; coarse upper/lower = Σ fine upper/lower of faces that survive. Same 4×4 layout. Sum in <code>double</code>, store as <code>solveScalar</code>.</li>
+<li><strong>Restriction:</strong> sum of residual blocks; <strong>prolongation:</strong> piecewise constant (add coarse correction to all fine cells of the coarse cell).</li>
+<li><strong>Smoother, block Gauss–Seidel:</strong> per cell, <code>x_P ← D_P⁻¹ (b_P − Σ_N A_PN x_N)</code>, where <code>D_P⁻¹</code> is the 4×4 dense inverse precomputed per level (LU with partial pivoting, <code>block4Ops::invert</code>, pivot guard: if <code>|pivot| &lt; 1e-30</code> add <code>1e-30</code> and count <code>nSingularDiag</code> for the log). Processor boundaries are treated Jacobi-style (values from the previous sweep), as native <code>GaussSeidelSmoother</code>.</li>
+<li><strong>Smoother, block ILU0 (optional):</strong> LDU-native incomplete block factorization with 4×4 block pivots; enable only if Gate B2 shows ≥ 15 % wall-clock gain on T2, otherwise keep as available option.</li>
+<li><strong>Operator complexity</strong> <code>C_op = Σ_levels (nnz_blocks(level)) / nnz_blocks(fine)</code>. If <code>C_op &gt; maxOperatorComplexity</code>, increase <code>mergeLevels</code> by 1 and re-agglomerate (max 3 attempts), then fail loudly. Log <code>C_op</code>, levels, cells per level once per run.</li>
+<li><strong>V-cycle</strong> as preconditioner (one V-cycle per Krylov iteration), not as a standalone solver.</li>
+</ul>
+<h3>6.4 Unit tests (Phase A gate, <code>applications/test/</code>)</h3>
+<ul>
+<li><code>Test-block4Ops</code>: invert/LU of 1000 random well-conditioned 4×4 blocks; <code>‖A A⁻¹ − I‖_∞ &lt; 1e-5</code> (float). Singular block → guard triggers, no NaN.</li>
+<li><code>Test-blockMatrix</code>: build a 4×4-block Poisson-like SPD system on the <code>cavity</code> mesh (diag = I·(Σ coeffs), off-diag = −I·coeff); compare <code>Amul</code> with the native <code>lduMatrix::Amul</code> applied component-wise: max abs diff &lt; 1e-6·‖x‖. Run on 1 and 4 ranks; identical results to 1e-6.</li>
+<li><code>Test-blockGAMG</code>: solve the above system to 1e-8; iteration count ≤ 20; identical solution 1 vs 4 ranks to 1e-5.</li>
+<li><code>Test-doubleReduce</code>: sum of 10⁸ values of 1e-4 in float vs double-accumulated; the double result must equal 1e4 to 1e-9 relative; the float result must be visibly wrong (documents why the rule exists).</li>
+</ul>
+<hr>
+<h2>7. Adaptive convergence control</h2>
+<p>All quantities below are logged every iteration (Section 12).</p>
+<h3>7.1 Global CFL strategy (<code>coupled.ptc</code>)</h3>
+<p>Let <code>R_n = ‖r_n‖ / ‖r_1‖</code> be the normalized initial residual of the coupled system at outer iteration n (before the solve), computed as in 6.1 (continuity row scaled).</p>
+<ul>
+<li><code>cflStrategy mRDM</code> (default):
+<code>CFL_{n+1} = min( CFL_max, CFL_n · max(1, min(β_max, (R_{n−1}/R_n)^γ)) )</code> if <code>R_n ≤ R_{n−1}</code>, else <code>CFL_{n+1} = CFL_n</code> (monotone: never decreases from residual stagnation). Defaults: <code>γ = 1</code>, <code>β_max = 1.5</code>.</li>
+<li><code>cflStrategy EXP</code>: <code>CFL_{n+1} = min(CFL_max, CFL_n · β_exp)</code>, default <code>β_exp = 1.1</code>.</li>
+<li><code>cflStrategy SER</code> (available for comparison only): <code>CFL_{n+1} = clamp(CFL_n · R_{n−1}/R_n, CFL_min, CFL_max)</code>.</li>
+<li>Common: <code>CFL_0 = 5</code>, <code>CFL_min = 1</code>, <code>CFL_max = 500</code>. CFL is only <em>decreased</em> by the line search (7.2) or the sentinel (9.3), never by the strategy (except SER).</li>
+<li>After any decrease, a <strong>hold</strong> of <code>nHold = 10</code> iterations applies during which the strategy may not increase CFL.</li>
+</ul>
+<h3>7.2 Physicality line search (<code>coupled.lineSearch</code>)</h3>
+<p>Given increment <code>dx = (dU, dp)</code> from the linear solve:</p>
+<ul>
+<li><code>ω_U = min_P ( 1, f_U · U_ref / max(|dU_P|, VSMALL) )</code></li>
+<li><code>ω_p = min_P ( 1, f_p · p_ref / max(|dp_P|, VSMALL) )</code></li>
+<li><code>ω = min(ω_U, ω_p)</code>, global minimum via <code>returnReduce(..., minOp)</code>.</li>
+<li><code>U_ref</code> = <code>max(|U_inlet|, gMax(|U|))</code> at iteration 1 and frozen; <code>p_ref = ½ U_ref²</code>.</li>
+<li>Defaults: <code>f_U = 0.3</code>, <code>f_p = 0.5</code>, <code>omegaMin = 0.1</code>, <code>kappa = 0.5</code>, <code>maxCflCuts = 3</code> per outer iteration, <code>beta = 1.0</code> (no additional CFL boost on full step; the strategy handles growth).</li>
+<li>If <code>ω &lt; omegaMin</code>: CFL ← CFL·κ, repeat the outer step (assemble again with the same fields but the new Δt). After <code>maxCflCuts</code> cuts: accept the step with ω = omegaMin and mark all cells with <code>|dU_P| &gt; f_U U_ref/omegaMin</code> or <code>|dp_P| &gt; f_p p_ref/omegaMin</code> into the dynamic remediation set (8.2).</li>
+</ul>
+<h3>7.3 Solution-limited local CFL (<code>coupled.localLimit</code>)</h3>
+<p>Estimated local change from the residual: <code>δU_P = |r_P^{mom}| · Δt_P / V_P</code> (r is the momentum residual of the current assembly). If <code>δU_P &gt; f_loc · U_ref</code> (default <code>f_loc = 0.5</code>), cap <code>Δt_P ← Δt_P · f_loc U_ref / δU_P</code> <strong>for this cell only</strong> and record the count <code>nLocalLimited</code>. This keeps the global CFL aggressive while individual cells are throttled.</p>
+<h3>7.4 Start-up</h3>
+<ul>
+<li><code>potentialInit yes</code> (Allrun calls native <code>potentialFoam -writePhi -writep</code> before <code>coupledFoam</code>; the solver reads the resulting <code>U</code>, <code>p</code>, <code>phi</code>).</li>
+<li><code>startupUpwindIters 50</code>: for the first 50 outer iterations <code>β_P = 0</code> (pure upwind) everywhere; then <code>β_P = 1</code> except remediated cells. The switch is also triggered earlier if <code>R_n &lt; 1e-2</code>.</li>
+<li>On restart, the start-up phase is skipped (state carries <code>startupDone = true</code>).</li>
+</ul>
+<hr>
+<h2>8. Remediation cell sets</h2>
+<p>Both sets are <code>labelList</code>s stored as <code>cellSet</code> objects (<code>remediationStatic</code>, <code>remediationDynamic</code>) and are written as a <code>volScalarField remediationFlag</code> (0 none, 1 static, 2 dynamic, 3 both) at every write time.</p>
+<h3>8.1 Static set (mesh quality, built once)</h3>
+<p>Cell is marked if any: non-orthogonality (max over its faces) &gt; <code>nonOrthThreshold</code> (70°), skewness &gt; <code>skewThreshold</code> (4), volume ratio to any neighbour &gt; <code>volRatioThreshold</code> (20), aspect ratio &gt; <code>aspectThreshold</code> (1000). Uses native <code>primitiveMesh::checkFaceOrthogonality/checkFaceSkewness/…</code> per-face results.
+Treatment in static cells: <code>β_P = β_static</code> (default 0.0 = upwind), gradient limiter forced to <code>cellLimited 1</code>, non-orthogonal correction scaled by <code>nonOrthLimiter_static</code> (0.2), local CFL multiplied by <code>cflFactor_static</code> (0.5).</p>
+<h3>8.2 Dynamic set (solution spikes, every iteration)</h3>
+<p>Mark cell P if any of:</p>
+<ul>
+<li><code>|U_P| &gt; c_U · U_ref</code> (default <code>c_U = 2.0</code>)</li>
+<li><code>p_P &lt; −c_p · p_ref</code> or <code>p_P &gt; c_p · p_ref</code> (default <code>c_p = 5.0</code>)</li>
+<li><code>|U_P − Ū_N(P)| &gt; c_spike · U_ref</code>, with <code>Ū_N(P)</code> the arithmetic mean of face-neighbour values (default <code>c_spike = 0.5</code>)</li>
+<li>any non-finite value in <code>U_P, p_P, k_P, ω_P</code>
+Marked cells plus one layer of face neighbours (<code>nLayers 1</code>) receive: <code>β_P = 0</code>, local CFL factor <code>cflFactor_dynamic</code> (0.1), and — only if <code>clipToNeighbourMean yes</code> (default <code>yes</code>) — the <em>increment</em> <code>dU_P</code> is clipped so that <code>|U_P + dU_P − Ū_N(P)| ≤ c_spike U_ref</code> (increment clipping, never overwriting the field).
+<strong>Hysteresis:</strong> a cell leaves the dynamic set after <code>nQuietIters</code> (20) consecutive iterations without re-marking. <strong>Warning:</strong> if <code>size(dynamic ∪ static) &gt; 0.01·nCells</code> a warning is printed every 100 iterations; the run continues.</li>
+</ul>
+<hr>
+<h2>9. FPE safety and robustness</h2>
+<h3>9.1 Build modes</h3>
+<ul>
+<li><strong>Debug/Opt-dev runs</strong> (all tests in Section 13 except benchmarks): <code>FOAM_SIGFPE=true FOAM_SETNAN=true</code>. <code>Foam::sigFpe</code> enables <code>FE_DIVBYZERO|FE_INVALID|FE_OVERFLOW</code>. Any trap = test failure.</li>
+<li><strong>Benchmark runs:</strong> <code>FOAM_SIGFPE=false</code>, plus <code>_MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON)</code> and <code>_MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON)</code> set at solver start when <code>coupled.ftz yes</code> (default yes in Opt). Log the mode.</li>
+</ul>
+<h3>9.2 Guard list (each must exist and be grep-able by the comment tag <code>// GUARD:</code>)</h3>
+<ol>
+<li>Every division by a computed quantity uses <code>stabilise(x, SMALL)</code> or an explicit <code>max(x, VSMALL)</code>; grep <code>/</code> in <code>src/</code> is reviewed at Gate A.</li>
+<li>4×4 inversion pivot guard (6.3).</li>
+<li><code>sqrt</code>, <code>log</code>, <code>pow</code> arguments clamped to <code>≥ 0</code>, <code>≥ VSMALL</code> respectively.</li>
+<li><code>k, ω</code> floors after every <code>correct()</code> (5.8); <code>ν_t</code> capped at <code>nutMax = 1e5·ν</code> (log count if hit).</li>
+<li>All reductions in double (6.0).</li>
+<li><code>normFactor ≥ SMALL</code>; <code>‖r₁‖ ≥ VSMALL</code> before division in <code>R_n</code>.</li>
+<li><code>Δt_P</code> denominator (5.4) <code>≥ VSMALL</code>.</li>
+<li>Line-search denominators (7.2).</li>
+<li>Row scaling <code>s_p</code> (5.3f) <code>≤ 1/VSMALL</code>.</li>
+<li>Conversion <code>scalar → solveScalar</code> at store time: values with <code>|v| &gt; 1e30</code> are clamped to <code>±1e30</code> and counted (<code>nClampedCoeffs</code>); a non-zero count is a warning in the log and a <em>failure</em> in tests T0–T3.</li>
+</ol>
+<h3>9.3 Sentinel and rollback</h3>
+<p>After each field update: one pass computing <code>gMin/gMax</code> of <code>p, |U|, k, ω</code> and <code>nNonFinite</code> (<code>std::isfinite</code>). Fail condition: <code>nNonFinite &gt; 0</code> or <code>gMax(|U|) &gt; 10 U_ref</code> or <code>|p| &gt; 50 p_ref</code>.
+On fail: restore <code>U, p, phi</code> from the previous-iteration copies (which exist anyway for the PTC term; <code>k, ω, ν_t</code> are also copied — extra memory ≈ 3 scalar fields), set <code>CFL ← max(CFL_min, 0.25·CFL)</code>, mark offending cells into the dynamic set, increment <code>nRollbacks</code>. After <code>maxRollbacks</code> (5) consecutive rollbacks: write the last valid fields to time <code>&lt;iter&gt;_lastValid</code>, write <code>remediationFlag</code> and a <code>volScalarField sentinelFlag</code> marking offending cells, print the offending cell centres (max 20), and exit with <code>FatalError</code>. Never write a time directory containing non-finite values.</p>
+<hr>
+<h2>10. Restart</h2>
+<ul>
+<li>On write: standard fields <code>U, p, phi, k, omega, nut</code> (binary, <code>collated</code> file handler recommended in Allrun via <code>-fileHandler collated</code>), plus <code>coupledState</code> (an <code>IOdictionary</code> in the time directory) containing: <code>CFL</code>, <code>iter</code>, <code>startupDone</code>, <code>R_1</code> (initial residual reference), <code>U_ref</code>, <code>p_ref</code>, <code>nHoldRemaining</code>, <code>dynamicSet</code> (labelList), <code>dynamicSetAge</code> (labelList), <code>refinementHistory</code> (empty placeholder for Phase 2 AMR).</li>
+<li>On start: if <code>coupledState</code> exists in <code>startTime</code>, all of the above are restored; else fresh start.</li>
+<li><strong>phi consistency:</strong> on read, <code>phi</code> is recomputed with 5.3(e) from the read <code>U, p</code> using the stored <code>ā_P</code> proxy (<code>D_f</code> reconstructed from the first assembly); the difference <code>‖phi_read − phi_recomputed‖_∞/‖phi‖_∞</code> is logged and must be <code>&lt; 1e-6</code> in test T-restart.</li>
+<li>Atomic write: fields are written to <code>&lt;time&gt;.tmp</code> and renamed (native <code>fileHandler</code> <code>writeObject</code> then <code>mv</code>); implemented in <code>coupledState::write()</code>.</li>
+</ul>
+<hr>
+<h2>11. Dictionary interface (<code>system/fvSolution</code>, subdict <code>coupled</code>) — complete keyword table</h2>
+<table>
+<thead>
+<tr>
+<th>Keyword</th>
+<th>Type</th>
+<th>Default</th>
+<th>Section</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>maxIter</code></td>
+<td>label</td>
+<td>2000</td>
+<td>5.7</td>
+</tr>
+<tr>
+<td><code>potentialInit</code></td>
+<td>bool</td>
+<td>yes</td>
+<td>7.4</td>
+</tr>
+<tr>
+<td><code>startupUpwindIters</code></td>
+<td>label</td>
+<td>50</td>
+<td>7.4</td>
+</tr>
+<tr>
+<td><code>nonOrthLimiter</code></td>
+<td>scalar</td>
+<td>0.5</td>
+<td>5.3</td>
+</tr>
+<tr>
+<td><code>ptc.cflStrategy</code></td>
+<td>word</td>
+<td>mRDM</td>
+<td>7.1</td>
+</tr>
+<tr>
+<td><code>ptc.CFL0 / CFLmin / CFLmax</code></td>
+<td>scalar</td>
+<td>5 / 1 / 500</td>
+<td>7.1</td>
+</tr>
+<tr>
+<td><code>ptc.gamma / betaMax / betaExp / nHold</code></td>
+<td>scalar/label</td>
+<td>1 / 1.5 / 1.1 / 10</td>
+<td>7.1</td>
+</tr>
+<tr>
+<td><code>lineSearch.fU / fp / omegaMin / kappa / maxCflCuts</code></td>
+<td>scalar/label</td>
+<td>0.3 / 0.5 / 0.1 / 0.5 / 3</td>
+<td>7.2</td>
+</tr>
+<tr>
+<td><code>localLimit.enabled / fLoc</code></td>
+<td>bool/scalar</td>
+<td>yes / 0.5</td>
+<td>7.3</td>
+</tr>
+<tr>
+<td><code>remediation.static.enabled</code></td>
+<td>bool</td>
+<td>yes</td>
+<td>8.1</td>
+</tr>
+<tr>
+<td><code>remediation.static.nonOrthThreshold / skewThreshold / volRatioThreshold / aspectThreshold</code></td>
+<td>scalar</td>
+<td>70 / 4 / 20 / 1000</td>
+<td>8.1</td>
+</tr>
+<tr>
+<td><code>remediation.static.beta / nonOrthLimiter / cflFactor</code></td>
+<td>scalar</td>
+<td>0 / 0.2 / 0.5</td>
+<td>8.1</td>
+</tr>
+<tr>
+<td><code>remediation.dynamic.enabled</code></td>
+<td>bool</td>
+<td>yes</td>
+<td>8.2</td>
+</tr>
+<tr>
+<td><code>remediation.dynamic.cU / cp / cSpike / nLayers / nQuietIters / cflFactor / clipToNeighbourMean</code></td>
+<td>—</td>
+<td>2 / 5 / 0.5 / 1 / 20 / 0.1 / yes</td>
+<td>8.2</td>
+</tr>
+<tr>
+<td><code>sentinel.maxRollbacks</code></td>
+<td>label</td>
+<td>5</td>
+<td>9.3</td>
+</tr>
+<tr>
+<td><code>bounds.kMin / omegaMin / nutMaxFactor</code></td>
+<td>scalar</td>
+<td>1e-12 / 1e-6 / 1e5</td>
+<td>5.8, 9.2</td>
+</tr>
+<tr>
+<td><code>convergence.forceCoeffsWindow / forceCoeffsTol / residualTol</code></td>
+<td>label/scalar</td>
+<td>100 / 0.002 / 1e-6</td>
+<td>12.3</td>
+</tr>
+<tr>
+<td><code>ftz</code></td>
+<td>bool</td>
+<td>yes</td>
+<td>9.1</td>
+</tr>
+<tr>
+<td><code>writeState</code></td>
+<td>bool</td>
+<td>yes</td>
+<td>10</td>
+</tr>
+</tbody>
+</table>
+<p>At start-up the solver prints the complete effective dictionary (defaults filled in) under the header <code>coupledFoam: effective settings</code>.</p>
+<hr>
+<h2>12. Logging, diagnostics, convergence</h2>
+<h3>12.1 Per-iteration log line (single line, machine-parseable, prefix <code>CF|</code>)</h3>
+<p><code>CF| iter=&lt;n&gt; CFL=&lt;v&gt; omega=&lt;v&gt; cuts=&lt;n&gt; R=&lt;Rn&gt; rU=&lt;v&gt; rp=&lt;v&gt; linIters=&lt;n&gt; linRes=&lt;v&gt; tAsm=&lt;s&gt; tSolve=&lt;s&gt; tTurb=&lt;s&gt; tIter=&lt;s&gt; nStat=&lt;n&gt; nDyn=&lt;n&gt; nLocLim=&lt;n&gt; nRollback=&lt;n&gt; nClamped=&lt;n&gt;</code>
+<code>rU</code>, <code>rp</code> are the per-block normalized initial residuals; <code>R</code> the combined one used by 7.1.</p>
+<h3>12.2 Once-per-run block</h3>
+<p>Effective settings (11), mesh counts, static set size, GAMG levels/cells/<code>C_op</code>, precision check, FTZ state, peak RSS at end (from <code>/proc/self/status</code> VmHWM, <code>gMax</code> over ranks).</p>
+<h3>12.3 Convergence criterion (solver-internal stop)</h3>
+<p>Stop when both: (i) <code>R_n &lt; residualTol</code>, <strong>or</strong> (ii) with a <code>forceCoeffs</code> function object present: over the last <code>forceCoeffsWindow</code> iterations, <code>max(Cd) − min(Cd) ≤ forceCoeffsTol · |mean(Cd)|</code> and the same for Cl. Criterion (ii) is the one used by the benchmark harness for both solvers (Section 14).</p>
+<hr>
+<h2>13. Test plan</h2>
+<p>All tests are run by <code>pytest tests/</code> from the repository root; each test writes <code>results/tests/&lt;name&gt;.json</code> with the measured quantities and pass/fail. Native reference results are produced with <code>simpleFoam</code> on the identical mesh and schemes, converged to <code>residualTol 1e-8</code> (SIMPLEC, <code>consistent yes</code>, tutorial relaxation factors). Unless stated, tests run on <strong>4 ranks</strong> with <code>scotch</code> decomposition and on <strong>1 rank</strong>; both must pass; single-precision cross-rank tolerance: <code>1e-4</code> relative on all integral quantities.</p>
+<h3>T0 — Lid-driven cavity (laminar), correctness of coupling</h3>
+<ul>
+<li>Mesh: tutorial <code>incompressible/icoFoam/cavity/cavity</code> blockMesh modified to 128×128×1. Re = 100 and 1000 (<code>nu</code> adjusted, U_lid = 1).</li>
+<li>Solver setup: <code>coupledFoam</code>, laminar, schemes <code>linearUpwind grad(U)</code> for div, <code>Gauss linear corrected</code> for laplacian.</li>
+<li>Pass: converge to <code>R &lt; 1e-8</code> within 300 iterations; centreline <code>u(y)</code> and <code>v(x)</code> profiles (sampled with <code>sample</code> at 129 points) vs. <code>simpleFoam</code> reference: <code>L2 relative difference &lt; 1e-3</code>; no FPE trap in the Debug build; <code>nClamped == 0</code>.</li>
+</ul>
+<h3>T1 — pitzDaily (turbulent, SST) — PTC and turbulence coupling</h3>
+<ul>
+<li>Case: <code>incompressible/simpleFoam/pitzDaily</code>, turbulence switched to <code>kOmegaSST</code>, mesh as tutorial (~12 k cells).</li>
+<li>Pass: converged (<code>R &lt; 1e-6</code>) in ≤ 400 iterations; <code>forceCoeffs</code>-style integral check replaced by pressure drop inlet→outlet: within 1 % of <code>simpleFoam</code> reference; CFL ramp reached ≥ 100 without cuts after iteration 100; <code>nRollbacks == 0</code>.</li>
+</ul>
+<h3>T2 — backwardFacingStep2D (SST), reattachment</h3>
+<ul>
+<li>Case: <code>incompressible/simpleFoam/backwardFacingStep2D</code> (if absent in v2606, use <code>pitzDailyExptInlet</code> and skip the reattachment metric).</li>
+<li>Pass: reattachment length (first sign change of wall shear on the lower wall downstream of the step, via <code>wallShearStress</code> FO) within 2 % of <code>simpleFoam</code>; ≥ 2× fewer outer iterations than <code>simpleFoam</code> to <code>R &lt; 1e-5</code>.</li>
+</ul>
+<h3>T3 — airFoil2D (SST and GEKO) — external-aero-like, two models</h3>
+<ul>
+<li>Case: <code>incompressible/simpleFoam/airFoil2D</code>, run twice: <code>kOmegaSST</code> and <code>GEKO</code> (default coefficients).</li>
+<li>Pass: Cl, Cd within 0.5 % of <code>simpleFoam</code> for each model; GEKO run completes with the same solver settings (no per-model tuning); <code>nDyn</code> at convergence == 0.</li>
+</ul>
+<h3>T-restart — exact resume (run on T1 and T3-SST)</h3>
+<ul>
+<li>Run 150 iterations, write; restart from 150 to convergence. Compare with the uninterrupted run: iteration count to convergence identical ±2; final Cd/Cl/Δp identical to <code>1e-5</code> relative; phi-consistency metric (Section 10) <code>&lt; 1e-6</code>.</li>
+</ul>
+<h3>T-fpe — torture test (run on T1)</h3>
+<ul>
+<li>Init <code>U = 0</code> everywhere, <code>potentialInit no</code>, <code>CFL0 200</code>, <code>startupUpwindIters 0</code>.</li>
+<li>Pass in <strong>Debug build with traps</strong>: no trap; run recovers (<code>nRollbacks ≥ 1</code> allowed) and converges to <code>R &lt; 1e-5</code>. Pass in Opt build: identical converged Δp to 1e-4.</li>
+</ul>
+<h3>T4 — motorBike (snappyHexMesh, real bad cells, MRF none)</h3>
+<ul>
+<li>Case: <code>incompressible/simpleFoam/motorBike</code>, two meshes: (a) tutorial refinement (~350 k cells), (b) <strong>refined</strong>: <code>snappyHexMeshDict</code> refinement levels +1 on the <code>motorBike</code> surface and refinement box, target 3–5 M cells; report actual count. 16 ranks.</li>
+<li>Pass: converges by criterion 12.3(ii) with <code>forceCoeffsWindow 100, tol 0.002</code>; Cd within 1 % of <code>simpleFoam</code> on the same mesh; static set ≤ 1 % of cells; <code>nRollbacks == 0</code>; peak RSS recorded.</li>
+</ul>
+<h3>T5 — Ahmed body 25° slant (generated geometry)</h3>
+<ul>
+<li>Geometry: <code>cases/T5_ahmed/geometry/make_ahmed.py</code> generates <code>ahmed25.stl</code> (numpy-stl): length 1044 mm, width 389 mm, height 288 mm, front edges rounded R = 100 mm (both vertical and horizontal front edges), rear slant length 222 mm at 25°, ground clearance 50 mm, <strong>no stilts</strong>. Domain: inlet 3 L upstream, outlet 7 L downstream, half-width 2 W (symmetry plane at y = 0, half model), height 5 H. Ground: moving-wall <code>fixedValue</code> U = U_inf. U_inf = 40 m/s, ν = 1.5e-5. Turbulence: SST, <code>nutkWallFunction</code>, y⁺ target 30–100 (layers: 5, expansion 1.2).</li>
+<li>Mesh: <code>snappyHexMesh</code>, target 5–8 M cells (half model); report actual.</li>
+<li>Pass: converged by 12.3(ii); Cd within 1 % of <code>simpleFoam</code> on the same mesh; both within ±10 % of the experimental value 0.285 (Ahmed et al. 1984) — the experimental comparison is informational, the solver-to-solver one is the pass criterion; <code>nRollbacks == 0</code>; peak RSS recorded.</li>
+</ul>
+<h3>T-scaling — strong scaling (on T4b)</h3>
+<ul>
+<li>Ranks 1, 2, 4, 8, 16, 300 iterations each, both solvers. Record time/iteration. Pass: parallel efficiency of <code>coupledFoam</code> at 16 ranks ≥ 80 % of <code>simpleFoam</code>'s efficiency at 16 ranks (i.e. the coupled solver must not scale worse than native).</li>
+</ul>
+<hr>
+<h2>14. Benchmark protocol (<code>bench/run_bench.py</code>)</h2>
+<p>For each case in {T1, T2, T3-SST, T3-GEKO, T4a, T4b, T5}:</p>
+<ol>
+<li>Identical mesh, decomposition (<code>scotch</code>), schemes (<code>linearUpwind grad(U)</code>, <code>Gauss linear corrected</code>), turbulence model and BCs for all solvers.</li>
+<li>Solvers compared: (A) <code>simpleFoam</code> with tutorial settings (SIMPLE, p: GAMG, U/k/ω: smoothSolver); (B) <code>simpleFoam</code> SIMPLEC (<code>consistent yes</code>, relaxation p 1.0 / U 0.9 / k,ω 0.9) — the tuned native baseline; (C) <code>coupledFoam</code> defaults; (D) <code>coupledFoam</code> with <code>preconditioner blockDiagonal</code> (isolates the AMG benefit).</li>
+<li>Each configuration is run <strong>3 times</strong>; report median and min/max. Every rank is wrapped by <code>bench/rank_wrapper.sh</code> (<code>/usr/bin/time -v</code>) → per-rank max RSS, summed and max.</li>
+<li>Stop criterion for all solvers: 12.3(ii) with window 100 and tol 0.002 evaluated by the harness on the <code>forceCoeffs</code> (or <code>Δp</code> for T1/T2) history — the solvers' own criteria are disabled (<code>maxIter</code> large) so the harness decides identically.</li>
+<li>Metrics per run: <code>iters_to_conv</code>, <code>wall_to_conv_s</code>, <code>time_per_iter_s</code>, <code>t_assembly</code>, <code>t_linsolve</code>, <code>t_turb</code> (from <code>CF|</code> lines; for <code>simpleFoam</code> from <code>-profiling</code> or wall/iter only), <code>peakRSS_GB_sum</code>, <code>peakRSS_GB_max_rank</code>, <code>Cd_final</code>, <code>Cl_final</code>, <code>speedup = wall_B / wall_C</code>.</li>
+<li>Output: <code>results/bench/&lt;case&gt;_&lt;solver&gt;_&lt;run&gt;.json</code> and a consolidated <code>results/bench/summary.csv</code>.</li>
+</ol>
+<hr>
+<h2>15. Report specification (<code>bench/make_report.py</code> → <code>report/REPORT.md</code>, English)</h2>
+<p>Sections, in this order, all generated from <code>results/</code>:</p>
+<ol>
+<li><strong>Executive summary</strong> — one table: case, cells, ranks, native-best wall-clock, coupled wall-clock, speedup, memory ratio, Cd agreement.</li>
+<li><strong>Method</strong> — 1 page: block coupling, PTC, block-GAMG, remediation, precision (link to this spec).</li>
+<li><strong>Correctness</strong> — T0 profile plots (coupled vs native), T3 Cl/Cd table, T5 Cd vs experiment.</li>
+<li><strong>Convergence behaviour</strong> — per case: residual vs iteration (both solvers), Cd vs iteration with the convergence window marked, CFL history and ω history of the coupled solver.</li>
+<li><strong>Performance</strong> — bar charts of wall-clock to convergence (A/B/C/D), time/iteration breakdown (assembly / linear solve / turbulence), strong-scaling plot (T-scaling), memory bar chart with the Section 1 budget line.</li>
+<li><strong>Robustness</strong> — T-fpe outcome, remediation set sizes over iterations for T4/T5, rollback counts.</li>
+<li><strong>Linear solver</strong> — block-GAMG levels, <code>C_op</code>, Krylov iterations per outer iteration; blockDiagonal vs blockGAMG comparison.</li>
+<li><strong>Limitations and Phase 2</strong> — explicit list from <code>DECISIONS.md</code>.</li>
+<li><strong>Reproduction</strong> — exact commands and commit hash.
+Figures: PNG, 150 dpi, <code>report/figures/</code>, matplotlib, consistent colours (native = grey, coupled = blue).</li>
+</ol>
+<hr>
+<h2>16. Implementation phases and gates</h2>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Content</th>
+<th>Gate (all mandatory)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>0</strong></td>
+<td>Toolchain: two OpenFOAM v2606 SPDP builds (Opt, Debug), <code>Test-precision</code>, repo skeleton, CI script <code>Allrun-tests.sh</code></td>
+<td><code>sizeof(solveScalar)==4</code>; <code>simpleFoam</code> pitzDaily tutorial runs in both builds; <code>pytest tests/test_env.py</code> green</td>
+</tr>
+<tr>
+<td><strong>A</strong></td>
+<td><code>blockMatrix</code>, <code>block4Ops</code>, <code>doubleReduce</code>, block interfaces, <code>blockBiCGStab</code>, <code>blockDiagonal</code> precon; unit tests 6.4</td>
+<td><code>Test-block4Ops</code>, <code>Test-blockMatrix</code>, <code>Test-doubleReduce</code> green on 1 and 4 ranks; guard review (9.2 item 1) recorded in <code>results/gates/phase_A.json</code></td>
+</tr>
+<tr>
+<td><strong>B1</strong></td>
+<td>Assembly 5.3 (no MRF), BCs 5.5 (fixedValue/zeroGradient/slip/outlet), flux update, outer loop 5.7 with fixed CFL, sentinel 9.3, turbulence 5.8</td>
+<td>T0 green (both Re), T1 green with fixed CFL 20; Debug-build no traps</td>
+</tr>
+<tr>
+<td><strong>B2</strong></td>
+<td><code>blockGAMG</code> (GS smoother), <code>C_op</code> cap, optional ILU0 with decision</td>
+<td><code>Test-blockGAMG</code> green; T1 wall-clock with blockGAMG &lt; 0.5× blockDiagonal; ILU0 decision in <code>DECISIONS.md</code></td>
+</tr>
+<tr>
+<td><strong>C</strong></td>
+<td>PTC 5.4, CFL strategies 7.1, line search 7.2, local limit 7.3, start-up 7.4</td>
+<td>T1, T2 green incl. CFL criteria; T-fpe green</td>
+</tr>
+<tr>
+<td><strong>D</strong></td>
+<td>Remediation 8, restart 10, <code>coupledState</code>, MRF 5.6, inletOutlet/totalPressure BCs</td>
+<td>T3 (SST+GEKO), T-restart green; T4a green</td>
+</tr>
+<tr>
+<td><strong>E</strong></td>
+<td>T4b, T5 geometry + meshing + runs, T-scaling, benchmark harness, report</td>
+<td>T4b, T5, T-scaling green; <code>report/REPORT.md</code> generated with all figures; every number in the executive summary traceable to a JSON</td>
+</tr>
+</tbody>
+</table>
+<p>Estimated effort ordering (largest first): B2, B1, C, D, E, A. If time-boxed, <strong>E is never cut</strong> — a smaller T5 mesh is acceptable (minimum 2 M cells) but the report must exist.</p>
+<hr>
+<h2>17. Phase 2 (not part of the one-shot; design constraints already honoured)</h2>
+<ul>
+<li><strong>SAMG</strong> (Uroić/Jasak): selective coarsening on the p–p block, ILUC0 smoother; plug-in as another <code>blockSolver</code> preconditioner.</li>
+<li><strong>AMR</strong>: <code>dynamicRefineFvMesh</code>, hex-only, protection layers, refinement every 200–500 iterations, <code>fvMeshDistribute</code> rebalancing, memory guard; <code>coupledState.refinementHistory</code> already reserved.</li>
+<li><strong>petsc4Foam</strong> FieldSplit reference (single-precision PETSc).</li>
+<li><strong>Implicit cyclic/AMI coupling</strong> in the block matrix.</li>
+<li>45 M-cell production run: user acceptance step with the memory budget of v1 (100–115 GB) verified via peak RSS.</li>
+</ul>
+<hr>
+<h2>18. References</h2>
+<ul>
+<li>Darwish M., Sraj I., Moukalled F., <em>A coupled incompressible flow solver on structured grids</em>, Numer. Heat Transfer B 52 (2007).</li>
+<li>Mangani L., Buchmayr M., Darwish M., <em>Development of a Novel Fully Coupled Solver in OpenFOAM: Steady-State Incompressible Turbulent Flows</em>, Numer. Heat Transfer B 66 (2014); <em>… in Rotational Reference Frames</em> (2014); <em>A fully coupled OpenFOAM solver for transient incompressible turbulent flows in ALE formulation</em> (2017) — implicit boundary treatment.</li>
+<li>Uroić T., Jasak H., <em>Block-selective algebraic multigrid for implicitly coupled pressure-velocity system</em>, Comput. Fluids (2018); <em>Parallelisation of selective algebraic multigrid for block–pressure–velocity system in OpenFOAM</em>, Comput. Phys. Commun. (2020).</li>
+<li>Oliani S., Carnevale M. et al., <em>ICSFoam: An OpenFOAM library for implicit coupled simulations of high-speed flows</em>, Comput. Phys. Commun. (2023); GPU follow-up arXiv:2403.07882 (2024).</li>
+<li>Ceze M., Fidkowski K., <em>A Robust Adaptive Solution Strategy for High-Order Implicit CFD Solvers</em>, AIAA 2011-3696; <em>Pseudo-transient Continuation, Solution Update Methods, and CFL Strategies for DG Discretizations of the RANS-SA Equations</em>, AIAA 2013 — SER/EXP/RDM/mRDM, physicality line search.</li>
+<li>Kelley C.T., Keyes D.E., <em>Convergence analysis of pseudo-transient continuation</em>, SIAM J. Numer. Anal. (1998).</li>
+<li><em>Solution-limited time stepping to enhance reliability in CFD applications</em>, J. Comput. Phys. 228 (2009).</li>
+<li>Clain S., Diot S., Loubère R., <em>A high-order finite volume method for systems of conservation laws — Multi-dimensional Optimal Order Detection (MOOD)</em>, J. Comput. Phys. (2011).</li>
+<li>Saad Y., <em>Iterative Methods for Sparse Linear Systems</em>, 2nd ed., SIAM (2003).</li>
+<li>Ahmed S.R., Ramm G., Faltin G., <em>Some salient features of the time-averaged ground vehicle wake</em>, SAE 840300 (1984).</li>
+<li>OpenFOAM v2606 release notes: GEKO (Menter &amp; Matyushenko 2025), AMI cache restart.</li>
+</ul>
+
+</body></html>
