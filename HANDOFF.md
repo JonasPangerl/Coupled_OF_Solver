@@ -139,6 +139,9 @@ Correctness-critical, worth a careful independent read:
 - Everything in git in English; final English LaTeX paper with vector
   figures, regenerable from `results/`. The paper is delivered as a
   compiled PDF, with intermediate PDF builds so the user can inspect
-  drafts (LaTeX is installed).
+  drafts (LaTeX is installed). TWO versions from the same generated
+  numbers/figures (D-032): paper.pdf (professional) and
+  paper_tutorial.pdf (plain-language, for a reader without CFD
+  background - the user wants to learn from it).
 - Parallel subagents are welcome to speed up work (give them exclusive
   files; the lead integrates, builds and commits).

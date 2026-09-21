@@ -435,3 +435,23 @@ pre-existing, tracked in HANDOFF 4.1, unrelated to 6.3.4.
 - The paper is delivered as a compiled PDF (LaTeX installed 2026-09-21:
   pdflatex, latexmk, bison present), with intermediate PDF builds during
   the work so the user can inspect drafts.
+
+## D-032 - Two paper versions: professional and tutorial (user, 2026-09-21)
+
+The user wants TWO final PDFs built from the same results/ data and the
+same generated figures/tables (bench/make_report.py):
+
+1. `report/paper/paper.pdf` - the professional paper as before.
+2. `report/paper/paper_tutorial.pdf` - a tutorial version for readers
+   without a CFD background ("for dummies", the user\x27s words): same
+   structure and numbers, but every concept explained in plain language
+   (what a coupled vs segregated solver is, why pressure-velocity
+   coupling is hard, what multigrid/preconditioning/CFL/pseudo-time
+   stepping do, what the test cases show and why the reader should
+   care), with intuition boxes around the equations rather than more
+   equations. The user wants to learn from it and understand what was
+   done and why.
+
+Both share numbers.tex, figures/ and tables/ so neither can drift from
+the measured data; the Makefile builds both. Intermediate PDF builds of
+both are delivered to the user during the work (D-031).
