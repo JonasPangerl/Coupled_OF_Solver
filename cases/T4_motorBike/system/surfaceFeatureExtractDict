@@ -1,0 +1,28 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T4 - motorBike: feature edges (tutorial settings).
+  v2606: surfaceFeatureExtract, not surfaceFeatures.
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      surfaceFeatureExtractDict;
+}
+
+motorBike.obj
+{
+    extractionMethod    extractFromSurface;
+
+    includedAngle       150;
+
+    subsetFeatures
+    {
+        nonManifoldEdges    no;
+        openEdges           yes;
+    }
+
+    writeObj            no;
+}
+
+// ************************************************************************* //

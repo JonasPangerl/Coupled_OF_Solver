@@ -1,0 +1,16 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T5 - Ahmed body 25 deg: mesh quality (tutorial settings)
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      meshQualityDict;
+}
+
+#includeEtc "caseDicts/meshQualityDict"
+
+minFaceWeight 0.02;
+
+// ************************************************************************* //

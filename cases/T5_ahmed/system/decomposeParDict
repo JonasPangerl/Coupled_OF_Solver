@@ -1,0 +1,16 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  numberOfSubdomains is set by Allrun (-np, default 16)
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      decomposeParDict;
+}
+
+numberOfSubdomains  16;
+
+method              scotch;
+
+// ************************************************************************* //

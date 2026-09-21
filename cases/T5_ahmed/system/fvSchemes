@@ -1,0 +1,60 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T5 - Ahmed body 25 deg
+  Identical schemes for coupledFoam and the simpleFoam reference (spec 14):
+  linearUpwind grad(U), Gauss linear corrected. grad(U) cellLimited and the
+  upwind turbulence convection are taken from the motorBike tutorial (T4).
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSchemes;
+}
+
+ddtSchemes
+{
+    default         steadyState;
+}
+
+gradSchemes
+{
+    default         Gauss linear;
+    grad(U)         cellLimited Gauss linear 1;
+}
+
+divSchemes
+{
+    default         none;
+
+    div(phi,U)          bounded Gauss linearUpwind grad(U);
+    div(phi,U)_upwind   bounded Gauss upwind;
+
+    turbulence      bounded Gauss upwind;
+    div(phi,k)      $turbulence;
+    div(phi,omega)  $turbulence;
+
+    div((nuEff*dev2(T(grad(U)))))   Gauss linear;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+    default         corrected;
+}
+
+wallDist
+{
+    method          meshWave;
+}
+
+// ************************************************************************* //

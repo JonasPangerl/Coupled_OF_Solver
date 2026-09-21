@@ -1,0 +1,12 @@
+// Relaxation for the simpleFoam reference: motorBike tutorial values, reused for T5
+// (SIMPLEC, consistent yes: p not relaxed, U 0.9, k and omega 0.7)
+
+relaxationFactors
+{
+    equations
+    {
+        U               0.9;
+        k               0.7;
+        omega           0.7;
+    }
+}

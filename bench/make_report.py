@@ -46,12 +46,16 @@ C_NATIVE = "#7f7f7f"
 C_NATIVE2 = "#b0b0b0"
 C_COUPLED = "#1f5fbf"
 C_COUPLED2 = "#7fa6e0"
-CONFIG_COLOR = {"A": C_NATIVE2, "B": C_NATIVE, "C": C_COUPLED, "D": C_COUPLED2}
+CONFIG_COLOR = {"A": C_NATIVE2, "B": C_NATIVE, "C": C_COUPLED, "D": C_COUPLED2,
+                "E": "#6baed6", "F": "#08306b", "G": "#d95f02"}
 CONFIG_LABEL = {
     "A": "simpleFoam (tutorial)",
     "B": "simpleFoam SIMPLEC",
     "C": "coupledFoam",
     "D": "coupledFoam, blockDiagonal",
+    "E": "coupledFoam, V-cycle",
+    "F": "coupledFoam, fixed relTol",
+    "G": "coupledFoam, Anderson",
 }
 
 plt.rcParams.update({
@@ -221,7 +225,7 @@ def fig_bench(bench: dict) -> str:
         notes.append("benchmark: no results yet")
         return ""
     cases = sorted({d["case"] for d in rows})
-    cfgs = [c for c in "ABCD" if any(d["config"] == c for d in rows)]
+    cfgs = [c for c in "ABCDEFG" if any(d["config"] == c for d in rows)]
 
     def med(c, cfg, key):
         v = [d.get(key) for d in rows
@@ -327,6 +331,183 @@ def tests_table(tests: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# amendment B (15.7) and remaining paper items
+# --------------------------------------------------------------------------- #
+
+def fig_eta_rho(tests: dict) -> None:
+    """Eisenstat-Walker eta and preconditioner rho histories (15.7)."""
+    cand = [(n, d) for n, d in tests.items()
+            if d.get("history", {}).get("eta")]
+    if not cand:
+        notes.append("eta/rho history: no data")
+        return
+    fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.6))
+    for name, d in sorted(cand)[:4]:
+        h = d["history"]
+        it = np.arange(1, len(h["eta"]) + 1)
+        ax[0].semilogy(it, h["eta"], lw=0.9, label=name)
+        rho = [r if (r is not None and r >= 0) else np.nan for r in h.get("rho", [])]
+        if rho:
+            ax[1].plot(np.arange(1, len(rho) + 1), rho, lw=0.9, label=name)
+        for ev in d.get("gamgTuneEvents") or []:
+            ax[1].axvline(ev.get("iter", 0), color="k", lw=0.5, ls=":")
+    ax[0].set_xlabel("iteration")
+    ax[0].set_ylabel(r"$\eta_n$")
+    ax[1].set_xlabel("iteration")
+    ax[1].set_ylabel(r"$\rho$ (first preconditioner application)")
+    ax[0].legend(fontsize=6)
+    save(fig, "eta_rho_history",
+         "Eisenstat-Walker forcing term and preconditioner efficiency; "
+         "dotted lines: autoTune events.")
+
+
+def fig_cycles(tests: dict) -> None:
+    d = tests.get("Test-blockGAMG_cycles")
+    if not d:
+        notes.append("cycle comparison: no Test-blockGAMG_cycles result")
+        return
+    per = d.get("cycles") or d.get("perCycle") or {}
+    if isinstance(per, list):
+        per = {x.get("cycleType"): x for x in per}
+    names = [c for c in ("V", "F", "W", "K") if c in per]
+    if not names:
+        notes.append("cycle comparison: unexpected JSON layout")
+        return
+    its = [per[c].get("nIterations") or 0 for c in names]
+    wall = [per[c].get("wallSeconds") or per[c].get("solveWallSeconds") or 0
+            for c in names]
+    fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.4))
+    ax[0].bar(names, its, color=C_COUPLED)
+    ax[0].set_ylabel("Krylov iterations")
+    ax[1].bar(names, wall, color=C_COUPLED2)
+    ax[1].set_ylabel("solve wall time [s]")
+    save(fig, "cycle_comparison",
+         "Block-GAMG cycle types on the block-Poisson system (T0 mesh).")
+
+
+def fig_anderson(bench: dict) -> None:
+    rows = [d for d in bench.values() if d.get("config") in ("C", "G")]
+    cases = sorted({d["case"] for d in rows})
+    if not rows or not any(d["config"] == "G" for d in rows):
+        notes.append("Anderson comparison: no configuration G results")
+        return
+
+    def med(c, cfg, key):
+        v = [d.get(key) for d in rows
+             if d["case"] == c and d["config"] == cfg and d.get(key)]
+        return float(np.median(v)) if v else 0.0
+
+    fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.4))
+    x = np.arange(len(cases))
+    for j, (cfg, col, lab) in enumerate((("C", C_COUPLED, "Anderson off"),
+                                         ("G", "#d95f02", "Anderson on"))):
+        ax[0].bar(x + 0.4 * j, [med(c, cfg, "iters_to_conv") for c in cases],
+                  0.4, color=col, label=lab)
+        ax[1].bar(x + 0.4 * j, [med(c, cfg, "wall_to_conv_s") for c in cases],
+                  0.4, color=col, label=lab)
+    for a in ax:
+        a.set_xticks(x + 0.2)
+        a.set_xticklabels(cases)
+    ax[0].set_ylabel("iterations to convergence")
+    ax[1].set_ylabel("wall time to convergence [s]")
+    ax[0].legend(fontsize=7)
+    save(fig, "anderson", "Anderson acceleration on and off (15.7).")
+
+
+def fig_scaling(tests: dict) -> None:
+    d = next((v for k, v in tests.items() if k.startswith("T-scaling")), None)
+    pts = (d or {}).get("points") or (d or {}).get("scaling")
+    if not pts:
+        notes.append("strong scaling: no T-scaling result")
+        return
+    fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.6))
+    for solver, col in (("simpleFoam", C_NATIVE), ("coupledFoam", C_COUPLED)):
+        p = sorted((q for q in pts if q.get("solver") == solver),
+                   key=lambda q: q["nProcs"])
+        if not p:
+            continue
+        n = np.array([q["nProcs"] for q in p], dtype=float)
+        t = np.array([q["timePerIter"] for q in p], dtype=float)
+        ax[0].loglog(n, t, "o-", color=col, label=solver)
+        eff = t[0] * n[0] / (t * n)
+        ax[1].plot(n, eff, "o-", color=col, label=solver)
+    ax[0].set_xlabel("ranks")
+    ax[0].set_ylabel("time per iteration [s]")
+    ax[1].set_xlabel("ranks")
+    ax[1].set_ylabel("parallel efficiency")
+    ax[0].legend(fontsize=7)
+    save(fig, "scaling", "Strong scaling (T-scaling on T4b).")
+
+
+def fig_remediation(tests: dict) -> None:
+    cand = [(n, d) for n, d in tests.items()
+            if d.get("history", {}).get("nDyn")
+            and n.startswith(("T4", "T5", "T-fpe", "T1", "T3"))]
+    if not cand:
+        notes.append("remediation history: no data")
+        return
+    fig, ax = plt.subplots(figsize=(6.5, 2.4))
+    for name, d in sorted(cand)[:5]:
+        nd = d["history"]["nDyn"]
+        ax.plot(np.arange(1, len(nd) + 1), nd, lw=0.9, label=name)
+    ax.set_xlabel("iteration")
+    ax.set_ylabel("cells in the dynamic set")
+    ax.legend(fontsize=6)
+    save(fig, "remediation_history", "Dynamic remediation set size.")
+
+
+def table_validation(tests: dict) -> str:
+    header = ["case", "quantity", "coupledFoam", "simpleFoam", "rel. diff.",
+              "tolerance", "pass"]
+    rows = []
+    specs = [
+        ("T1_np1", "dp", "dp", "dpRef", "dpRelDiff", "tolDp"),
+        ("T2_np1", "x_r/h", "xr_over_h", "xrRef_over_h", "xrRelDiff", "tolXr"),
+        ("T3_kOmegaSST_np1", "Cd", "Cd", "CdRef", "CdRelDiff", "tol"),
+        ("T3_kOmegaSST_np1", "Cl", "Cl", "ClRef", "ClRelDiff", "tol"),
+        ("T3_GEKO_np1", "Cd", "Cd", "CdRef", "CdRelDiff", "tol"),
+        ("T3_GEKO_np1", "Cl", "Cl", "ClRef", "ClRelDiff", "tol"),
+    ]
+    for name, q, kc, kr, kd, kt in specs:
+        d = tests.get(name)
+        if not d:
+            continue
+        rows.append([name, q, fmt(d.get(kc), "{:.5g}"), fmt(d.get(kr), "{:.5g}"),
+                     fmt(d.get(kd), "{:.2e}"), fmt(d.get(kt), "{:.3g}"),
+                     "yes" if d.get("pass") else "NO"])
+    for name in sorted(tests):
+        if name.startswith(("T4", "T5")) and "Cd" in tests[name]:
+            d = tests[name]
+            rows.append([name, "Cd", fmt(d.get("Cd"), "{:.5g}"),
+                         fmt(d.get("CdRef"), "{:.5g}"),
+                         fmt(d.get("CdRelDiff"), "{:.2e}"), "0.01",
+                         "yes" if d.get("pass") else "NO"])
+    if not rows:
+        notes.append("validation table: no T1-T5 results")
+        return ""
+    return write_table("validation", header, rows,
+                       "Validation: integral quantities, coupledFoam vs. "
+                       "simpleFoam on identical meshes and schemes.",
+                       "tab:validation")
+
+
+def table_gamg_levels(tests: dict) -> str:
+    header = ["run", "levels", "mergeLevels", "C_op", "cells per level"]
+    rows = []
+    for name, d in sorted(tests.items()):
+        g = d.get("gamg") or {}
+        if g.get("gamgLevels"):
+            rows.append([name, g.get("gamgLevels"), g.get("gamgMergeLevels"),
+                         fmt(g.get("gamgCop"), "{:.3f}"),
+                         " ".join(str(c) for c in (g.get("gamgCellsPerLevel") or []))])
+    if not rows:
+        notes.append("GAMG level table: no data")
+        return ""
+    return write_table("gamg_levels", header, rows,
+                       "Block-GAMG hierarchy per run.", "tab:gamglevels")
+
+
+# --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
 
@@ -338,6 +519,13 @@ def main() -> int:
     fig_histories(tests)
     summary_md = fig_bench(bench)
     tests_md = tests_table(tests)
+    fig_eta_rho(tests)
+    fig_cycles(tests)
+    fig_anderson(bench)
+    fig_scaling(tests)
+    fig_remediation(tests)
+    validation_md = table_validation(tests)
+    levels_md = table_gamg_levels(tests)
 
     t0 = tests.get("T0_Re100_np1", {})
     num("T0 Re100 iterations", t0.get("iterations"), "{}")
@@ -376,6 +564,12 @@ def main() -> int:
         "## Correctness and tests",
         "",
         tests_md or "_No test results yet._",
+        "",
+        validation_md or "",
+        "",
+        "## Linear solver",
+        "",
+        levels_md or "_No block-GAMG statistics yet._",
         "",
         "## Figures",
         "",

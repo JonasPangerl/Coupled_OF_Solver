@@ -1,0 +1,102 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T5 - Ahmed body 25 deg, half model (spec 13)
+  Body: nose at x = 0, x in [0, L], y in [0, W/2], z in [0.05, 0.338]
+  (L = 1.044, W = 0.389, H = 0.288).
+  Domain: inlet 3 L upstream of the nose (x = -3.132), outlet 7 L downstream
+  of the rear (x = 8.352), half-width 2 W (y in [0, 0.778], symmetry plane
+  y = 0), height 5 H (z in [0, 1.44]).
+  Background cells ~0.08 m: 144 x 10 x 18.
+  Patch ymin has type symmetry and no entry in 0.orig (setConstraintTypes);
+  its name must not collide with a constraint type name (AGENTS.md).
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      blockMeshDict;
+}
+
+scale   1;
+
+xMin   -3.132;
+xMax    8.352;
+yMin    0;
+yMax    0.778;
+zMin    0;
+zMax    1.44;
+
+vertices
+(
+    ($xMin $yMin $zMin)
+    ($xMax $yMin $zMin)
+    ($xMax $yMax $zMin)
+    ($xMin $yMax $zMin)
+    ($xMin $yMin $zMax)
+    ($xMax $yMin $zMax)
+    ($xMax $yMax $zMax)
+    ($xMin $yMax $zMax)
+);
+
+blocks
+(
+    hex (0 1 2 3 4 5 6 7) (144 10 18) simpleGrading (1 1 1)
+);
+
+edges
+(
+);
+
+boundary
+(
+    inlet
+    {
+        type patch;
+        faces
+        (
+            (0 4 7 3)
+        );
+    }
+    outlet
+    {
+        type patch;
+        faces
+        (
+            (2 6 5 1)
+        );
+    }
+    ground
+    {
+        type wall;
+        faces
+        (
+            (0 3 2 1)
+        );
+    }
+    top
+    {
+        type patch;
+        faces
+        (
+            (4 5 6 7)
+        );
+    }
+    side
+    {
+        type patch;
+        faces
+        (
+            (3 7 6 2)
+        );
+    }
+    ymin
+    {
+        type symmetry;
+        faces
+        (
+            (1 5 4 0)
+        );
+    }
+);
+
+// ************************************************************************* //

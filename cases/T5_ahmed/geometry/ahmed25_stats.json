@@ -1,0 +1,44 @@
+{
+  "file": "ahmed25.stl",
+  "solid": "ahmed",
+  "units": "m",
+  "length": 1.044,
+  "width": 0.389,
+  "height": 0.288,
+  "frontRadius": 0.1,
+  "slantLength": 0.222,
+  "slantAngleDeg": 25.0,
+  "groundClearance": 0.05,
+  "slantStartX": 0.8427996712778638,
+  "slantDrop": 0.09382125410643528,
+  "halfModel": true,
+  "surfaceYmin": -0.005,
+  "bounds": {
+    "min": [
+      0.0,
+      -0.005,
+      0.05
+    ],
+    "max": [
+      1.044,
+      0.1945,
+      0.33799999999999997
+    ]
+  },
+  "nTriangles": 588,
+  "nStations": 74,
+  "watertight": true,
+  "edges": 882,
+  "eulerCharacteristic": 2,
+  "frontalAreaHalf": 0.056015999999999996,
+  "frontalAreaFull": 0.11203199999999999,
+  "volumeHalf": 0.05538083463241208,
+  "volumeFull": 0.11076166926482416,
+  "wettedAreaHalf": 0.7632607445750621,
+  "centre": [
+    0.522,
+    0.0,
+    0.194
+  ],
+  "surfaceVolumeWritten": 0.05681548621956992
+}

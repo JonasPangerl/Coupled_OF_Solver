@@ -64,7 +64,11 @@ def coupled(template: str, name: str, args: list[str],
         "timingAllrun": timing,
         "history": {k: [r.get(k) for r in rows]
                     for k in ("R", "CFL", "omega", "cuts", "linIters",
-                              "tIter", "nDyn", "nLocLim")},
+                              "tIter", "tWall", "nDyn", "nLocLim", "eta",
+                              "rho", "aa")},
+        "gamgTuneEvents": summ.get("gamgTuneEvents"),
+        "gamg": {k: summ.get(k) for k in ("gamgLevels", "gamgMergeLevels",
+                                          "gamgCop", "gamgCellsPerLevel")},
         "args": args,
     }
     return case, rec

@@ -1,0 +1,196 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T5 - Ahmed body 25 deg, half model (spec 13)
+
+  Background cells ~0.08 m; level n = 0.08 / 2^n m:
+    level 1 0.04, 2 0.02, 3 0.01, 4 0.005, 5 0.0025
+  Body surface level (4 5), feature edges 5, five nested boxes.
+  Mesh variants (Allrun -mesh, box levels set with foamDictionary):
+    fine    boxes 1 2 3 4 5   target 5-8 M cells              [default]
+    coarse  boxes 1 2 2 3 4   ~1-2 M cells (development mesh)
+  The values below are those of variant fine.
+
+  Layers: 5 on the body, expansion 1.2, final layer 0.5 of the local cell
+  size -> first layer 0.24 of the cell: 1.2 mm at level 4, 0.6 mm at level 5,
+  i.e. y+ ~ 60 and ~ 30 at the first cell centre (u_tau ~ 1.5 m/s).
+
+  The STL reaches 5 mm through the symmetry plane (make_ahmed.py) and is cut
+  at y = 0 by the domain boundary; body patch(es) ahmed*, group bodyGroup.
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      snappyHexMeshDict;
+}
+
+castellatedMesh true;
+snap            true;
+addLayers       true;
+
+geometry
+{
+    ahmed25.stl
+    {
+        type triSurfaceMesh;
+        name ahmed;
+    }
+
+    box1
+    {
+        type box;
+        min  (-1.0  -0.1 -0.1);
+        max  ( 6.0   0.70 1.0);
+    }
+    box2
+    {
+        type box;
+        min  (-0.6  -0.1 -0.1);
+        max  ( 4.5   0.55 0.75);
+    }
+    box3
+    {
+        type box;
+        min  (-0.25 -0.1 -0.1);
+        max  ( 2.8   0.36 0.55);
+    }
+    box4
+    {
+        type box;
+        min  (-0.1  -0.1 -0.1);
+        max  ( 1.8   0.27 0.44);
+    }
+    // Rear slant, base and near wake
+    box5
+    {
+        type box;
+        min  ( 0.75 -0.1  0.03);
+        max  ( 1.45  0.22 0.37);
+    }
+}
+
+castellatedMeshControls
+{
+    maxLocalCells           2000000;
+    maxGlobalCells          30000000;
+    minRefinementCells      10;
+    maxLoadUnbalance        0.20;
+    nCellsBetweenLevels     3;
+
+    features
+    (
+        {
+            file "ahmed25.eMesh";
+            level 5;
+        }
+    );
+
+    refinementSurfaces
+    {
+        ahmed
+        {
+            level (4 5);
+
+            patchInfo
+            {
+                type wall;
+                inGroups (bodyGroup);
+            }
+        }
+    }
+
+    resolveFeatureAngle 30;
+
+    refinementRegions
+    {
+        box1
+        {
+            mode inside;
+            levels ((1e15 1));
+        }
+        box2
+        {
+            mode inside;
+            levels ((1e15 2));
+        }
+        box3
+        {
+            mode inside;
+            levels ((1e15 3));
+        }
+        box4
+        {
+            mode inside;
+            levels ((1e15 4));
+        }
+        box5
+        {
+            mode inside;
+            levels ((1e15 5));
+        }
+    }
+
+    locationInMesh (-2.01234 0.41234 0.81234);
+
+    allowFreeStandingZoneFaces true;
+}
+
+snapControls
+{
+    nSmoothPatch            3;
+    tolerance               2.0;
+    nSolveIter              30;
+    nRelaxIter              5;
+    nFeatureSnapIter        10;
+    implicitFeatureSnap     false;
+    explicitFeatureSnap     true;
+    multiRegionFeatureSnap  false;
+}
+
+addLayersControls
+{
+    relativeSizes           true;
+
+    layers
+    {
+        "ahmed.*"
+        {
+            nSurfaceLayers 5;
+        }
+    }
+
+    expansionRatio          1.2;
+    finalLayerThickness     0.5;
+    minThickness            0.1;
+    nGrow                   0;
+    featureAngle            120;
+    slipFeatureAngle        30;
+    nRelaxIter              5;
+    nSmoothSurfaceNormals   1;
+    nSmoothNormals          3;
+    nSmoothThickness        10;
+    maxFaceThicknessRatio   0.5;
+    maxThicknessToMedialRatio 0.3;
+    minMedialAxisAngle      90;
+    nBufferCellsNoExtrude   0;
+    nLayerIter              50;
+    nRelaxedIter            20;
+}
+
+meshQualityControls
+{
+    #include "meshQualityDict"
+
+    // Not part of the etc template (AGENTS.md section 5)
+    nSmoothScale    4;
+    errorReduction  0.75;
+
+    relaxed
+    {
+        maxNonOrtho 75;
+    }
+}
+
+mergeTolerance 1e-6;
+
+// ************************************************************************* //

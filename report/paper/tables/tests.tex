@@ -1,0 +1,26 @@
+\begin{table}[t]
+\centering
+\small
+\caption{Test results (spec 13).}
+\label{tab:tests}
+\begin{tabular}{lrrrrrr}
+\toprule
+test & pass & iterations & final R & wall [s] & CPU-h & key metric \\
+\midrule
+T0\_Re1000\_np1 & yes & 58 & 7.35e-09 & 17.9 & n/a & l2rel\_u = 1.43e-05 \\
+T0\_Re100\_np1 & yes & 58 & 5.25e-09 & 9.62 & n/a & l2rel\_u = 2.89e-06 \\
+Test-block4Ops & yes & n/a & n/a & n/a & n/a & maxInverseError = 6.24e-08 \\
+Test-blockGAMG & yes & n/a & n/a & n/a & n/a & crossRankRelDiff = 1.08e-06 \\
+Test-blockGAMG\_np1 & yes & n/a & n/a & 0.132 & n/a &  \\
+Test-blockGAMG\_np4 & yes & n/a & n/a & 0.136 & n/a &  \\
+Test-blockMatrix & yes & n/a & n/a & n/a & n/a & crossRankRelDiff = 1.71e-09 \\
+Test-blockMatrix\_np1 & yes & n/a & n/a & n/a & n/a &  \\
+Test-blockMatrix\_np4 & yes & n/a & n/a & n/a & n/a &  \\
+Test-doubleReduce & yes & n/a & n/a & n/a & n/a &  \\
+Test-doubleReduce\_np1 & yes & n/a & n/a & n/a & n/a & relErrorDouble = 0.00e+00 \\
+Test-doubleReduce\_np4 & yes & n/a & n/a & n/a & n/a & relErrorDouble = 0.00e+00 \\
+Test-precision & yes & n/a & n/a & n/a & n/a &  \\
+test\_env & yes & n/a & n/a & n/a & n/a &  \\
+\bottomrule
+\end{tabular}
+\end{table}

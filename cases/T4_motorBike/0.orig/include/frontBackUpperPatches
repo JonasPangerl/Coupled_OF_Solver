@@ -1,0 +1,11 @@
+// Far-field side and top patches: slip
+
+upperWall
+{
+    type            slip;
+}
+
+frontAndBack
+{
+    type            slip;
+}

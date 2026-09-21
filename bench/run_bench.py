@@ -13,6 +13,9 @@ Configurations (DECISIONS.md D-025):
     B  simpleFoam SIMPLEC, consistent yes, relaxation p 1.0 / U 0.9 / k,omega 0.9
     C  coupledFoam defaults
     D  coupledFoam with preconditioner blockDiagonal (isolates the AMG gain)
+    E  coupledFoam with blockGAMG cycleType V (isolates the K-cycle, B10)
+    F  coupledFoam with adaptiveRelTol no (isolates Eisenstat-Walker, B10)
+    G  coupledFoam with anderson enabled (B10)
 
 Every rank runs under bench/rank_wrapper.sh (/usr/bin/time -v), so for every
 run the harness records wall time, CPU time summed over all ranks (user +
@@ -94,6 +97,8 @@ relaxationFactors
 def config_sets(cfg: str, spec: dict) -> tuple[str, dict, dict]:
     """(solver, foamDictionary sets, files to write) of a configuration."""
     solver = "simpleFoam" if cfg in ("A", "B") else "coupledFoam"
+    if cfg not in "ABCDEFG":
+        raise ValueError(f"unknown configuration {cfg}")
     n = spec["iters"][solver]
     sets = {"system/controlDict": {"endTime": n, "writeInterval": n}}
     files = {}
@@ -111,6 +116,13 @@ def config_sets(cfg: str, spec: dict) -> tuple[str, dict, dict]:
         }
         if cfg == "D":
             fv["solvers.coupled.preconditioner"] = "blockDiagonal"
+            # the K-cycle needs FGMRES; blockDiagonal is a fixed operator
+        if cfg == "E":
+            fv["solvers.coupled.blockGAMG.cycleType"] = "V"
+        if cfg == "F":
+            fv["solvers.coupled.adaptiveRelTol"] = "no"
+        if cfg == "G":
+            fv["coupled.anderson.enabled"] = "yes"
         sets["system/fvSolution"] = fv
     return solver, sets, files
 
@@ -193,6 +205,8 @@ def coupled_breakdown(case: Path, it: int) -> dict:
         "t_linsolve": sum(r.get("tSolve", 0) for r in rows),
         "t_turb": sum(r.get("tTurb", 0) for r in rows),
         "linIters_total": sum(r.get("linIters", 0) for r in rows),
+        "eta_median": sorted(r.get("eta", 0) for r in rows)[len(rows) // 2]
+        if rows else None,
     }
 
 

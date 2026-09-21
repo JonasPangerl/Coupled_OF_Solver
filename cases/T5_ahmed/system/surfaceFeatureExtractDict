@@ -1,0 +1,30 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T5 - Ahmed body: feature edges.
+  v2606: surfaceFeatureExtract, not surfaceFeatures.
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      surfaceFeatureExtractDict;
+}
+
+ahmed25.stl
+{
+    extractionMethod    extractFromSurface;
+
+    // Sharp edges (rear, slant, longitudinal edges, rounding/flank
+    // intersections); the faceted roundings (3.75 deg) are not features
+    includedAngle       150;
+
+    subsetFeatures
+    {
+        nonManifoldEdges    no;
+        openEdges           yes;
+    }
+
+    writeObj            no;
+}
+
+// ************************************************************************* //

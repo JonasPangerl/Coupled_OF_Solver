@@ -1,0 +1,61 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T5 - Ahmed body 25 deg, half model (spec 13).
+  U_inf = 40 m/s; freestream I = 0.5 %: k = 1.5 (0.005 * 40)^2 = 0.06,
+  nut/nu = 100: omega = k / nut = 40. Ground moves with U_inf.
+  Body patches through their group bodyGroup; ymin (type symmetry) comes
+  from setConstraintTypes and has no explicit entry.
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      nut;
+}
+
+dimensions      [0 2 -1 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{
+    inlet
+    {
+        type            calculated;
+        value           uniform 0;
+    }
+
+    outlet
+    {
+        type            calculated;
+        value           uniform 0;
+    }
+
+    ground
+    {
+        type            nutkWallFunction;
+        value           uniform 0;
+    }
+
+    bodyGroup
+    {
+        type            nutkWallFunction;
+        value           uniform 0;
+    }
+
+    top
+    {
+        type            calculated;
+        value           uniform 0;
+    }
+
+    side
+    {
+        type            calculated;
+        value           uniform 0;
+    }
+
+    #includeEtc "caseDicts/setConstraintTypes"
+}
+
+// ************************************************************************* //

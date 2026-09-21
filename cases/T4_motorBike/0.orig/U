@@ -1,0 +1,48 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T4 - motorBike (tutorial boundary conditions).
+  The motorBike patches are addressed through their group motorBikeGroup
+  (snappyHexMesh names them motorBike_<region>).
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volVectorField;
+    object      U;
+}
+
+#include        "include/initialConditions"
+
+dimensions      [0 1 -1 0 0 0 0];
+
+internalField   uniform $flowVelocity;
+
+boundaryField
+{
+    #include "include/fixedInlet"
+
+    outlet
+    {
+        type            inletOutlet;
+        inletValue      uniform (0 0 0);
+        value           $internalField;
+    }
+
+    // Ground moving with the freestream
+    lowerWall
+    {
+        type            fixedValue;
+        value           $internalField;
+    }
+
+    motorBikeGroup
+    {
+        type            noSlip;
+    }
+
+    #include "include/frontBackUpperPatches"
+
+    #includeEtc "caseDicts/setConstraintTypes"
+}
+
+// ************************************************************************* //

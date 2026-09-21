@@ -1,0 +1,145 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T4 - motorBike (spec 13), v2606 tutorial settings.
+
+  Mesh variants (Allrun -mesh, set with foamDictionary before meshing):
+    a  tutorial: motorBike level (5 6), features 6, refinementBox 4
+    b  +1:       motorBike level (6 7), features 7, refinementBox 5
+  The values below are those of variant a.
+
+  Deviations from the tutorial (none changes the final mesh of variant a):
+    maxGlobalCells 2e6 -> 2e7 and maxLocalCells 1e5 -> 1e6 (variant b)
+    meshQualityControls.relaxed added (needed with layers, AGENTS.md)
+    writeFlags removed (no extra output on disk)
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      snappyHexMeshDict;
+}
+
+castellatedMesh true;
+snap            true;
+addLayers       true;
+
+geometry
+{
+    motorBike.obj
+    {
+        type triSurfaceMesh;
+        name motorBike;
+    }
+
+    refinementBox
+    {
+        type box;
+        min  (-1.0 -0.7 0.0);
+        max  ( 8.0  0.7 2.5);
+    }
+}
+
+castellatedMeshControls
+{
+    maxLocalCells           1000000;
+    maxGlobalCells          20000000;
+    minRefinementCells      10;
+    maxLoadUnbalance        0.10;
+    nCellsBetweenLevels     3;
+
+    features
+    (
+        {
+            file "motorBike.eMesh";
+            level 6;
+        }
+    );
+
+    refinementSurfaces
+    {
+        motorBike
+        {
+            level (5 6);
+
+            patchInfo
+            {
+                type wall;
+                inGroups (motorBikeGroup);
+            }
+        }
+    }
+
+    resolveFeatureAngle 30;
+
+    refinementRegions
+    {
+        refinementBox
+        {
+            mode inside;
+            levels ((1e15 4));
+        }
+    }
+
+    locationInMesh (3.0001 3.0001 0.43);
+
+    allowFreeStandingZoneFaces true;
+}
+
+snapControls
+{
+    nSmoothPatch            3;
+    tolerance               2.0;
+    nSolveIter              30;
+    nRelaxIter              5;
+    nFeatureSnapIter        10;
+    implicitFeatureSnap     false;
+    explicitFeatureSnap     true;
+    multiRegionFeatureSnap  false;
+}
+
+addLayersControls
+{
+    relativeSizes           true;
+
+    layers
+    {
+        "(lowerWall|motorBike).*"
+        {
+            nSurfaceLayers 1;
+        }
+    }
+
+    expansionRatio          1.0;
+    finalLayerThickness     0.3;
+    minThickness            0.1;
+    nGrow                   0;
+    featureAngle            60;
+    slipFeatureAngle        30;
+    nRelaxIter              3;
+    nSmoothSurfaceNormals   1;
+    nSmoothNormals          3;
+    nSmoothThickness        10;
+    maxFaceThicknessRatio   0.5;
+    maxThicknessToMedialRatio 0.3;
+    minMedialAxisAngle      90;
+    nBufferCellsNoExtrude   0;
+    nLayerIter              50;
+}
+
+meshQualityControls
+{
+    #include "meshQualityDict"
+
+    // Not part of the etc template (AGENTS.md section 5)
+    nSmoothScale    4;
+    errorReduction  0.75;
+
+    relaxed
+    {
+        maxNonOrtho 75;
+    }
+}
+
+mergeTolerance 1e-6;
+
+// ************************************************************************* //

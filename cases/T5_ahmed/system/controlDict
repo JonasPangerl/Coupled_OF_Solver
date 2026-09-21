@@ -1,0 +1,79 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T5 - Ahmed body 25 deg, half model (spec 13)
+  Force coefficients: Aref = frontal area of the half model
+  (W/2 * H = 0.1945 * 0.288 = 0.056016 m2, geometry/ahmed25_stats.json),
+  lRef = L = 1.044 m, |U_inf| = 40 m/s, CofR at the body centre.
+  Experiment (Ahmed et al. 1984, 25 deg): Cd = 0.285.
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+// Set by Allrun: coupledFoam or simpleFoam
+application     coupledFoam;
+
+startFrom       latestTime;
+
+startTime       0;
+
+stopAt          endTime;
+
+endTime         5000;
+
+deltaT          1;
+
+writeControl    timeStep;
+
+writeInterval   1000;
+
+purgeWrite      0;
+
+writeFormat     binary;
+
+writePrecision  12;
+
+writeCompression off;
+
+timeFormat      general;
+
+timePrecision   8;
+
+runTimeModifiable false;
+
+functions
+{
+    forceCoeffs
+    {
+        type            forceCoeffs;
+        libs            (forces);
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+
+        patches         (bodyGroup);
+        rho             rhoInf;
+        rhoInf          1;
+        liftDir         (0 0 1);
+        dragDir         (1 0 0);
+        CofR            (0.522 0 0.194);
+        pitchAxis       (0 1 0);
+        magUInf         40;
+        lRef            1.044;
+        Aref            0.056016;
+    }
+
+    // y+ on the walls at every write (target 30-100 on the body)
+    yPlus
+    {
+        type            yPlus;
+        libs            (fieldFunctionObjects);
+        writeControl    writeTime;
+        log             false;
+    }
+}
+
+// ************************************************************************* //

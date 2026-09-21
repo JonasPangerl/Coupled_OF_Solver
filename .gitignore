@@ -52,3 +52,6 @@ venv/
 # Case runs made by the test suite and the benchmark harness
 run/
 cases/**/system/relaxation
+cases/**/constant/triSurface/*.obj.gz
+cases/**/constant/triSurface/*.stl
+*.stl

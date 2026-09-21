@@ -1,0 +1,17 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T5 - Ahmed body 25 deg: air, nu = 1.5e-5 (spec 13)
+  Re_L = 40 * 1.044 / 1.5e-5 = 2.78e6
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      transportProperties;
+}
+
+transportModel  Newtonian;
+
+nu              1.5e-05;
+
+// ************************************************************************* //

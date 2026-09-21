@@ -1,0 +1,9 @@
+#!/bin/sh
+cd "${0%/*}" || exit 1
+. "${WM_PROJECT_DIR:?}"/bin/tools/CleanFunctions
+
+cleanCase0
+rm -rf postProcessing system/relaxation mesh.info mesh_cells.txt
+rm -rf constant/triSurface constant/extendedFeatureEdgeMesh
+
+#------------------------------------------------------------------------------

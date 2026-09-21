@@ -1,0 +1,6 @@
+// coupledFoam test case T4 - motorBike: freestream values (tutorial)
+
+flowVelocity         (20 0 0);
+pressure             0;
+turbulentKE          0.24;
+turbulentOmega       1.78;

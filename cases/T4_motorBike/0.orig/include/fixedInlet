@@ -1,0 +1,7 @@
+// Inlet: fixed at the internal (freestream) value
+
+inlet
+{
+    type            fixedValue;
+    value           $internalField;
+}

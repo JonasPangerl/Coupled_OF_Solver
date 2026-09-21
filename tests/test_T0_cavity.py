@@ -80,8 +80,12 @@ def test_T0(foam, re, nprocs):
         "reference": {"solver": "simpleFoam", "iterations": ref_log["iterations"],
                       "convergedAt": ref_log["convergedAt"],
                       "wallSeconds": ref_log["wall"]},
-        "history": {"R": [r["R"] for r in rows], "CFL": [r["CFL"] for r in rows],
-                    "omega": [r["omega"] for r in rows]},
+        "history": {k: [r.get(k) for r in rows]
+                    for k in ("R", "CFL", "omega", "cuts", "linIters", "tIter",
+                              "tWall", "eta", "rho")},
+        "gamg": {k: summ.get(k) for k in ("gamgLevels", "gamgMergeLevels",
+                                          "gamgCop", "gamgCellsPerLevel")},
+        "cpuHoursSolver": summ.get("cpuHours"),
     }
 
     if nprocs > 1:

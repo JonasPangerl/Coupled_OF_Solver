@@ -1,0 +1,11 @@
+// Relaxation for coupledFoam: only the segregated k and omega equations are
+// relaxed (spec 5.8); the coupled p-U system is not under-relaxed.
+
+relaxationFactors
+{
+    equations
+    {
+        k               0.7;
+        omega           0.7;
+    }
+}
