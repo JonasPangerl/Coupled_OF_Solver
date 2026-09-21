@@ -176,6 +176,7 @@ def _cycle_study(case: Path, tag: str) -> dict:
         d = _app(["Test-blockGAMG"], case, 1, case / f"{tag}_{c}_np1.json",
                  extra)
         d["processWallSeconds"] = cfenv.last_timing.wall
+        d["processCpuSeconds"] = cfenv.last_timing.cpu
         runs[c] = d
         if not d.get("converged"):
             failures.append(f"cycle {c} did not converge (rc {d['rc']})")
@@ -224,6 +225,8 @@ def _cycle_study(case: Path, tag: str) -> dict:
         "wallSeconds": {c: runs[c].get("wallSeconds") for c in CYCLES},
         "processWallSeconds": {c: runs[c].get("processWallSeconds")
                                for c in CYCLES},
+        "processCpuSeconds": {c: runs[c].get("processCpuSeconds")
+                              for c in CYCLES},
         "ratios": {c: runs[c].get("ratios") for c in CYCLES},
         "mergeLevelsUsed": {c: runs[c].get("mergeLevels") for c in CYCLES},
         "converged": {c: runs[c].get("converged") for c in CYCLES},

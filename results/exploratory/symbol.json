@@ -1,0 +1,24 @@
+{
+  "peLow": 7.8125,
+  "peHigh": 78.125,
+  "rhoInfPeLow": {
+    "rho": 0.7339447938362677,
+    "argmaxKnorm": 0.05206503443154317,
+    "kMin": 0.04908738521234052
+  },
+  "rhoInfPeHigh": {
+    "rho": 0.9647340875098528,
+    "argmaxKnorm": 0.05206503443154317,
+    "kMin": 0.04908738521234052
+  },
+  "rhoCflFiveHundredPeLow": {
+    "rho": 0.9208904932629124,
+    "argmaxKnorm": 0.05206503443154317,
+    "kMin": 0.04908738521234052
+  },
+  "oneDimMaxAbs": 0.49999993750000127,
+  "oneDimMaxErrToHalfSin": 8.79064213755705e-15,
+  "source": "bench/exploratory_numbers.py:dc_symbol_rho (theta 45 deg, uniform grid, modes |k| >= 2 pi/128)",
+  "generatedBy": "bench/exploratory_numbers.py",
+  "timestamp": "2026-09-21T23:13:07"
+}

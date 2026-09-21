@@ -242,8 +242,10 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
         frac = run_bench.progress_fraction(case, solver, it)
         rec["progressFraction"] = frac
         if frac is not None and ranks:
-            rec["wallToConv_s"] = ranks["wallSeconds"] * frac
-            rec["cpuHoursToConv"] = ranks["cpuHours"] * frac
+            # potentialFoam is a fixed offset, the solver part is scaled
+            tc = run_bench.to_convergence(ranks, frac)
+            rec["wallToConv_s"] = tc.get("wall_to_conv_s")
+            rec["cpuHoursToConv"] = tc.get("cpu_to_conv_h")
 
     if solver == "coupledFoam":
         log = case / "log.coupledFoam"

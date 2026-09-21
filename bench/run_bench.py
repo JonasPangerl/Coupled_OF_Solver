@@ -7,27 +7,50 @@ iteration with the identical criterion for all solvers (spec 12.3 ii): over
 the last `window` iterations max - min <= tol*|mean| for every monitored
 quantity (Cd and Cl, or the pressure drop for T1/T2).
 
-Configurations (DECISIONS.md D-025):
-    A  simpleFoam, the case's native settings (tutorial solver settings and
-       relaxation factors)
+Configurations (DECISIONS.md D-025, amendment B10):
+    A  simpleFoam, the tutorial's solver settings and relaxation factors.
+       Per-case overrides where the test case differs from the tutorial:
+       T3 (airFoil2D tutorial): plain SIMPLE (consistent no), p 0.3,
+       U / turbulence 0.7. T5 has no tutorial: A = the motorBike tutorial
+       settings (SIMPLEC, U 0.9, k/omega 0.7), as in T4.
     B  simpleFoam SIMPLEC, consistent yes, relaxation p 1.0 / U 0.9 / k,omega 0.9
-    C  coupledFoam defaults
+    C  coupledFoam defaults (K-cycle, autoTune on, adaptive relTol)
     D  coupledFoam with preconditioner blockDiagonal (isolates the AMG gain)
-    E  coupledFoam with blockGAMG cycleType V (isolates the K-cycle, B10)
-    F  coupledFoam with adaptiveRelTol no (isolates Eisenstat-Walker, B10)
-    G  coupledFoam with anderson enabled (B10)
+    E  coupledFoam with a fixed V-cycle: cycleType V, autoTune no (autoTune
+       would promote V -> F -> W). B10 scope: T2, T4b, T5.
+    F  coupledFoam with adaptiveRelTol no (isolates Eisenstat-Walker).
+       B10 scope: T1, T3-SST.
+    G  coupledFoam with anderson enabled. B10 scope: T1, T3-SST.
+    H  coupledFoam with autoTune no (fixed K-cycle, fixed nPostSweeps): the
+       clean reference for E, which differs from C also by the controller.
+       Same scope as E.
+Configurations with a scope run only on the cases of their scope unless
+--no-scope is given.
 
-Every rank runs under bench/rank_wrapper.sh (/usr/bin/time -v), so for every
-run the harness records wall time, CPU time summed over all ranks (user +
-sys, reported as CPU-hours), per-rank peak RSS (sum and max). Wall and CPU
-time "to convergence" are the totals scaled by the solver's own time
-progression at the convergence iteration (simpleFoam ExecutionTime/ClockTime,
-coupledFoam tWall).
+Timing. Every rank of every application started through the case's runApp
+hook runs under bench/rank_wrapper.sh (/usr/bin/time -v). For coupledFoam
+the Allrun script runs potentialFoam first (coupled.potentialInit yes); its
+wall and CPU time belong to the cost of the coupledFoam solution and are
+added to the totals (wallSeconds, cpuHours) and, as a fixed offset, to the
+time to convergence. Both parts are recorded separately. Any other
+pre-processing application listed in PRE_APPS is treated the same way,
+whichever solver it precedes.
+
+Time to convergence = pre-processing + solver total x progress fraction,
+where the progress fraction is the solver's own elapsed wall time at the
+convergence iteration divided by its total (simpleFoam ClockTime,
+coupledFoam tWall). The same wall-clock fraction scales the solver's CPU
+time (assumption: constant CPU/wall ratio during the run).
 
 Usage (from the repository root, one OpenFOAM environment sourced):
     bench/run_bench.py --cases T1,T2 --configs A,B,C,D --repeats 3 --np 1
     bench/run_bench.py --list
-Results: results/bench/<case>_<config>_<run>.json, results/bench/summary.csv
+    bench/run_bench.py --summary-only
+Results: results/bench/<case>_<config>_<run>.json, results/bench/summary.csv,
+results/bench/summary.json (table and the B10 acceptance evaluation).
+Results whose configuration hash differs from the current definition are
+stale: they are excluded from the summary (and listed), and a new run moves
+them to results/bench/stale/.
 
 Machine sharing: the harness refuses to start while other solver jobs run
 (timings would be meaningless) unless --allow-busy is given; the machine
@@ -38,9 +61,11 @@ from __future__ import annotations
 
 import argparse
 import csv
-import os
+import hashlib
 import json
+import os
 import re
+import shutil
 import statistics
 import sys
 from pathlib import Path
@@ -79,8 +104,45 @@ CASES = {
            "iters": {"simpleFoam": 5000, "coupledFoam": 2500}, "np": HEAVY_NP},
 }
 
+CONFIGS = ("A", "B", "C", "D", "E", "F", "G", "H")
+NATIVE_CONFIGS = frozenset({"A", "B"})
+
+# B10 case scoping (default when E, F, G, H are requested)
+CONFIG_SCOPE = {
+    "E": frozenset({"T2", "T4b", "T5"}),
+    "F": frozenset({"T1", "T3-SST"}),
+    "G": frozenset({"T1", "T3-SST"}),
+    "H": frozenset({"T2", "T4b", "T5"}),
+}
+
+# Per-case overrides of a configuration (foamDictionary sets).
+# A must be the tutorial settings: the airFoil2D tutorial is plain SIMPLE
+# with p 0.3 (relaxation.simpleFoam of T3 has the tutorial factors), while
+# the T3 case fvSolution has consistent yes for the spec-13 reference.
+CASE_OVERRIDES = {
+    ("T3-SST", "A"): {"system/fvSolution": {"SIMPLE.consistent": "no"}},
+    ("T3-GEKO", "A"): {"system/fvSolution": {"SIMPLE.consistent": "no"}},
+}
+
+# Cases whose tutorial configuration (A) runs potentialFoam before the
+# native solver (motorBike tutorial Allrun); its cost is counted like
+# coupledFoam's (PRE_APPS)
+NATIVE_POTENTIAL_CASES = ("T4a", "T4b", "T5")
+
+# Applications that the Allrun scripts run under the rank wrapper before the
+# solver (coupledFoam: potentialFoam with coupled.potentialInit yes)
+PRE_APPS = ("potentialFoam",)
+
 WINDOW = 100
 TOL = 0.002
+
+# B10 acceptance (F): adaptive (C) not more than 5 % slower than fixed
+# relTol (F), and identical Cd / dp to 1e-4 (relative)
+B10_MAX_SLOWDOWN = 0.05
+B10_MONITOR_TOL = 1e-4
+
+# Bump when the harness changes how a run is set up or evaluated
+HARNESS_VERSION = 3
 
 RELAX_B = """// Benchmark configuration B: SIMPLEC, p 1.0 / U 0.9 / k,omega 0.9
 relaxationFactors
@@ -98,11 +160,23 @@ relaxationFactors
 """
 
 
-def config_sets(cfg: str, spec: dict) -> tuple[str, dict, dict]:
-    """(solver, foamDictionary sets, files to write) of a configuration."""
-    solver = "simpleFoam" if cfg in ("A", "B") else "coupledFoam"
-    if cfg not in "ABCDEFG":
-        raise ValueError(f"unknown configuration {cfg}")
+def solver_of(cfg: str) -> str:
+    if cfg not in CONFIGS:
+        raise ValueError(f"unknown configuration {cfg!r} "
+                         f"(known: {','.join(CONFIGS)})")
+    return "simpleFoam" if cfg in NATIVE_CONFIGS else "coupledFoam"
+
+
+def in_scope(name: str, cfg: str) -> bool:
+    scope = CONFIG_SCOPE.get(cfg)
+    return scope is None or name in scope
+
+
+def config_sets(cfg: str, spec: dict, name: str | None = None
+                ) -> tuple[str, dict, dict]:
+    """(solver, foamDictionary sets, files to write) of a configuration,
+    including the per-case overrides of CASE_OVERRIDES for case `name`."""
+    solver = solver_of(cfg)
     n = spec["iters"][solver]
     sets = {"system/controlDict": {"endTime": n, "writeInterval": n}}
     files = {}
@@ -122,13 +196,42 @@ def config_sets(cfg: str, spec: dict) -> tuple[str, dict, dict]:
             fv["solvers.coupled.preconditioner"] = "blockDiagonal"
             # the K-cycle needs FGMRES; blockDiagonal is a fixed operator
         if cfg == "E":
+            # fixed V-cycle: autoTune would promote V -> F -> W (6.3.5)
             fv["solvers.coupled.blockGAMG.cycleType"] = "V"
+            fv["solvers.coupled.blockGAMG.autoTune"] = "no"
         if cfg == "F":
             fv["solvers.coupled.adaptiveRelTol"] = "no"
         if cfg == "G":
             fv["coupled.anderson.enabled"] = "yes"
+        if cfg == "H":
+            # fixed K-cycle reference for E
+            fv["solvers.coupled.blockGAMG.autoTune"] = "no"
         sets["system/fvSolution"] = fv
+    for fname, entries in CASE_OVERRIDES.get((name, cfg), {}).items():
+        sets.setdefault(fname, {}).update(entries)
     return solver, sets, files
+
+
+def config_hash(name: str, cfg: str) -> str:
+    """Hash of everything that defines a run of (case, configuration)."""
+    spec = CASES[name]
+    solver, sets, files = config_sets(cfg, spec, name)
+    blob = json.dumps({"v": HARNESS_VERSION, "case": name, "cfg": cfg,
+                       "template": spec["template"], "args": spec["args"],
+                       "monitor": spec["monitor"], "solver": solver,
+                       "sets": sets, "files": files,
+                       "window": WINDOW, "tol": TOL},
+                      sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode()).hexdigest()[:12]
+
+
+def is_current(rec: dict) -> bool:
+    """True if a result record was produced with the current definition of
+    its (case, configuration)."""
+    try:
+        return rec.get("configHash") == config_hash(rec["case"], rec["config"])
+    except (KeyError, ValueError):
+        return False
 
 
 def monitor_history(case: Path, kind: str) -> dict[str, list[float]]:
@@ -160,9 +263,9 @@ def _window_ok(h: list[float]) -> bool:
     return max(w) - min(w) <= TOL * abs(mean)
 
 
-def rank_times(case: Path, solver: str) -> dict:
-    """Parse the /usr/bin/time -v reports of all ranks."""
-    reps = sorted((case / "timing").glob(f"{solver}.rank*.time"))
+def _parse_time_reports(reps: list[Path]) -> dict:
+    """wall (max over ranks), CPU (user + sys summed) and peak RSS of a set
+    of /usr/bin/time -v reports of one application."""
     wall, cpu, rss = [], [], []
     for r in reps:
         t = r.read_text()
@@ -175,8 +278,6 @@ def rank_times(case: Path, solver: str) -> dict:
         wall.append(w)
         cpu.append(u + s)
         rss.append(m)
-    if not reps:
-        return {}
     return {
         "ranks": len(reps),
         "wallSeconds": max(wall),
@@ -187,19 +288,97 @@ def rank_times(case: Path, solver: str) -> dict:
     }
 
 
+def rank_times(case: Path, solver: str) -> dict:
+    """Wall time, CPU time and peak RSS from the /usr/bin/time -v reports in
+    <case>/timing.
+
+    The totals (wallSeconds, cpuSeconds, cpuHours) include the
+    pre-processing applications of PRE_APPS (potentialFoam), which run
+    sequentially before the solver in the same case: wall times add, CPU
+    times add. The parts are recorded separately:
+    solverWallSeconds / solverCpuHours and <app>WallSeconds / <app>CpuHours
+    (e.g. potentialFoamWallSeconds). Peak RSS is the larger of the solver's
+    and the pre-processing's (they never run at the same time); the
+    solver's own values are kept as solverPeakRSS_GB_*.
+    Returns {} if the solver left no report (run failed before start)."""
+    tdir = case / "timing"
+    reps = sorted(tdir.glob(f"{solver}.rank*.time"))
+    if not reps:
+        return {}
+    sol = _parse_time_reports(reps)
+    out = {
+        "ranks": sol["ranks"],
+        "solverWallSeconds": sol["wallSeconds"],
+        "solverCpuSeconds": sol["cpuSeconds"],
+        "solverCpuHours": sol["cpuHours"],
+        "solverPeakRSS_GB_sum": sol["peakRSS_GB_sum"],
+        "solverPeakRSS_GB_max_rank": sol["peakRSS_GB_max_rank"],
+        "preApps": [],
+        "preWallSeconds": 0.0,
+        "preCpuSeconds": 0.0,
+    }
+    rss_sum = sol["peakRSS_GB_sum"]
+    rss_max = sol["peakRSS_GB_max_rank"]
+    for app in PRE_APPS:
+        if app == solver:
+            continue
+        preps = sorted(tdir.glob(f"{app}.rank*.time"))
+        if not preps:
+            continue
+        p = _parse_time_reports(preps)
+        out["preApps"].append(app)
+        out[f"{app}Ranks"] = p["ranks"]
+        out[f"{app}WallSeconds"] = p["wallSeconds"]
+        out[f"{app}CpuSeconds"] = p["cpuSeconds"]
+        out[f"{app}CpuHours"] = p["cpuHours"]
+        out[f"{app}PeakRSS_GB_sum"] = p["peakRSS_GB_sum"]
+        out["preWallSeconds"] += p["wallSeconds"]
+        out["preCpuSeconds"] += p["cpuSeconds"]
+        rss_sum = max(rss_sum, p["peakRSS_GB_sum"])
+        rss_max = max(rss_max, p["peakRSS_GB_max_rank"])
+    out["preCpuHours"] = out["preCpuSeconds"] / 3600.0
+    out["wallSeconds"] = sol["wallSeconds"] + out["preWallSeconds"]
+    out["cpuSeconds"] = sol["cpuSeconds"] + out["preCpuSeconds"]
+    out["cpuHours"] = out["cpuSeconds"] / 3600.0
+    out["peakRSS_GB_sum"] = rss_sum
+    out["peakRSS_GB_max_rank"] = rss_max
+    return out
+
+
 def progress_fraction(case: Path, solver: str, it: int) -> float | None:
-    """Fraction of the solver's run time spent up to iteration `it`."""
+    """Fraction of the solver's own run time spent up to iteration `it`
+    (wall clock). Pre-processing is not part of it (see to_convergence).
+
+    CPU time to convergence is scaled with this wall-clock fraction too,
+    i.e. a constant CPU/wall ratio over the run is assumed."""
+    if it is None or it < 1:
+        return None
     log = case / f"log.{solver}"
     if solver == "coupledFoam":
-        rows = logs.parse_cf(log)
-        if not rows or "tWall" not in rows[-1]:
+        rows = [r for r in logs.parse_cf(log) if "tWall" in r]
+        if not rows or rows[-1]["tWall"] <= 0:
             return None
-        return rows[it - 1]["tWall"] / rows[-1]["tWall"]
+        return rows[min(it, len(rows)) - 1]["tWall"] / rows[-1]["tWall"]
     nat = logs.parse_native(log)
     clk = nat["clock"]
     if not clk or clk[-1] <= 0:
         return None
     return clk[min(it, len(clk)) - 1] / clk[-1]
+
+
+def to_convergence(rt: dict, frac: float | None) -> dict:
+    """Wall seconds and CPU-hours to convergence: pre-processing (fixed
+    offset, not scaled) + solver totals x progress fraction."""
+    if not rt or frac is None:
+        return {}
+    return {
+        "wall_to_conv_s": rt.get("preWallSeconds", 0.0)
+        + rt["solverWallSeconds"] * frac,
+        "cpu_to_conv_h": rt.get("preCpuHours", 0.0)
+        + rt["solverCpuHours"] * frac,
+        "solver_wall_to_conv_s": rt["solverWallSeconds"] * frac,
+        "solver_cpu_to_conv_h": rt["solverCpuHours"] * frac,
+    }
 
 
 def coupled_breakdown(case: Path, it: int) -> dict:
@@ -214,14 +393,33 @@ def coupled_breakdown(case: Path, it: int) -> dict:
     }
 
 
+def _stale_move(tag: str) -> None:
+    src = results.RESULTS / "bench" / f"{tag}.json"
+    if not src.exists():
+        return
+    old = json.loads(src.read_text())
+    dst = results.RESULTS / "bench" / "stale" / \
+        f"{tag}.{old.get('configHash', 'nohash')}.json"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    print(f"stale result {tag} moved to {dst}")
+
+
 def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
     spec = CASES[name]
     tag = f"{name}_{cfg}_{run}"
-    if not force and results.read("bench", tag):
-        print(f"skip {tag} (exists)")
-        return results.read("bench", tag)
+    chash = config_hash(name, cfg)
+    old = results.read("bench", tag)
+    if old and not force:
+        if old.get("configHash") == chash:
+            print(f"skip {tag} (exists)")
+            return old
+        print(f"{tag}: existing result has configHash "
+              f"{old.get('configHash')}, current {chash}: rerun")
+    if old:
+        _stale_move(tag)
 
-    solver, sets, files = config_sets(cfg, spec)
+    solver, sets, files = config_sets(cfg, spec, name)
     state = cfenv.machine_state().as_dict()
     case = cfcase.prepare(spec["template"], f"bench_{tag}", sets)
     for rel, text in files.items():
@@ -231,12 +429,43 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
         case, ["-solver", solver, "-np", str(nprocs)] + spec["args"],
         fpe=False,
         extra_env={"CF_RANK_WRAPPER": str(WRAPPER),
-                   "CF_TIMING_DIR": str(case / "timing")},
+                   "CF_TIMING_DIR": str(case / "timing"),
+                   # motorBike tutorial: potentialFoam before simpleFoam
+                   "CF_NATIVE_POTENTIAL":
+                   "yes" if (cfg == "A" and name in NATIVE_POTENTIAL_CASES)
+                   else "no"},
     )
     rec = {"case": name, "config": cfg, "run": run, "solver": solver,
-           "nProcs": nprocs, "rc": rc, "machineBefore": state}
+           "nProcs": nprocs, "rc": rc, "machineBefore": state,
+           "configHash": chash, "harnessVersion": HARNESS_VERSION,
+           "sets": sets}
     rt = rank_times(case, solver)
     rec["total"] = rt
+    # totals of the whole solution (pre-processing included) and the parts
+    for k in ("wallSeconds", "cpuHours", "solverWallSeconds",
+              "solverCpuHours", "preWallSeconds", "preCpuHours"):
+        rec[k] = rt.get(k)
+    for app in rt.get("preApps", []):
+        rec[f"{app}WallSeconds"] = rt.get(f"{app}WallSeconds")
+        rec[f"{app}CpuHours"] = rt.get(f"{app}CpuHours")
+    rec["peakRSS_GB_sum"] = rt.get("peakRSS_GB_sum")
+    rec["peakRSS_GB_max_rank"] = rt.get("peakRSS_GB_max_rank")
+    if solver == "coupledFoam":
+        summ = logs.coupled_summary(case)
+        rec["nCells"] = summ.get("nCells")
+        rec["gamg"] = {k: summ.get(k) for k in (
+            "gamgLevels", "gamgMergeLevels", "gamgCop", "gamgCellsPerLevel")}
+        for k, v in logs.gamg_log_stats(case / "log.coupledFoam").items():
+            if rec["gamg"].get(k) is None:
+                rec["gamg"][k] = v
+        # final cycle type and nPostSweeps after autoTune (E must stay V)
+        rec["cycleTypeFinal"] = rec["gamg"].get("gamgCycleFinal")
+        rec["nPostSweepsFinal"] = rec["gamg"].get("gamgNPostSweepsFinal")
+        rec["gamgTuneEvents"] = summ.get("gamgTuneEvents")
+        if "andersonApplied" in summ:
+            rec["anderson"] = {k: summ.get(k) for k in (
+                "andersonApplied", "andersonSkipped", "andersonRejected",
+                "andersonFlushed")}
     try:
         hist = monitor_history(case, spec["monitor"])
     except (FileNotFoundError, IndexError) as err:
@@ -247,54 +476,73 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
     it = iters_to_conv(hist)
     rec["iters_to_conv"] = it
     rec["iterations_run"] = min(len(h) for h in hist.values())
+    # final values at the end of the fixed budget (B10 identity check)
+    rec.update({f"{k}_final": v[-1] for k, v in hist.items() if v})
     if it is not None and rt:
         frac = progress_fraction(case, solver, it)
         rec["progressFraction"] = frac
-        if frac is not None:
-            rec["wall_to_conv_s"] = rt["wallSeconds"] * frac
-            rec["cpu_to_conv_h"] = rt["cpuHours"] * frac
-            rec["time_per_iter_s"] = rec["wall_to_conv_s"] / it
+        tc = to_convergence(rt, frac)
+        rec.update(tc)
+        if tc:
+            # per iteration: the solver part only (pre-processing is a
+            # one-off cost)
+            rec["time_per_iter_s"] = tc["solver_wall_to_conv_s"] / it
+            rec["cpu_per_iter_s"] = tc["solver_cpu_to_conv_h"] * 3600.0 / it
         rec.update({k: v[it - 1] for k, v in hist.items()})
+        rec.update({f"{k}_windowMean": sum(v[it - WINDOW:it]) / WINDOW
+                    for k, v in hist.items()})
         if solver == "coupledFoam":
             rec.update(coupled_breakdown(case, it))
-    rec["peakRSS_GB_sum"] = rt.get("peakRSS_GB_sum")
-    rec["peakRSS_GB_max_rank"] = rt.get("peakRSS_GB_max_rank")
     results.write("bench", tag, rec)
     print(f"{tag}: iters {it}, wall {rec.get('wall_to_conv_s')}, "
           f"CPU-h {rec.get('cpu_to_conv_h')}")
     return rec
 
 
-def summarise(names: list[str], cfgs: list[str]) -> Path:
-    rows = []
-    for f in sorted((results.RESULTS / "bench").glob("*_*_*.json")):
-        d = json.loads(f.read_text())
-        if "case" in d:
-            rows.append(d)
-    out = results.RESULTS / "bench" / "summary.csv"
-    fields = ["case", "config", "n", "iters_median", "wall_median",
-              "wall_min", "wall_max", "cpuh_median", "rss_sum_GB", "Cd", "Cl",
-              "dp", "speedup_wall_B_over_C", "speedup_cpu_B_over_C"]
+# --------------------------------------------------------------------------- #
+# summary and B10 acceptance
+# --------------------------------------------------------------------------- #
+
+def _med(g: list[dict], key: str):
+    v = [x[key] for x in g if x.get(key) is not None]
+    return statistics.median(v) if v else None
+
+
+def _rng(g: list[dict], key: str, f):
+    v = [x[key] for x in g if x.get(key) is not None]
+    return f(v) if v else None
+
+
+def summary_rows(recs: list[dict]) -> list[dict]:
+    """Per (case, configuration): medians, min and max of the repeats."""
     groups: dict = {}
-    for d in rows:
+    for d in recs:
         groups.setdefault((d["case"], d["config"]), []).append(d)
-
-    def med(key, g):
-        v = [x[key] for x in g if x.get(key) is not None]
-        return statistics.median(v) if v else None
-
     table = []
     for (c, cfg), g in sorted(groups.items()):
-        walls = [x["wall_to_conv_s"] for x in g if x.get("wall_to_conv_s")]
         table.append({
             "case": c, "config": cfg, "n": len(g),
-            "iters_median": med("iters_to_conv", g),
-            "wall_median": med("wall_to_conv_s", g),
-            "wall_min": min(walls) if walls else None,
-            "wall_max": max(walls) if walls else None,
-            "cpuh_median": med("cpu_to_conv_h", g),
-            "rss_sum_GB": med("peakRSS_GB_sum", g),
-            "Cd": med("Cd", g), "Cl": med("Cl", g), "dp": med("dp", g),
+            "iters_median": _med(g, "iters_to_conv"),
+            "wall_median": _med(g, "wall_to_conv_s"),
+            "wall_min": _rng(g, "wall_to_conv_s", min),
+            "wall_max": _rng(g, "wall_to_conv_s", max),
+            "cpuh_median": _med(g, "cpu_to_conv_h"),
+            "cpuh_min": _rng(g, "cpu_to_conv_h", min),
+            "cpuh_max": _rng(g, "cpu_to_conv_h", max),
+            "pre_wall_median": _med(g, "preWallSeconds"),
+            "pre_cpuh_median": _med(g, "preCpuHours"),
+            "time_per_iter_median": _med(g, "time_per_iter_s"),
+            "cpu_per_iter_median": _med(g, "cpu_per_iter_s"),
+            "rss_sum_GB": _med(g, "peakRSS_GB_sum"),
+            "nCells": _med(g, "nCells"),
+            "Cd": _med(g, "Cd"), "Cl": _med(g, "Cl"), "dp": _med(g, "dp"),
+            "Cd_final": _med(g, "Cd_final"), "Cl_final": _med(g, "Cl_final"),
+            "dp_final": _med(g, "dp_final"),
+            "cycleTypeFinal": ",".join(sorted({str(x.get("cycleTypeFinal"))
+                                               for x in g
+                                               if x.get("cycleTypeFinal")}))
+            or None,
+            "nPostSweepsFinal": _med(g, "nPostSweepsFinal"),
         })
     by = {(t["case"], t["config"]): t for t in table}
     for t in table:
@@ -303,11 +551,140 @@ def summarise(names: list[str], cfgs: list[str]) -> Path:
             t["speedup_wall_B_over_C"] = b["wall_median"] / cc["wall_median"]
         if b and cc and b["cpuh_median"] and cc["cpuh_median"]:
             t["speedup_cpu_B_over_C"] = b["cpuh_median"] / cc["cpuh_median"]
+    return table
+
+
+def _rel(a, b):
+    """a/b - 1, None if not computable."""
+    if a is None or not b:
+        return None
+    return a / b - 1.0
+
+
+def b10_evaluate(table: list[dict]) -> list[dict]:
+    """Amendment B10 comparisons against configuration C, wall and CPU-hours.
+
+    C vs E (V-cycle), C vs H (fixed K; H vs E is the clean cycle
+    comparison), C vs G (Anderson): deltas only, B10 gives no threshold.
+    C vs F (fixed relTol): pass if adaptive C is at most 5 % slower than F
+    in wall time AND in CPU-hours, and the monitored quantity (Cd for force
+    cases, dp for T1/T2) at the end of the fixed budget agrees to 1e-4
+    (relative). Deltas are X/C - 1 (positive: X slower than C)."""
+    by = {(t["case"], t["config"]): t for t in table}
+    out = []
+    for (case, cfg), t in sorted(by.items()):
+        if cfg not in ("E", "F", "G", "H"):
+            continue
+        ref_cfg = "C"
+        c = by.get((case, ref_cfg))
+        row = {"case": case, "config": cfg, "reference": ref_cfg,
+               "wall_X": t["wall_median"], "cpuh_X": t["cpuh_median"],
+               "iters_X": t["iters_median"]}
+        if c is None:
+            row.update({"status": "no reference C", "pass": None})
+            out.append(row)
+            continue
+        row.update({
+            "wall_C": c["wall_median"], "cpuh_C": c["cpuh_median"],
+            "iters_C": c["iters_median"],
+            "dWall_X_vs_C": _rel(t["wall_median"], c["wall_median"]),
+            "dCpu_X_vs_C": _rel(t["cpuh_median"], c["cpuh_median"]),
+        })
+        mon = "dp" if CASES.get(case, {}).get("monitor") == "dp" else "Cd"
+        xv, cv = t.get(f"{mon}_final"), c.get(f"{mon}_final")
+        row["monitor"] = mon
+        row["monitorRelDiff"] = (abs(cv - xv) / abs(xv)
+                                 if xv not in (None, 0) and cv is not None
+                                 else None)
+        if cfg == "F":
+            # C slower than F by (C/F - 1)
+            sw = _rel(c["wall_median"], t["wall_median"])
+            sc = _rel(c["cpuh_median"], t["cpuh_median"])
+            row["slowdownWall_C_vs_F"] = sw
+            row["slowdownCpu_C_vs_F"] = sc
+            ok = (sw is not None and sc is not None
+                  and row["monitorRelDiff"] is not None
+                  and sw <= B10_MAX_SLOWDOWN and sc <= B10_MAX_SLOWDOWN
+                  and row["monitorRelDiff"] <= B10_MONITOR_TOL)
+            row["criterion"] = (f"C at most {B10_MAX_SLOWDOWN:.0%} slower than "
+                                f"F (wall and CPU-h); {mon} identical to "
+                                f"{B10_MONITOR_TOL:g}")
+            row["pass"] = ok if None not in (sw, sc, row["monitorRelDiff"]) \
+                else None
+            row["status"] = ("pass" if row["pass"] else
+                             "FAIL" if row["pass"] is False else "incomplete")
+        else:
+            row["criterion"] = "none (B10: report the delta)"
+            row["pass"] = None
+            row["status"] = "reported"
+        if cfg == "E":
+            h = by.get((case, "H"))
+            if h:
+                row["dWall_E_vs_H"] = _rel(t["wall_median"], h["wall_median"])
+                row["dCpu_E_vs_H"] = _rel(t["cpuh_median"], h["cpuh_median"])
+            row["cycleTypeFinal"] = t.get("cycleTypeFinal")
+        out.append(row)
+    return out
+
+
+def load_current(names: list[str] | None = None,
+                 cfgs: list[str] | None = None) -> tuple[list[dict], list[str]]:
+    """Current benchmark records (optionally filtered) and the stale tags."""
+    recs, stale = [], []
+    d = results.RESULTS / "bench"
+    for f in sorted(d.glob("*_*_*.json")) if d.is_dir() else []:
+        try:
+            rec = json.loads(f.read_text())
+        except json.JSONDecodeError:
+            continue
+        if "case" not in rec or "config" not in rec:
+            continue
+        if names and rec["case"] not in names:
+            continue
+        if cfgs and rec["config"] not in cfgs:
+            continue
+        if not is_current(rec):
+            stale.append(f.stem)
+            continue
+        recs.append(rec)
+    return recs, stale
+
+
+SUMMARY_FIELDS = [
+    "case", "config", "n", "iters_median", "wall_median", "wall_min",
+    "wall_max", "cpuh_median", "cpuh_min", "cpuh_max", "pre_wall_median",
+    "pre_cpuh_median", "time_per_iter_median", "cpu_per_iter_median",
+    "rss_sum_GB", "nCells", "Cd", "Cl", "dp", "Cd_final", "Cl_final",
+    "dp_final", "cycleTypeFinal", "nPostSweepsFinal",
+    "speedup_wall_B_over_C", "speedup_cpu_B_over_C"]
+B10_FIELDS = [
+    "case", "config", "reference", "status", "pass", "criterion",
+    "wall_X", "wall_C", "dWall_X_vs_C", "cpuh_X", "cpuh_C", "dCpu_X_vs_C",
+    "slowdownWall_C_vs_F", "slowdownCpu_C_vs_F", "monitor", "monitorRelDiff",
+    "dWall_E_vs_H", "dCpu_E_vs_H", "cycleTypeFinal", "iters_X", "iters_C"]
+
+
+def summarise(names: list[str], cfgs: list[str]) -> Path:
+    recs, stale = load_current(names, cfgs)
+    for s in stale:
+        print(f"summary: stale result {s} excluded (configHash mismatch)")
+    table = summary_rows(recs)
+    b10 = b10_evaluate(table)
+    out = results.RESULTS / "bench" / "summary.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=fields)
+        w = csv.DictWriter(fh, fieldnames=SUMMARY_FIELDS)
         w.writeheader()
         for t in table:
-            w.writerow({k: t.get(k) for k in fields})
+            w.writerow({k: t.get(k) for k in SUMMARY_FIELDS})
+    with open(out.with_name("b10_acceptance.csv"), "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=B10_FIELDS)
+        w.writeheader()
+        for t in b10:
+            w.writerow({k: t.get(k) for k in B10_FIELDS})
+    (out.with_name("summary.json")).write_text(json.dumps(
+        {"cases": names, "configs": cfgs, "table": table, "b10": b10,
+         "stale": stale}, indent=2, default=str) + "\n")
     return out
 
 
@@ -315,7 +692,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cases", default="T1,T2,T3-SST,T3-GEKO")
-    ap.add_argument("--configs", default="A,B,C,D")
+    ap.add_argument("--configs", default=",".join(CONFIGS),
+                    help="E, F, G, H run only on their B10 cases "
+                         "(see --no-scope)")
+    ap.add_argument("--no-scope", action="store_true",
+                    help="run E/F/G/H on every requested case")
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--np", type=int, default=0,
                     help="ranks (0: the case default)")
@@ -327,16 +708,26 @@ def main() -> int:
 
     if a.list:
         for k, v in CASES.items():
-            print(f"{k:8s} {v['template']:26s} np={v['np']} monitor={v['monitor']}")
+            cf = [c for c in CONFIGS if in_scope(k, c)]
+            print(f"{k:8s} {v['template']:26s} np={v['np']} "
+                  f"monitor={v['monitor']} configs={''.join(cf)}")
         return 0
-    names = a.cases.split(",")
-    cfgs = a.configs.split(",")
+    names = [n for n in a.cases.split(",") if n]
+    cfgs = [c for c in a.configs.split(",") if c]
+    for n in names:
+        if n not in CASES:
+            ap.error(f"unknown case {n!r} (known: {','.join(CASES)})")
+    for c in cfgs:
+        if c not in CONFIGS:
+            ap.error(f"unknown configuration {c!r} (known: {','.join(CONFIGS)})")
     if not a.summary_only:
         cfenv.foam_env()
         for name in names:
             nprocs = a.np or CASES[name]["np"]
             for run in range(1, a.repeats + 1):
                 for cfg in cfgs:
+                    if not a.no_scope and not in_scope(name, cfg):
+                        continue
                     st = cfenv.machine_state()
                     if st.busy and not a.allow_busy:
                         print("machine busy (other jobs: %d, load %.1f): "

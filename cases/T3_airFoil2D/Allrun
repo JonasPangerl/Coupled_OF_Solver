@@ -8,7 +8,7 @@
 #   -restart     continue from the latest time (T-restart); no mesh, no
 #                potentialFoam, log goes to log.<solver>.restart
 #
-# coupledFoam with coupled.potentialInit yes: potentialFoam -writePhi
+# coupledFoam with coupled.potentialInit yes: potentialFoam -writephi
 # -writep initialises U, p, phi first (spec 7.4).
 # Parallel: scotch, mpirun with core binding (CF_MPI_BIND=none on a shared
 # machine).
@@ -101,7 +101,7 @@ then
         system/fvSolution 2>/dev/null)
     case "$potential" in
         yes|on|true)
-            runApp potentialFoam log.potentialFoam -writePhi -writep || exit 1
+            runApp potentialFoam log.potentialFoam -writephi -writep || exit 1
             ;;
     esac
 fi

@@ -1,0 +1,94 @@
+{
+  "source": "run/exp_linsolver",
+  "runs": {
+    "blockBiCGStab_blockGaussSeidel": {
+      "source": "run/exp_linsolver/blockBiCGStab_blockGaussSeidel/log.coupledFoam",
+      "settings": {
+        "solver": "blockBiCGStab",
+        "relTol": 0.05,
+        "maxIter": 200,
+        "smoother": "blockGaussSeidel",
+        "CFLmax": 500,
+        "startupUpwindIters": 50,
+        "startupDoneAt": 18
+      },
+      "iterations": 59,
+      "firstIterBelowTarget": 59,
+      "target": 1e-08,
+      "finalR": 9.21253532922e-09,
+      "minR": 9.21253532922e-09,
+      "cflCutsTotal": 1,
+      "firstIterAtCFLmax": 22,
+      "finalCFL": 500,
+      "cflMinAfterStartup": 250,
+      "cflMaxAfterStartup": 500,
+      "cflP05AfterStartup": 250.0,
+      "cflP95AfterStartup": 500.0,
+      "linItersTotal": 2319,
+      "linSolvesAtMaxIter": 8,
+      "tSolveTotal_s": 134.310291827,
+      "tIterTotal_s": 139.47795264
+    },
+    "blockBiCGStab_blockILU0": {
+      "source": "run/exp_linsolver/blockBiCGStab_blockILU0/log.coupledFoam",
+      "settings": {
+        "solver": "blockBiCGStab",
+        "relTol": 0.05,
+        "maxIter": 200,
+        "smoother": "blockILU0",
+        "CFLmax": 500,
+        "startupUpwindIters": 50,
+        "startupDoneAt": 18
+      },
+      "iterations": 45,
+      "firstIterBelowTarget": 45,
+      "target": 1e-08,
+      "finalR": 4.22990092454e-09,
+      "minR": 4.22990092454e-09,
+      "cflCutsTotal": 0,
+      "firstIterAtCFLmax": 22,
+      "finalCFL": 500,
+      "cflMinAfterStartup": 281.64419087,
+      "cflMaxAfterStartup": 500,
+      "cflP05AfterStartup": 323.8908195005,
+      "cflP95AfterStartup": 500.0,
+      "linItersTotal": 389,
+      "linSolvesAtMaxIter": 0,
+      "tSolveTotal_s": 25.591722692,
+      "tIterTotal_s": 28.657073663000002
+    },
+    "blockGMRES_blockGaussSeidel": {
+      "source": "run/exp_linsolver/blockGMRES_blockGaussSeidel/log.coupledFoam",
+      "settings": {
+        "solver": "blockGMRES",
+        "relTol": 0.05,
+        "maxIter": 200,
+        "smoother": "blockGaussSeidel",
+        "CFLmax": 500,
+        "startupUpwindIters": 50,
+        "startupDoneAt": 18
+      },
+      "iterations": 50,
+      "firstIterBelowTarget": 50,
+      "target": 1e-08,
+      "finalR": 8.92506901073e-09,
+      "minR": 8.92506901073e-09,
+      "cflCutsTotal": 0,
+      "firstIterAtCFLmax": 22,
+      "finalCFL": 500,
+      "cflMinAfterStartup": 288.216110442,
+      "cflMaxAfterStartup": 500,
+      "cflP05AfterStartup": 367.47554081354997,
+      "cflP95AfterStartup": 500.0,
+      "linItersTotal": 831,
+      "linSolvesAtMaxIter": 0,
+      "tSolveTotal_s": 25.13355242,
+      "tIterTotal_s": 29.569385144
+    }
+  },
+  "missing": [
+    "run/exp_linsolver/blockGMRES_blockILU0"
+  ],
+  "generatedBy": "bench/exploratory_numbers.py",
+  "timestamp": "2026-09-21T23:13:07"
+}

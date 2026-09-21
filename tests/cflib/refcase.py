@@ -71,4 +71,10 @@ def coupled(template: str, name: str, args: list[str],
                                           "gamgCop", "gamgCellsPerLevel")},
         "args": args,
     }
+    # ranks per level, coarsening ratios, coarsest solver and the final
+    # cycle type / nPostSweeps after autoTune are only in the log (D-030)
+    if log.exists():
+        for k, v in logs.gamg_log_stats(log).items():
+            if rec["gamg"].get(k) is None:
+                rec["gamg"][k] = v
     return case, rec

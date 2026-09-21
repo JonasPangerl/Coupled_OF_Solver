@@ -11,6 +11,8 @@ platforms/
 results/*
 !results/gates/
 !results/gates/**
+!results/exploratory/
+!results/exploratory/**
 !results/.gitkeep
 
 # Case run products (the case templates are versioned, runs are not)

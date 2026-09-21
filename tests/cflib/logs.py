@@ -111,3 +111,66 @@ def coupled_iterations_to(rows: list[dict], tol: float) -> int | None:
         if r.get("R", 1.0) < tol:
             return int(r["iter"])
     return None
+
+
+_GAMG_HEAD = re.compile(r"^blockGAMG: levels (\d+), mergeLevels (\d+), "
+                        r"C_op ([\d.eE+-]+), cycle (\w+)")
+_GAMG_LIST = {
+    "gamgCellsPerLevel": re.compile(r"^blockGAMG: cells per level \(([^)]*)\)"),
+    "gamgRanksPerLevel": re.compile(r"^blockGAMG: ranks per level \(([^)]*)\)"),
+    "gamgRatios": re.compile(r"^blockGAMG: coarsening ratios \(([^)]*)\)"),
+}
+_GAMG_COARSEST = re.compile(r"^blockGAMG: coarsest level \d+ \(.*\): (.+)$")
+_NPOST = re.compile(r"^\s*nPostSweeps\s+(\d+);")
+_TUNE = re.compile(r"^GAMG-tune: (cycleType|nPostSweeps) (\w+)->(\w+)")
+
+
+def gamg_log_stats(log: Path) -> dict:
+    """Block-GAMG hierarchy and autoTune outcome from a solver log.
+
+    The first hierarchy report of the run is used (levels, mergeLevels,
+    C_op, cycle, cells/ranks per level, coarsening ratios, coarsest-level
+    solver). The initial nPostSweeps comes from the printed effective
+    settings; the final cycle type and nPostSweeps replay the
+    'GAMG-tune: <what> a->b' events of the autoTune controller. Keys that
+    the log does not contain are absent (older builds print no ranks line).
+    """
+    out: dict = {}
+    if not log.exists():
+        return out
+    ntune = 0
+    with open(log, errors="replace") as fh:
+        for line in fh:
+            if "gamgLevels" not in out:
+                m = _GAMG_HEAD.match(line)
+                if m:
+                    out.update({"gamgLevels": int(m.group(1)),
+                                "gamgMergeLevels": int(m.group(2)),
+                                "gamgCop": float(m.group(3)),
+                                "gamgCycleInitial": m.group(4)})
+                    continue
+            for key, rx in _GAMG_LIST.items():
+                if key not in out:
+                    m = rx.match(line)
+                    if m:
+                        out[key] = [_num(v) for v in m.group(1).split()]
+            if "gamgCoarsestSolver" not in out:
+                m = _GAMG_COARSEST.match(line)
+                if m:
+                    out["gamgCoarsestSolver"] = m.group(1).strip()
+            if "gamgNPostSweepsInitial" not in out:
+                m = _NPOST.match(line)
+                if m:
+                    out["gamgNPostSweepsInitial"] = int(m.group(1))
+            m = _TUNE.match(line)
+            if m:
+                ntune += 1
+                if m.group(1) == "cycleType":
+                    out["gamgCycleFinal"] = m.group(3)
+                else:
+                    out["gamgNPostSweepsFinal"] = int(m.group(3))
+    if out:
+        out["gamgTuneChanges"] = ntune
+        out.setdefault("gamgCycleFinal", out.get("gamgCycleInitial"))
+        out.setdefault("gamgNPostSweepsFinal", out.get("gamgNPostSweepsInitial"))
+    return out

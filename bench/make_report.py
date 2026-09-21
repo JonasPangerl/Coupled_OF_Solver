@@ -10,6 +10,13 @@ Outputs
                                      macro (\\cfNumber...), so the text never
                                      carries hand-copied values
 
+Inputs: results/tests/*.json, results/bench/*.json (current records only,
+see bench/run_bench.py:is_current), results/exploratory/*.json (written by
+bench/exploratory_numbers.py), and read-only logs under run/.
+
+Every performance number is given as wall-clock time AND CPU-hours (user
+directive: the fastest solver, not the fewest iterations).
+
 Figures whose data is missing are skipped with a note (the report lists
 them), so the generator runs at every stage of the project.
 
@@ -31,7 +38,9 @@ import numpy as np  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tests"))
+sys.path.insert(0, str(REPO / "bench"))
 from cflib import logs, post  # noqa: E402
+import run_bench  # noqa: E402
 
 RESULTS = REPO / "results"
 RUN = REPO / "run"
@@ -47,16 +56,23 @@ C_NATIVE2 = "#b0b0b0"
 C_COUPLED = "#1f5fbf"
 C_COUPLED2 = "#7fa6e0"
 CONFIG_COLOR = {"A": C_NATIVE2, "B": C_NATIVE, "C": C_COUPLED, "D": C_COUPLED2,
-                "E": "#6baed6", "F": "#08306b", "G": "#d95f02"}
+                "E": "#6baed6", "F": "#08306b", "G": "#d95f02", "H": "#9467bd"}
 CONFIG_LABEL = {
     "A": "simpleFoam (tutorial)",
     "B": "simpleFoam SIMPLEC",
     "C": "coupledFoam",
     "D": "coupledFoam, blockDiagonal",
-    "E": "coupledFoam, V-cycle",
+    "E": "coupledFoam, fixed V-cycle",
     "F": "coupledFoam, fixed relTol",
     "G": "coupledFoam, Anderson",
+    "H": "coupledFoam, fixed K-cycle",
 }
+
+# Amendment B7 memory budget (spec constants, not measurements): total
+# 105-120 GB at 45 M cells, worst case, i.e. per cell in bytes
+B7_CELLS = 45e6
+B7_TOTAL_GB = (105.0, 120.0)
+B7_BYTES_PER_CELL = tuple(g * 1e9 / B7_CELLS for g in B7_TOTAL_GB)
 
 plt.rcParams.update({
     "figure.dpi": 150, "savefig.dpi": 150, "font.size": 9,
@@ -83,6 +99,16 @@ def load_json(kind: str) -> dict[str, dict]:
             except json.JSONDecodeError:
                 notes.append(f"unreadable {f}")
     return out
+
+
+def load_bench() -> list[dict]:
+    """Current benchmark records; stale ones (configuration changed since
+    the run) are excluded and listed in the notes."""
+    recs, stale = run_bench.load_current()
+    for s in stale:
+        notes.append(f"benchmark record {s} is stale (configHash mismatch), "
+                     "excluded")
+    return recs
 
 
 def save(fig, name: str, caption: str) -> None:
@@ -128,18 +154,25 @@ def tex_escape(s: str) -> str:
 
 
 def write_table(name: str, header: list[str], rows: list[list], caption: str,
-                label: str) -> str:
+                label: str, resize: bool = False) -> str:
     TABLES.mkdir(parents=True, exist_ok=True)
     cols = "l" + "r" * (len(header) - 1)
     lines = [
-        r"\begin{table}[t]", r"\centering", r"\small",
+        r"\begin{table}[tbp]", r"\centering", r"\small",
         rf"\caption{{{caption}}}", rf"\label{{{label}}}",
+    ]
+    if resize:
+        lines.append(r"\resizebox{\linewidth}{!}{%")
+    lines += [
         rf"\begin{{tabular}}{{{cols}}}", r"\toprule",
         " & ".join(tex_escape(h) for h in header) + r" \\", r"\midrule",
     ]
     for r in rows:
         lines.append(" & ".join(tex_escape(c) for c in r) + r" \\")
-    lines += [r"\bottomrule", r"\end{tabular}", r"\end{table}", ""]
+    lines += [r"\bottomrule", r"\end{tabular}"]
+    if resize:
+        lines.append("}")
+    lines += [r"\end{table}", ""]
     (TABLES / f"{name}.tex").write_text("\n".join(lines))
     # Markdown version for REPORT.md
     md = ["| " + " | ".join(header) + " |",
@@ -150,6 +183,17 @@ def write_table(name: str, header: list[str], rows: list[list], caption: str,
 
 def fmt(v, f="{:.3g}"):
     return "n/a" if v is None else (f.format(v) if not isinstance(v, str) else v)
+
+
+def pct(v):
+    return "n/a" if v is None else f"{100 * v:+.1f}%"
+
+
+def flat(v) -> str:
+    if not v:
+        return "n/a"
+    return " ".join(fmt(x, "{:.3g}") if isinstance(x, float) else str(x)
+                    for x in v)
 
 
 # --------------------------------------------------------------------------- #
@@ -193,7 +237,6 @@ def fig_histories(tests: dict) -> None:
         it = np.arange(1, len(h["R"]) + 1)
         fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.6))
         ax[0].semilogy(it, h["R"], color=C_COUPLED, label="coupledFoam $R$")
-        ref = d.get("reference", {})
         case = RUN / name.replace("T0_", "ref_T0_").split("_np")[0] \
             if name.startswith("T0_") else None
         if case is not None and (case / "log.simpleFoam").exists():
@@ -215,99 +258,133 @@ def fig_histories(tests: dict) -> None:
         ax[1].set_ylabel("CFL")
         save(fig, f"{name}_history",
              f"{name}: residual, CFL and line-search $\\omega$ histories.")
-        _ = ref
 
 
-def fig_bench(bench: dict) -> str:
+def _med(rows, c, cfg, key):
+    v = [d.get(key) for d in rows
+         if d["case"] == c and d["config"] == cfg and d.get(key) is not None]
+    return float(np.median(v)) if v else None
+
+
+def _bars(ax, rows, cases, cfgs, key, ylabel, log=True):
+    width = 0.8 / max(1, len(cfgs))
+    for j, cfg in enumerate(cfgs):
+        vals = [_med(rows, c, cfg, key) or 0 for c in cases]
+        ax.bar(np.arange(len(cases)) + j * width, vals, width,
+               color=CONFIG_COLOR[cfg], label=CONFIG_LABEL[cfg])
+    ax.set_xticks(np.arange(len(cases)) + width * (len(cfgs) - 1) / 2)
+    ax.set_xticklabels(cases)
+    ax.set_ylabel(ylabel)
+    if log:
+        ax.set_yscale("log")
+
+
+def fig_bench(rows: list[dict]) -> str:
     """Wall and CPU time to convergence per case and configuration."""
-    rows = [d for d in bench.values() if "case" in d]
     if not rows:
         notes.append("benchmark: no results yet")
         return ""
     cases = sorted({d["case"] for d in rows})
-    cfgs = [c for c in "ABCDEFG" if any(d["config"] == c for d in rows)]
-
-    def med(c, cfg, key):
-        v = [d.get(key) for d in rows
-             if d["case"] == c and d["config"] == cfg and d.get(key)]
-        return float(np.median(v)) if v else None
+    cfgs = [c for c in run_bench.CONFIGS if any(d["config"] == c for d in rows)]
 
     for key, ylabel, fname in (
         ("wall_to_conv_s", "wall time to convergence [s]", "bench_wall"),
         ("cpu_to_conv_h", "CPU time to convergence [CPU-h]", "bench_cpu"),
         ("iters_to_conv", "iterations to convergence", "bench_iters"),
     ):
-        fig, ax = plt.subplots(figsize=(6.5, 2.8))
-        width = 0.8 / max(1, len(cfgs))
-        for j, cfg in enumerate(cfgs):
-            vals = [med(c, cfg, key) or 0 for c in cases]
-            ax.bar(np.arange(len(cases)) + j * width, vals, width,
-                   color=CONFIG_COLOR[cfg], label=CONFIG_LABEL[cfg])
-        ax.set_xticks(np.arange(len(cases)) + width * (len(cfgs) - 1) / 2)
-        ax.set_xticklabels(cases)
-        ax.set_ylabel(ylabel)
-        ax.set_yscale("log")
-        ax.legend(fontsize=7, ncol=2)
+        fig, ax = plt.subplots(figsize=(6.5, 3.4))
+        _bars(ax, rows, cases, cfgs, key, ylabel)
+        ax.legend(fontsize=6, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.12))
         save(fig, fname, f"Benchmark: {ylabel} (median of the repeats).")
 
-    # Time per iteration breakdown of coupledFoam
-    br = [(c, med(c, "C", "t_assembly"), med(c, "C", "t_linsolve"),
-           med(c, "C", "t_turb"), med(c, "C", "iters_to_conv")) for c in cases]
-    br = [b for b in br if b[4]]
+    # Time per iteration breakdown of coupledFoam: wall and CPU
+    br = [(c, _med(rows, c, "C", "t_assembly"), _med(rows, c, "C", "t_linsolve"),
+           _med(rows, c, "C", "t_turb"), _med(rows, c, "C", "iters_to_conv"),
+           _med(rows, c, "C", "time_per_iter_s"),
+           _med(rows, c, "C", "cpu_per_iter_s")) for c in cases]
+    br = [b for b in br if b[4] and None not in b[1:4]]
     if br:
-        fig, ax = plt.subplots(figsize=(6.5, 2.6))
+        fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.6))
         x = np.arange(len(br))
-        a = [b[1] / b[4] for b in br]
-        s = [b[2] / b[4] for b in br]
-        t = [b[3] / b[4] for b in br]
-        ax.bar(x, a, color="#9ecae1", label="assembly")
-        ax.bar(x, s, bottom=a, color=C_COUPLED, label="linear solve")
-        ax.bar(x, t, bottom=np.add(a, s), color="#fdae6b", label="turbulence")
-        ax.set_xticks(x)
-        ax.set_xticklabels([b[0] for b in br])
-        ax.set_ylabel("time per iteration [s]")
-        ax.legend(fontsize=7)
+        a = np.array([b[1] / b[4] for b in br])
+        s = np.array([b[2] / b[4] for b in br])
+        t = np.array([b[3] / b[4] for b in br])
+        tot = a + s + t
+        # CPU per iteration split in the proportions of the wall breakdown
+        cpu = np.array([b[6] or 0.0 for b in br])
+        share = np.divide(cpu, tot, out=np.zeros_like(cpu), where=tot > 0)
+        for k, f in enumerate((1.0, share)):
+            ax[k].bar(x, a * f, color="#9ecae1", label="assembly")
+            ax[k].bar(x, s * f, bottom=a * f, color=C_COUPLED,
+                      label="linear solve")
+            ax[k].bar(x, t * f, bottom=(a + s) * f, color="#fdae6b",
+                      label="turbulence")
+            ax[k].set_xticks(x)
+            ax[k].set_xticklabels([b[0] for b in br])
+        ax[0].set_ylabel("wall time per iteration [s]")
+        ax[1].set_ylabel("CPU time per iteration [CPU-s]")
+        ax[0].legend(fontsize=7)
         save(fig, "bench_breakdown",
              "coupledFoam time per iteration: assembly, linear solve, "
-             "turbulence.")
+             "turbulence; wall (left) and CPU summed over ranks (right, "
+             "split in the wall-time proportions).")
 
-    # Memory
-    fig, ax = plt.subplots(figsize=(6.5, 2.6))
-    for j, cfg in enumerate(cfgs):
-        vals = [med(c, cfg, "peakRSS_GB_sum") or 0 for c in cases]
-        ax.bar(np.arange(len(cases)) + j * 0.8 / len(cfgs), vals,
-               0.8 / len(cfgs), color=CONFIG_COLOR[cfg], label=CONFIG_LABEL[cfg])
-    ax.set_xticks(np.arange(len(cases)) + 0.4 - 0.4 / len(cfgs))
-    ax.set_xticklabels(cases)
-    ax.set_ylabel("peak RSS, sum over ranks [GB]")
-    ax.legend(fontsize=7, ncol=2)
-    save(fig, "bench_memory", "Peak memory (sum of the per-rank maximum RSS).")
+    fig_memory(rows, cases, cfgs)
 
     # Executive summary table
-    header = ["case", "native best wall [s]", "coupled wall [s]",
-              "speed-up (wall)", "native best CPU-h", "coupled CPU-h",
+    header = ["case", "native best", "native wall [s]", "coupled wall [s]",
+              "speed-up (wall)", "native CPU-h", "coupled CPU-h",
               "speed-up (CPU)", "memory ratio"]
     tab = []
     for c in cases:
-        nat = [(med(c, k, "wall_to_conv_s"), k) for k in ("A", "B")
-               if med(c, k, "wall_to_conv_s")]
+        nat = [(_med(rows, c, k, "wall_to_conv_s"), k) for k in ("A", "B")
+               if _med(rows, c, k, "wall_to_conv_s")]
         if not nat:
             continue
         wn, kbest = min(nat)
-        wc = med(c, "C", "wall_to_conv_s")
-        cn = med(c, kbest, "cpu_to_conv_h")
-        cc = med(c, "C", "cpu_to_conv_h")
-        mn = med(c, kbest, "peakRSS_GB_sum")
-        mc = med(c, "C", "peakRSS_GB_sum")
-        tab.append([c, fmt(wn), fmt(wc), fmt(wn / wc if wc else None),
+        wc = _med(rows, c, "C", "wall_to_conv_s")
+        cn = _med(rows, c, kbest, "cpu_to_conv_h")
+        cc = _med(rows, c, "C", "cpu_to_conv_h")
+        mn = _med(rows, c, kbest, "peakRSS_GB_sum")
+        mc = _med(rows, c, "C", "peakRSS_GB_sum")
+        tab.append([c, kbest, fmt(wn), fmt(wc), fmt(wn / wc if wc else None),
                     fmt(cn), fmt(cc), fmt(cn / cc if cn and cc else None),
                     fmt(mc / mn if mn and mc else None)])
         num(f"speedup wall {c}", wn / wc if wc else None, "{:.2f}")
         num(f"speedup cpu {c}", cn / cc if cn and cc else None, "{:.2f}")
+        num(f"pf wall {c}", _med(rows, c, "C", "preWallSeconds"), "{:.3g}")
+        num(f"pf cpuh {c}", _med(rows, c, "C", "preCpuHours"), "{:.2g}")
     return write_table("executive_summary", header, tab,
                        "Executive summary: time to convergence (identical "
-                       "window criterion), best native configuration vs. "
-                       "coupledFoam.", "tab:summary")
+                       "window criterion, coupledFoam including its "
+                       "potentialFoam initialisation), best native "
+                       "configuration vs.\\ coupledFoam, wall-clock time and "
+                       "CPU-hours.", "tab:summary")
+
+
+def fig_memory(rows: list[dict], cases: list[str], cfgs: list[str]) -> None:
+    """Peak RSS per case and configuration with the B7 budget scaled to the
+    case's cell count (coupledFoam)."""
+    fig, ax = plt.subplots(figsize=(6.5, 3.4))
+    _bars(ax, rows, cases, cfgs, "peakRSS_GB_sum",
+          "peak RSS, sum over ranks [GiB]", log=True)
+    width = 0.8 / max(1, len(cfgs))
+    first = True
+    for i, c in enumerate(cases):
+        ncell = _med(rows, c, "C", "nCells")
+        if not ncell:
+            continue
+        lo, hi = (b * ncell / 1024**3 for b in B7_BYTES_PER_CELL)
+        x0, x1 = i - width / 2, i + width * (len(cfgs) - 0.5)
+        ax.fill_between([x0, x1], [lo, lo], [hi, hi], color="k", alpha=0.15,
+                        lw=0, label="B7 budget per cell" if first else None)
+        first = False
+        mc = _med(rows, c, "C", "peakRSS_GB_sum")
+        num(f"memory budget ratio {c}", mc / hi if mc else None, "{:.2f}")
+    ax.legend(fontsize=6, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.12))
+    save(fig, "bench_memory",
+         "Peak memory (sum of the per-rank maximum RSS) against the B7 "
+         "budget (105-120 GB at 45 M cells) scaled per cell (grey band).")
 
 
 def tests_table(tests: dict) -> str:
@@ -322,9 +399,14 @@ def tests_table(tests: dict) -> str:
                 key = f"{k} = {d[k]:.2e}"
                 break
         rows.append([name, "yes" if d.get("pass") else "NO",
-                     fmt(d.get("iterations"), "{}"), fmt(d.get("finalR")),
-                     fmt(d.get("wallSecondsSolver") or d.get("wallSeconds")),
-                     fmt(d.get("cpuHoursSolver")), key])
+                     fmt(d.get("iterations"), "{}")
+                     if not isinstance(d.get("iterations"), dict) else "",
+                     fmt(d.get("finalR")),
+                     fmt(d.get("wallSecondsSolver") or d.get("wallSeconds"))
+                     if not isinstance(d.get("wallSeconds"), dict) else "",
+                     fmt(d.get("cpuHoursSolver") or d.get("cpuHours"))
+                     if not isinstance(d.get("cpuHours"), dict) else "",
+                     key])
         num(f"test {name} pass", "yes" if d.get("pass") else "no")
     return write_table("tests", header, rows, "Test results (spec 13).",
                        "tab:tests")
@@ -337,16 +419,18 @@ def tests_table(tests: dict) -> str:
 def fig_eta_rho(tests: dict) -> None:
     """Eisenstat-Walker eta and preconditioner rho histories (15.7)."""
     cand = [(n, d) for n, d in tests.items()
-            if d.get("history", {}).get("eta")]
+            if (d.get("history") or {}).get("eta")]
     if not cand:
         notes.append("eta/rho history: no data")
         return
     fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.6))
     for name, d in sorted(cand)[:4]:
         h = d["history"]
-        it = np.arange(1, len(h["eta"]) + 1)
-        ax[0].semilogy(it, h["eta"], lw=0.9, label=name)
-        rho = [r if (r is not None and r >= 0) else np.nan for r in h.get("rho", [])]
+        eta = [e if e is not None else np.nan for e in h["eta"]]
+        it = np.arange(1, len(eta) + 1)
+        ax[0].semilogy(it, eta, lw=0.9, label=name)
+        rho = [r if (r is not None and r >= 0) else np.nan
+               for r in h.get("rho") or []]
         if rho:
             ax[1].plot(np.arange(1, len(rho) + 1), rho, lw=0.9, label=name)
         for ev in d.get("gamgTuneEvents") or []:
@@ -362,86 +446,135 @@ def fig_eta_rho(tests: dict) -> None:
 
 
 def fig_cycles(tests: dict) -> None:
-    d = tests.get("Test-blockGAMG_cycles")
-    if not d:
-        notes.append("cycle comparison: no Test-blockGAMG_cycles result")
-        return
-    per = d.get("cycles") or d.get("perCycle") or {}
-    if isinstance(per, list):
-        per = {x.get("cycleType"): x for x in per}
-    names = [c for c in ("V", "F", "W", "K") if c in per]
-    if not names:
-        notes.append("cycle comparison: unexpected JSON layout")
-        return
-    its = [per[c].get("nIterations") or 0 for c in names]
-    wall = [per[c].get("wallSeconds") or per[c].get("solveWallSeconds") or 0
-            for c in names]
-    fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.4))
-    ax[0].bar(names, its, color=C_COUPLED)
-    ax[0].set_ylabel("Krylov iterations")
-    ax[1].bar(names, wall, color=C_COUPLED2)
-    ax[1].set_ylabel("solve wall time [s]")
-    save(fig, "cycle_comparison",
-         "Block-GAMG cycle types on the block-Poisson system (T0 mesh).")
+    """Unit test Test-blockGAMG_cycles (B9): Krylov iterations and solve
+    time per cycle type on the block-Poisson system. The JSON (written by
+    tests/test_unit.py:_cycle_study) holds per-cycle dicts iterations{},
+    wallSeconds{} (solve), processWallSeconds{}, processCpuSeconds{} and
+    runs{} (the raw per-cycle records)."""
+    for tname, mesh in (("Test-blockGAMG_cycles", "T0 cavity mesh"),
+                        ("Test-blockGAMG_cycles_motorBike",
+                         "motorBike mesh")):
+        d = tests.get(tname)
+        if not d:
+            notes.append(f"cycle comparison: no {tname} result")
+            continue
+        runs = d.get("runs") or {}
+        its = d.get("iterations") or {c: (runs.get(c) or {}).get("nIterations")
+                                       for c in runs}
+        wall = d.get("wallSeconds") or {c: (runs.get(c) or {}).get("wallSeconds")
+                                        for c in runs}
+        cpu = d.get("processCpuSeconds") or {}
+        names = [c for c in ("V", "F", "W", "K") if its.get(c) is not None]
+        if not names:
+            notes.append(f"cycle comparison: {tname} has no iteration counts")
+            continue
+        npan = 3 if any(cpu.get(c) for c in names) else 2
+        fig, ax = plt.subplots(1, npan, figsize=(6.5, 2.4))
+        ax[0].bar(names, [its[c] or 0 for c in names], color=C_COUPLED)
+        ax[0].set_ylabel("Krylov iterations")
+        ax[1].bar(names, [wall.get(c) or 0 for c in names], color=C_COUPLED2)
+        ax[1].set_ylabel("solve wall time [s]")
+        if npan == 3:
+            ax[2].bar(names, [(cpu.get(c) or 0) / 3600.0 for c in names],
+                      color=C_NATIVE)
+            ax[2].set_ylabel("process CPU [CPU-h]")
+        else:
+            notes.append(f"{tname}: no processCpuSeconds (older record); "
+                         "CPU panel omitted")
+        stem = "cycle_comparison" if tname.endswith("cycles") \
+            else "cycle_comparison_motorBike"
+        save(fig, stem,
+             f"Unit test: block-GAMG cycle types on the block-Poisson "
+             f"system ({mesh}, serial).")
+        for c in names:
+            num(f"cycle {stem} {c} iters", its[c], "{}")
 
 
-def fig_anderson(bench: dict) -> None:
-    rows = [d for d in bench.values() if d.get("config") in ("C", "G")]
-    cases = sorted({d["case"] for d in rows})
-    if not rows or not any(d["config"] == "G" for d in rows):
+def fig_bench_cycles(rows: list[dict]) -> None:
+    """Benchmark C (K, autoTune) vs H (fixed K) vs E (fixed V): wall and
+    CPU-hours to convergence on the B10 cycle cases."""
+    sel = [d for d in rows if d["config"] in ("C", "E", "H")]
+    cases = sorted({d["case"] for d in sel if d["config"] == "E"})
+    if not cases:
+        notes.append("benchmark cycle comparison: no configuration E results")
+        return
+    cfgs = [c for c in ("C", "H", "E") if any(d["config"] == c for d in sel)]
+    fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.6))
+    _bars(ax[0], sel, cases, cfgs, "wall_to_conv_s",
+          "wall time to convergence [s]", log=False)
+    _bars(ax[1], sel, cases, cfgs, "cpu_to_conv_h",
+          "CPU time to convergence [CPU-h]", log=False)
+    ax[0].legend(fontsize=7)
+    save(fig, "bench_cycles",
+         "Benchmark: default K-cycle with autoTune (C), fixed K-cycle (H) "
+         "and fixed V-cycle (E): wall time and CPU-hours to convergence.")
+
+
+def fig_anderson(rows: list[dict]) -> None:
+    sel = [d for d in rows if d.get("config") in ("C", "G")]
+    cases = sorted({d["case"] for d in sel if d["config"] == "G"})
+    if not cases:
         notes.append("Anderson comparison: no configuration G results")
         return
-
-    def med(c, cfg, key):
-        v = [d.get(key) for d in rows
-             if d["case"] == c and d["config"] == cfg and d.get(key)]
-        return float(np.median(v)) if v else 0.0
-
-    fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.4))
+    fig, ax = plt.subplots(1, 3, figsize=(6.5, 2.4))
     x = np.arange(len(cases))
     for j, (cfg, col, lab) in enumerate((("C", C_COUPLED, "Anderson off"),
                                          ("G", "#d95f02", "Anderson on"))):
-        ax[0].bar(x + 0.4 * j, [med(c, cfg, "iters_to_conv") for c in cases],
-                  0.4, color=col, label=lab)
-        ax[1].bar(x + 0.4 * j, [med(c, cfg, "wall_to_conv_s") for c in cases],
-                  0.4, color=col, label=lab)
+        for k, key in enumerate(("iters_to_conv", "wall_to_conv_s",
+                                 "cpu_to_conv_h")):
+            ax[k].bar(x + 0.4 * j, [_med(sel, c, cfg, key) or 0 for c in cases],
+                      0.4, color=col, label=lab)
     for a in ax:
         a.set_xticks(x + 0.2)
         a.set_xticklabels(cases)
     ax[0].set_ylabel("iterations to convergence")
-    ax[1].set_ylabel("wall time to convergence [s]")
+    ax[1].set_ylabel("wall time to conv. [s]")
+    ax[2].set_ylabel("CPU time to conv. [CPU-h]")
     ax[0].legend(fontsize=7)
     save(fig, "anderson", "Anderson acceleration on and off (15.7).")
 
 
 def fig_scaling(tests: dict) -> None:
-    d = next((v for k, v in tests.items() if k.startswith("T-scaling")), None)
-    pts = (d or {}).get("points") or (d or {}).get("scaling")
-    if not pts:
+    """T-scaling (tests/test_scaling.py -> results/tests/T_scaling_T4b.json):
+    per solver timePerIter_s{ranks}, cpuHours{ranks} (whole run of the
+    fixed iteration count), efficiency{ranks}."""
+    d = next((v for k, v in tests.items()
+              if k.startswith(("T_scaling", "T-scaling"))), None)
+    if not d or not any(isinstance(d.get(s), dict) for s in
+                        ("coupledFoam", "simpleFoam")):
         notes.append("strong scaling: no T-scaling result")
         return
-    fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.6))
+    fig, ax = plt.subplots(1, 3, figsize=(6.5, 2.4))
     for solver, col in (("simpleFoam", C_NATIVE), ("coupledFoam", C_COUPLED)):
-        p = sorted((q for q in pts if q.get("solver") == solver),
-                   key=lambda q: q["nProcs"])
-        if not p:
+        s = d.get(solver) or {}
+        tpi = {int(k): v for k, v in (s.get("timePerIter_s") or {}).items()
+               if v}
+        if not tpi:
             continue
-        n = np.array([q["nProcs"] for q in p], dtype=float)
-        t = np.array([q["timePerIter"] for q in p], dtype=float)
+        n = np.array(sorted(tpi), dtype=float)
+        t = np.array([tpi[int(k)] for k in n])
         ax[0].loglog(n, t, "o-", color=col, label=solver)
         eff = t[0] * n[0] / (t * n)
         ax[1].plot(n, eff, "o-", color=col, label=solver)
+        ch = {int(k): v for k, v in (s.get("cpuHours") or {}).items() if v}
+        if ch:
+            m = sorted(ch)
+            ax[2].plot(m, [ch[k] for k in m], "o-", color=col, label=solver)
     ax[0].set_xlabel("ranks")
-    ax[0].set_ylabel("time per iteration [s]")
+    ax[0].set_ylabel("wall time per iteration [s]")
     ax[1].set_xlabel("ranks")
     ax[1].set_ylabel("parallel efficiency")
+    ax[2].set_xlabel("ranks")
+    ax[2].set_ylabel(f"CPU-h per run ({d.get('iterations', '?')} it.)")
     ax[0].legend(fontsize=7)
     save(fig, "scaling", "Strong scaling (T-scaling on T4b).")
+    num("scaling ranks max", d.get("efficiencyRanks"), "{}")
+    num("scaling rel efficiency", d.get("relativeEfficiency"), "{:.2f}")
 
 
 def fig_remediation(tests: dict) -> None:
     cand = [(n, d) for n, d in tests.items()
-            if d.get("history", {}).get("nDyn")
+            if (d.get("history") or {}).get("nDyn")
             and n.startswith(("T4", "T5", "T-fpe", "T1", "T3"))]
     if not cand:
         notes.append("remediation history: no data")
@@ -491,20 +624,150 @@ def table_validation(tests: dict) -> str:
                        "tab:validation")
 
 
-def table_gamg_levels(tests: dict) -> str:
-    header = ["run", "levels", "mergeLevels", "C_op", "cells per level"]
+def _gamg_record(name: str, d: dict) -> dict:
+    """GAMG statistics of a record, completed from the run's log (ranks per
+    level, ratios, coarsest solver, cycle after autoTune)."""
+    g = dict(d.get("gamg") or {})
+    log = RUN / name / "log.coupledFoam"
+    if log.exists():
+        for k, v in logs.gamg_log_stats(log).items():
+            if g.get(k) is None:
+                g[k] = v
+    cells = g.get("gamgCellsPerLevel") or []
+    if not g.get("gamgRatios") and len(cells) > 1:
+        g["gamgRatios"] = [cells[i] / cells[i + 1] for i in range(len(cells) - 1)
+                           if cells[i + 1]]
+    return g
+
+
+def table_gamg_levels(tests: dict, bench: list[dict]) -> str:
+    header = ["run", "cycle (start/end)", "post-sweeps", "levels",
+              "mergeLevels", "C_op", "cells per level", "ranks per level",
+              "coarsening ratios", "coarsest solver"]
     rows = []
-    for name, d in sorted(tests.items()):
-        g = d.get("gamg") or {}
-        if g.get("gamgLevels"):
-            rows.append([name, g.get("gamgLevels"), g.get("gamgMergeLevels"),
-                         fmt(g.get("gamgCop"), "{:.3f}"),
-                         " ".join(str(c) for c in (g.get("gamgCellsPerLevel") or []))])
+    srcs = [(n, d) for n, d in sorted(tests.items())]
+    seen = set()
+    for d in sorted(bench, key=lambda r: (r["case"], r["config"], r["run"])):
+        key = (d["case"], d["config"])
+        if d["config"] == "C" and key not in seen:
+            seen.add(key)
+            srcs.append((f"bench_{d['case']}_C_{d['run']}", d))
+    for name, d in srcs:
+        g = _gamg_record(name, d)
+        if not g.get("gamgLevels"):
+            continue
+        cyc = g.get("gamgCycleInitial")
+        cyc_end = g.get("gamgCycleFinal")
+        rows.append([
+            name.replace("bench_", ""),
+            f"{cyc or 'n/a'}/{cyc_end or 'n/a'}",
+            f"{fmt(g.get('gamgNPostSweepsInitial'), '{}')}/"
+            f"{fmt(g.get('gamgNPostSweepsFinal'), '{}')}",
+            g.get("gamgLevels"), fmt(g.get("gamgMergeLevels"), "{}"),
+            fmt(g.get("gamgCop"), "{:.3f}"),
+            flat(g.get("gamgCellsPerLevel")),
+            flat(g.get("gamgRanksPerLevel")),
+            flat([round(r, 2) for r in g.get("gamgRatios") or []]),
+            g.get("gamgCoarsestSolver") or "n/a"])
     if not rows:
         notes.append("GAMG level table: no data")
         return ""
     return write_table("gamg_levels", header, rows,
-                       "Block-GAMG hierarchy per run.", "tab:gamglevels")
+                       "Block-GAMG hierarchy per run: cycle type and "
+                       "post-smoothing sweeps at start and end (autoTune), "
+                       "levels, operator complexity, cells, ranks and "
+                       "coarsening ratios per level, coarsest-level solver. "
+                       "Ranks per level are n/a for logs written before "
+                       "D-030.", "tab:gamglevels", resize=True)
+
+
+def table_b10(rows: list[dict]) -> str:
+    """Amendment B10 acceptance: C vs E/F/G/H in wall and CPU-hours."""
+    b10 = run_bench.b10_evaluate(run_bench.summary_rows(rows)) if rows else []
+    if not b10:
+        notes.append("B10 acceptance: no E/F/G/H benchmark results")
+        return ""
+    header = ["case", "config", "wall X [s]", "wall C [s]", "d wall",
+              "CPU-h X", "CPU-h C", "d CPU-h", "monitor rel. diff.", "status"]
+    tab = []
+    for r in b10:
+        tab.append([r["case"], r["config"], fmt(r.get("wall_X")),
+                    fmt(r.get("wall_C")), pct(r.get("dWall_X_vs_C")),
+                    fmt(r.get("cpuh_X")), fmt(r.get("cpuh_C")),
+                    pct(r.get("dCpu_X_vs_C")),
+                    fmt(r.get("monitorRelDiff"), "{:.1e}"), r.get("status")])
+        k = f"b10 {r['case']} {r['config']}"
+        num(f"{k} dwall", pct(r.get("dWall_X_vs_C")).replace("%", r"\%"))
+        num(f"{k} dcpu", pct(r.get("dCpu_X_vs_C")).replace("%", r"\%"))
+        num(f"{k} status", r.get("status"))
+    return write_table("b10_acceptance", header, tab,
+                       "Amendment B10: configurations E (fixed V-cycle), "
+                       "F (fixed relTol), G (Anderson) and H (fixed K-cycle) "
+                       "against C; d = X/C$-$1 (positive: X slower). Pass "
+                       "criterion only for F: C at most 5\\,\\% slower than F "
+                       "in wall time and CPU-hours and $C_d$ or $\\Delta p$ "
+                       "identical to $10^{-4}$.", "tab:btenacc", resize=True)
+
+
+# --------------------------------------------------------------------------- #
+# exploratory numbers (bench/exploratory_numbers.py)
+# --------------------------------------------------------------------------- #
+
+def exploratory_numbers() -> None:
+    ex = load_json("exploratory")
+    if not ex:
+        notes.append("exploratory numbers: run bench/exploratory_numbers.py")
+        return
+    re1 = (ex.get("re1000") or {}).get("runs") or {}
+    for run, keys in (
+        ("default", (("cflCutsTotal", "{}"), ("iterations", "{}"),
+                     ("finalR", "{:.1e}"), ("minR", "{:.1e}"),
+                     ("cflP05AfterStartup", "{:.2g}"),
+                     ("cflP95AfterStartup", "{:.2g}"),
+                     ("cflMinAfterStartup", "{:.2g}"),
+                     ("cflMaxAfterStartup", "{:.2g}"),
+                     ("linItersTotal", "{}"), ("tSolveTotal_s", "{:.0f}"))),
+        ("upwind", (("firstIterBelowTarget", "{}"), ("cflCutsTotal", "{}"),
+                    ("firstIterAtCFLmax", "{}"))),
+        ("ilu0", (("firstIterBelowTarget", "{}"), ("cflCutsTotal", "{}"),
+                  ("firstIterAtCFLmax", "{}"), ("tSolveTotal_s", "{:.0f}"))),
+    ):
+        r = re1.get(run)
+        if r is None:
+            notes.append(f"exploratory re1000/{run}: missing")
+            continue
+        for k, f in keys:
+            num(f"exp re1000 {run} {k}", r.get(k), f)
+        if run == "default":
+            s = r.get("settings") or {}
+            num("exp re1000 default relTol", s.get("relTol"), "{:g}")
+    lin = (ex.get("linsolver") or {}).get("runs") or {}
+    gs = lin.get("blockBiCGStab_blockGaussSeidel")
+    il = lin.get("blockBiCGStab_blockILU0")
+    gm = lin.get("blockGMRES_blockGaussSeidel")
+    for tag, r in (("bicgGs", gs), ("bicgIlu", il), ("gmresGs", gm)):
+        if r is None:
+            notes.append(f"exploratory linsolver/{tag}: missing")
+            continue
+        num(f"exp lin {tag} iterations", r.get("iterations"), "{}")
+        num(f"exp lin {tag} linIters", r.get("linItersTotal"), "{}")
+        num(f"exp lin {tag} maxed", r.get("linSolvesAtMaxIter"), "{}")
+        num(f"exp lin {tag} tSolve", r.get("tSolveTotal_s"), "{:.0f}")
+    if gs and il and il.get("tSolveTotal_s"):
+        num("exp lin solve ratio gs ilu",
+            gs["tSolveTotal_s"] / il["tSolveTotal_s"], "{:.1f}")
+    sym = ex.get("symbol") or {}
+    if sym:
+        num("exp sym pe low", sym.get("peLow"), "{:.2g}")
+        num("exp sym pe high", sym.get("peHigh"), "{:.2g}")
+        for k in ("rhoInfPeLow", "rhoInfPeHigh", "rhoCflFiveHundredPeLow"):
+            num(f"exp sym {k}", (sym.get(k) or {}).get("rho"), "{:.2f}")
+    dec = ex.get("decisions") or {}
+    for k, f in (("dTwoTwoFrozenR", "{:.1e}"),
+                 ("dTwoThreeRelDiffTolEightMinus", "{:.1e}"),
+                 ("dTwoThreeRelDiffTolNineMinus", "{:.1e}"),
+                 ("dTwoThreeRelDiffFloor", "{:.0e}")):
+        num(f"exp {k}", (dec.get(k) or {}).get("value"), f)
 
 
 # --------------------------------------------------------------------------- #
@@ -513,7 +776,7 @@ def table_gamg_levels(tests: dict) -> str:
 
 def main() -> int:
     tests = load_json("tests")
-    bench = load_json("bench")
+    bench = load_bench()
 
     fig_T0_profiles()
     fig_histories(tests)
@@ -521,11 +784,14 @@ def main() -> int:
     tests_md = tests_table(tests)
     fig_eta_rho(tests)
     fig_cycles(tests)
+    fig_bench_cycles(bench)
     fig_anderson(bench)
     fig_scaling(tests)
     fig_remediation(tests)
     validation_md = table_validation(tests)
-    levels_md = table_gamg_levels(tests)
+    levels_md = table_gamg_levels(tests, bench)
+    b10_md = table_b10(bench)
+    exploratory_numbers()
 
     t0 = tests.get("T0_Re100_np1", {})
     num("T0 Re100 iterations", t0.get("iterations"), "{}")
@@ -534,6 +800,7 @@ def main() -> int:
     num("T0 Re100 native iterations",
         (t0.get("reference") or {}).get("iterations"), "{}")
     num("commit", git_commit())
+    num("b7 anderson GB", 320 * B7_CELLS / 1e9, "{:.1f}")
 
     PAPER.mkdir(parents=True, exist_ok=True)
     (PAPER / "numbers.tex").write_text(
@@ -571,6 +838,10 @@ def main() -> int:
         "",
         levels_md or "_No block-GAMG statistics yet._",
         "",
+        "## Amendment B10 acceptance",
+        "",
+        b10_md or "_No E/F/G/H benchmark results yet._",
+        "",
         "## Figures",
         "",
     ]
@@ -581,7 +852,8 @@ def main() -> int:
            "## Reproduction", "",
            "```", "source <openfoam2606>/etc/bashrc", "./Allwmake -j 8",
            "~/OF/venv/bin/pytest tests/", "bench/run_bench.py",
-           "bench/make_report.py", "cd report/paper && latexmk -pdf paper.tex",
+           "bench/exploratory_numbers.py", "bench/make_report.py",
+           "cd report/paper && latexmk -pdf paper.tex",
            "```", ""]
     if notes:
         md += ["## Generator notes", ""] + [f"- {n}" for n in notes] + [""]

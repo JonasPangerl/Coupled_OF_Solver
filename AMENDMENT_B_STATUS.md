@@ -19,13 +19,13 @@ is dropped silently (spec rule 0.3). Status: `todo`, `code` (written, builds),
 | B4 | linear-solve failure trigger, maxLinFails abort via 9.3 path | code (D-029) | coupledFoam |
 | B5 | Anderson acceleration (Type II, safeguards, flush rules) | code (D-026) | control/anderson |
 | B6 | zonal factors (cellZones, patch-distance layers by BFS) | code (D-027) | control/remediation |
-| B7 | memory table | todo | DECISIONS.md, paper |
+| B7 | memory table | code: paper Table tab:memory (Anderson row corrected to 320 B/cell = 14.4 GB, D-026, value generated); bench_memory figure draws the B7 budget scaled per cell against measured peak RSS (sum over ranks). Measured comparison pending benchmark runs | report/paper/paper.tex, bench/make_report.py |
 | B8 | Section 11 keywords and defaults | code (coupledDefaults.H, cases T0-T3) | coupledDefaults.H, case fvSolution |
 | B9 | Test-blockGAMG cycle comparison (cavity + motorBike 350k) | code | applications/test |
 | B9 | Test-blockFGMRES (variable preconditioner) | code | applications/test |
 | B9 | Test-procAgglom (16 ranks, motorBike) | code (heavy test) | applications/test |
-| B10 | benchmark config E (cycleType V), adaptiveRelTol no, anderson yes | todo | bench/run_bench.py |
-| B10 | report 15.7: eta, rho + tune events, per-level table, cycle bars, Anderson | todo | bench/make_report.py |
+| B10 | benchmark configs E (fixed V: cycleType V + autoTune no), F (adaptiveRelTol no), G (anderson yes), plus H (fixed K, autoTune no, reference for E); default case scoping E/H: T2,T4b,T5, F/G: T1,T3-SST; acceptance evaluation (F: C <= 5 % slower in wall AND CPU-h, Cd/dp to 1e-4; E/G/H deltas) into summary.json, b10_acceptance.csv, table b10_acceptance + macros | code (synthetic check), runs pending | bench/run_bench.py, bench/make_report.py |
+| B10 | report 15.7: eta, rho + tune events, per-level table (cells, ranks, ratios, cycle/nPostSweeps start/end, coarsest solver), cycle bars (unit test + benchmark C/H/E), Anderson (iterations, wall, CPU-h) | code; figures appear once test/benchmark JSONs exist (T0 rows of the level table already generated) | bench/make_report.py, tests/cflib/logs.py |
 
 ## Amendment B11 (6.5 hot-loop performance rules, SPEC_amendment_B11.md)
 

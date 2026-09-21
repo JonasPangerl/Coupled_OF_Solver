@@ -1,0 +1,20 @@
+{
+  "dTwoTwoFrozenR": {
+    "value": 7e-08,
+    "source": "DECISIONS.md D-022 (observed R frozen at 7.0e-8 on T0; log not kept)"
+  },
+  "dTwoThreeRelDiffTolEightMinus": {
+    "value": 1.32e-05,
+    "source": "DECISIONS.md D-023 table (tolerance 1e-8, np1 vs np4)"
+  },
+  "dTwoThreeRelDiffTolNineMinus": {
+    "value": 9.3e-07,
+    "source": "DECISIONS.md D-023 table (tolerance 1e-9)"
+  },
+  "dTwoThreeRelDiffFloor": {
+    "value": 6e-07,
+    "source": "DECISIONS.md D-023 table (tolerance 1e-10 and 1e-11)"
+  },
+  "generatedBy": "bench/exploratory_numbers.py",
+  "timestamp": "2026-09-21T23:13:07"
+}

@@ -455,3 +455,12 @@ same generated figures/tables (bench/make_report.py):
 Both share numbers.tex, figures/ and tables/ so neither can drift from
 the measured data; the Makefile builds both. Intermediate PDF builds of
 both are delivered to the user during the work (D-031).
+
+## D-033 - Benchmark accounting and initialisation (review findings, 2026-09-21)
+
+- D-025 addendum. The cost of coupledFoam includes its potentialFoam
+  initialisation (Allrun, `coupled.potentialInit yes`). potentialFoam
+  runs under the rank wrapper, and its wall and CPU time are added to the
+  totals; both parts are recorded (potentialFoamWallSeconds /
+  potentialFoamCpuHours, solver* / pre*). Time to convergence is
+  t_pre + f*t_solver, and the same for CPU, where f is the solvers

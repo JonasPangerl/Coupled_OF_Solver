@@ -28,7 +28,7 @@
 # and copied to constant/triSurface. Everything stays decomposed; there is no
 # reconstructPar.
 #
-# coupledFoam with coupled.potentialInit yes: potentialFoam -writePhi
+# coupledFoam with coupled.potentialInit yes: potentialFoam -writephi
 # -writep initialises U, p, phi first (spec 7.4). Parallel runs: mpirun with
 # core binding (CF_MPI_BIND=none on a shared machine); CF_RANK_WRAPPER wraps
 # every rank of the solver and potentialFoam (benchmark harness).
@@ -279,9 +279,16 @@ then
         system/fvSolution 2>/dev/null)
     case "$potential" in
         yes|on|true)
-            runApp potentialFoam log.potentialFoam -writePhi -writep || exit 1
+            runApp potentialFoam log.potentialFoam -writephi -writep || exit 1
             ;;
     esac
+fi
+
+# Native solvers: potentialFoam first when CF_NATIVE_POTENTIAL=yes, as the
+# motorBike tutorial does (benchmark configuration A on T4/T5, D-025)
+if [ "$solver" != coupledFoam ] && [ "${CF_NATIVE_POTENTIAL:-no}" = yes ]
+then
+    runApp potentialFoam log.potentialFoam -writephi || exit 1
 fi
 
 runApp "$solver" "log.$solver"

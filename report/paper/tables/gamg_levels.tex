@@ -1,0 +1,16 @@
+\begin{table}[tbp]
+\centering
+\small
+\caption{Block-GAMG hierarchy per run: cycle type and post-smoothing sweeps at start and end (autoTune), levels, operator complexity, cells, ranks and coarsening ratios per level, coarsest-level solver. Ranks per level are n/a for logs written before D-030.}
+\label{tab:gamglevels}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lrrrrrrrrr}
+\toprule
+run & cycle (start/end) & post-sweeps & levels & mergeLevels & C\_op & cells per level & ranks per level & coarsening ratios & coarsest solver \\
+\midrule
+T0\_Re1000\_np1 & K/K & 2/2 & 4 & 2 & 1.325 & 16384 4096 1024 256 & n/a & 4 4 4 & blockBiCGStab \\
+T0\_Re100\_np1 & K/K & 2/2 & 4 & 2 & 1.325 & 16384 4096 1024 256 & n/a & 4 4 4 & blockBiCGStab \\
+\bottomrule
+\end{tabular}
+}
+\end{table}

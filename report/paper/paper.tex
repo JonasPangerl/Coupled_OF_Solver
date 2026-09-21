@@ -12,6 +12,7 @@
 \usepackage[utf8]{inputenc}
 \IfFileExists{lmodern.sty}{\usepackage{lmodern}}{}
 \usepackage[margin=25mm]{geometry}
+\setlength{\emergencystretch}{3em}
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{graphicx}
@@ -97,7 +98,8 @@
 \title{\textbf{coupledFoam}: a block-coupled pressure--velocity solver with
   single-precision block-multigrid linear algebra for steady incompressible
   RANS in OpenFOAM}
-\author{The coupledFoam project}
+\author{Jonas Pangerl\\[0.5ex]
+  {\small with implementation assistance by Claude (Anthropic)}}
 \date{Generated at commit \texttt{\cfnum{Commit}}}
 
 \begin{document}
@@ -162,7 +164,7 @@ system is solved with an additive-correction algebraic multigrid in the
 spirit of Hutchinson and Raithby~\cite{Hutchinson1986} and Weiss et
 al.~\cite{Weiss1999}. Uroi\'c and Jasak developed a block-selective algebraic
 multigrid (SAMG) for the implicitly coupled pressure--velocity system in
-foam-extend~\cite{Uroic2018} and its parallelisation~\cite{Uroic2020}.
+foam-extend~\cite{Uroic2018} and its parallelisation~\cite{Uroic2021}.
 ICSFoam~\cite{Oliani2023} is an OpenFOAM library for implicitly coupled,
 primarily density-based simulations of high-speed flows. The price of the
 coupled formulation is memory: a $4\times4$ block per cell and per face
@@ -173,7 +175,7 @@ A coupled solver for steady problems is naturally combined with
 pseudo-transient continuation (PTC), in which a pseudo-time derivative
 regularises the Jacobian and is removed as the solution converges. Kelley and
 Keyes~\cite{Kelley1998} analysed the convergence of PTC; Ceze and
-Fidkowski~\cite{Ceze2011,Ceze2013AIAA,Ceze2013} developed robust CFL
+Fidkowski~\cite{Ceze2011,Ceze2013AIAA,Ceze2015} developed robust CFL
 strategies (SER, EXP, RDM and a modified RDM) and a physicality-based line
 search for implicit high-order RANS solvers. Mulder and Van Leer's switched
 evolution relaxation~\cite{MulderVanLeer1985} is the classical CFL
@@ -191,7 +193,7 @@ structure.
 
 \paragraph{Contributions.} This paper documents coupledFoam as implemented;
 every deviation from its specification is recorded in the project file
-\code{DECISIONS.md} (items D-001 to D-025, referenced below). The
+\code{DECISIONS.md} (items D-001 to D-032, referenced below). The
 contributions are:
 \begin{enumerate}
 \item A clean-room block-coupled pressure--velocity solver for OpenFOAM v2606
@@ -546,11 +548,12 @@ $\nu_{\mathrm{eff}}$; $\beta_P$ (start-up, remediation, zonal); CFL factors $f_P
 \> add $V_P/\dt_P$; $\bar a_P$, $D_P$, $D_f$, $q_f$; assemble continuity row; reference cell\\
 \> narrow to float; scale row 3; $\vect r=\mathsf S(\vect b-\mathcal A\vect x)$ in double; $R_n$\\
 \> solve $\mathsf A_{\mathrm f}\,\delta\vect x=\vect r$ \quad \textit{(FGMRES + block GAMG, rel.\ tolerance $\eta_n$)}\\
-\> \textbf{if} the solve failed (no residual reduction, non-finite): $\omega\leftarrow0$\\
+\> \textbf{if} the solve failed ($\eta_n\|\vect r_0\|$ and absolute floor not reached in \code{maxIter}, or non-finite):\\
+\> \> \textbf{if} \code{maxLinFails} consecutive failures: diagnostic exit \quad \textit{(Section~\ref{sec:sentinel})}\\
 \> \textbf{else}: $\omega\leftarrow$ physicality line search \quad \textit{(eq.~\ref{eq:ls})}\\
 \> \textbf{if} ($\omega<\omega_{\min}$ or failed) and cuts $<$ \code{maxCflCuts}:\\
 \> \> $\mathrm{CFL}\leftarrow\max(\mathrm{CFL}_{\min},\kappa\,\mathrm{CFL})$; \textbf{repeat}\\
-\textbf{if} failed: skip the update; $\mathrm{CFL}\leftarrow\max(\mathrm{CFL}_{\min},0.25\,\mathrm{CFL})$\\
+\textbf{if} failed: skip the update; $\mathrm{CFL}\leftarrow\max(\mathrm{CFL}_{\min},0.25\,\mathrm{CFL})$ \quad \textit{(only if \code{maxCflCuts} $<$ \code{maxLinFails})}\\
 \textbf{else if} $\omega<\omega_{\min}$: $\omega\leftarrow\omega_{\min}$; mark offending cells dynamic\\
 clip increments of dynamic cells; store rollback copy; $\Uv\mathrel{+}=\omega\,\delta\Uv$, $p\mathrel{+}=\omega\,\delta p$\\
 update boundary values; $\phi_f$ from eq.~\ref{eq:phi}; make $\phi$ relative in MRF zones\\
@@ -622,20 +625,29 @@ accepted with $\omega=\omega_{\min}$ and every cell whose increment would
 have violated the bounds at $\omega_{\min}$ is marked into the dynamic
 remediation set.
 
-A linear solve that did not reduce the residual, or produced non-finite
-values, is treated as a failed step (D-020): near the float floor
-BiCGStab can diverge, and applying even $\omega_{\min}$ of such an increment
-destroys a converged state. A failed solve triggers the same CFL cuts; if
-they are exhausted the step is skipped without a field update and the CFL is
-cut by the sentinel factor. In addition, block BiCGStab returns the iterate
-with the smallest residual if it does not converge, so its output is never
-worse than the initial guess (D-020); the GMRES variants minimise the
-residual over their Krylov space by construction.
+A linear solve that does not reach its target $\eta_n\|\vect r_{\mathrm{lin},0}\|$
+(or the absolute tolerance floor) within \code{maxIter} iterations, or that
+produces non-finite values, is a failed step (amendment B4, D-029, which
+replaces the earlier ``no residual reduction'' rule of D-020): near the
+float floor a Krylov solve can diverge, and applying even $\omega_{\min}$ of
+such an increment destroys a converged state. A failed solve cuts the CFL
+number by $\kappa$ and repeats the outer step from unchanged fields; the
+repeat counts toward \code{maxCflCuts}. After \code{maxLinFails} (3)
+consecutive failures the run leaves through the diagnostic path of
+Section~\ref{sec:sentinel}. The fallback of D-020 (skip the step without a
+field update and cut the CFL number by the sentinel factor) remains only for
+settings with \code{maxCflCuts} $<$ \code{maxLinFails}. In addition, block
+BiCGStab returns the iterate with the smallest residual if it does not
+converge, so its output is never worse than the initial guess (D-020, item~1);
+the GMRES variants minimise the residual over their Krylov space by
+construction.
 
 \subsection{Start-up}\label{sec:startup}
 
 Fresh runs are initialised from \code{potentialFoam} (called by the case
-script). For the first \code{startupUpwindIters} (50) iterations, or until
+script with \code{coupled.potentialInit yes}); in the benchmark its wall and
+CPU time are counted as part of the coupledFoam solution
+(Section~\ref{sec:perf}). For the first \code{startupUpwindIters} (50) iterations, or until
 $R_n<10^{-2}$, $\beta_P=0$ everywhere, i.e.\ the discretisation is pure upwind;
 afterwards $\beta_P=1$ except in remediated cells. On restart the start-up
 phase is skipped.
@@ -711,10 +723,19 @@ dynamic set and ages, sentinel counters, and a placeholder for an AMR
 refinement history. The field $D$ of the last assembly is written alongside.
 \code{coupledState} is written to a temporary file and renamed atomically,
 last, so its presence marks a complete time directory (D-017). On restart
-all state is restored, and $\phi$ is recomputed from the read $\Uv,p$ with the
-stored $D$ by~\eqref{eq:phi}; the maximum relative difference to the read
-flux is logged as the flux-consistency metric (required below $10^{-6}$ in
-the restart test).
+the following are restored: the fields $\Uv$, $p$, $\phi$ and the turbulence
+fields; the PTC state (iteration, CFL, previous $R$, hold counter, $R_1$,
+start-up flag, $U_{\mathrm{ref}}$, $p_{\mathrm{ref}}$); the dynamic set and
+its ages; the sentinel counters; the Eisenstat--Walker state; the state of
+the cycle-efficiency controller (current cycle type, post-smoothing count,
+window and hysteresis); and the window of the force-coefficient convergence
+monitor. Deliberately not restored is the Anderson history
+(Section~\ref{sec:anderson}): a restarted run starts with an empty history
+(D-026), so a run with Anderson acceleration is reproducible across a
+restart only up to that history. $\phi$ is recomputed from the read $\Uv,p$
+with the stored $D$ by~\eqref{eq:phi}; the maximum relative difference to
+the read flux is logged as the flux-consistency metric (required below
+$10^{-6}$ in the restart test).
 
 \subsection{Eisenstat--Walker forcing}\label{sec:ew}
 
@@ -734,8 +755,8 @@ with $\eta_{\min}=10^{-3}$, $\eta_{\max}=0.5$; (iii) during start-up and
 and at least one Krylov iteration is always performed, so the increment is
 never zero. The minimum-iteration rule matters: if the absolute linear
 tolerance is reached before the outer target, a zero increment freezes the
-outer iteration (observed on the cavity: $R$ frozen at $7\times10^{-8}$,
-D-022).
+outer iteration (observed on the cavity: $R$ frozen at
+\cfsci{ExpDTwoTwoFrozenR}, D-022).
 
 \subsection{Anderson acceleration}\label{sec:anderson}
 
@@ -761,11 +782,17 @@ double and reduced over ranks; the oldest column is removed by Givens
 rotations); a numerically dependent new column is not added. Safeguards: the
 update is skipped (history kept) if $\max_j|\gamma_j|>10$; the extrapolated
 state must pass the sentinel, otherwise the un-extrapolated state is
-restored and the history flushed; the history is flushed on every CFL cut,
-every change of the remediation sets and every rollback. Convergence theory
+restored and the history flushed. The history is further flushed on every
+CFL cut and every skipped step, when the line search returns the minimum
+step $\omega_{\min}$, on every rollback, whenever the dynamic remediation set
+changes (detected by a version counter of the set, not by its size), at the
+start-up switch ($\beta$ from 0 to 1, which changes the discretisation), and
+whenever the cycle-efficiency controller changes the preconditioner (which
+changes the inner solve and hence the map). Convergence theory
 for contractive and non-contractive operators and for Picard iterations of
 the Navier--Stokes equations is given in~\cite{PollockRebholz2021,Pollock2019}.
-The memory cost is $(2m+2)$ double 4-vectors per cell, 320\,B/cell for $m=4$,
+The memory cost is $(2m+2)$ double 4-vectors per cell, 320\,B/cell for $m=4$
+(\cfnum{BSevenAndersonGB}\,GB at 45\,M cells, Table~\ref{tab:memory}),
 which is why the option is off by default and not used above about 35\,M
 cells.
 
@@ -800,7 +827,10 @@ mesh.
 \centering\small
 \caption{Memory budget at 45\,M cells, worst case (amendment B7). The
 45\,M-cell run itself is a user acceptance step outside the one-shot scope;
-the budget is checked against measured peak RSS on the smaller meshes.}
+Figure~\ref{fig:memory} compares the measured peak RSS of the benchmark
+cases with this budget scaled per cell. The Anderson row uses the
+implemented 320\,B/cell (D-026); the 11.5\,GB of the B7 table assumed
+256\,B/cell.}
 \label{tab:memory}
 \begin{tabular}{lr}
 \toprule
@@ -814,7 +844,7 @@ K-cycle workspace, all levels & 5\\
 turbulence, rollback copies, reserve & 10\\
 \midrule
 total & 105--120\\
-Anderson, $m=4$ (optional) & $+11.5$\\
+Anderson, $m=4$ (optional) & $+$\cfnum{BSevenAndersonGB}\\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1086,7 +1116,8 @@ inversions, $\|\mathsf A\mathsf A^{-1}-\mathsf I\|_\infty<10^{-5}$, guarded
 singular block), \code{Test-blockMatrix} (block product against native
 \code{lduMatrix::Amul} componentwise, 1 and 4 ranks),
 \code{Test-doubleReduce}, \code{Test-blockGAMG} (block Poisson system,
-iteration count and 1-vs-4-rank identity) and \code{Test-blockFGMRES}
+iteration count and 1-vs-4-rank identity, and the comparison of the V-, F-,
+W- and K-cycles, Figure~\ref{fig:cycles}) and \code{Test-blockFGMRES}
 (convergence with a deliberately variable preconditioner, where standard
 GMRES may stall);
 (ii) case tests T0--T5, T-restart, T-fpe and the informational T-mrf, each
@@ -1125,7 +1156,10 @@ relative on integral quantities. Native references are produced with
   \code{simpleFoam} for each model with identical solver settings; empty
   dynamic set at convergence.
 \item[T4, motorBike.] \code{snappyHexMesh} meshes of about 350\,k cells (a)
-  and 3--5\,M cells (b), 16 ranks. Pass: converged by the force window
+  and 1--2\,M cells (b; retargeted from the specified 3--5\,M cells,
+  D-031), 10 ranks (the development machine is capped at 10 cores for this
+  work, D-031). Each mesh is built once and reused by all tests and
+  benchmarks. Pass: converged by the force window
   criterion (Section~\ref{sec:perf}); $C_d$ within 1\,\% of
   \code{simpleFoam}; static set at most 1\,\% of the cells; no rollbacks.
 \item[T5, Ahmed body, $25^\circ$ slant.] Generated geometry, half model,
@@ -1140,7 +1174,11 @@ relative on integral quantities. Native references are produced with
   to $R<10^{-5}$.
 \item[T-mrf.] \code{mixerVessel2D} (MRF, SST), torque against
   \code{simpleFoam}; informational, since no threshold is specified (D-009).
-\item[T-scaling.] Strong scaling on T4b, 1--16 ranks (Section~\ref{sec:perf}).
+\item[T-scaling.] Strong scaling on T4b with 1, 2, 4, 8 and 10 ranks instead
+  of the specified 1--16 (10-core cap, D-031; recorded as
+  \code{specRanks=false}). Pass: the parallel efficiency of coupledFoam at
+  the largest rank count is at least 80\,\% of that of \code{simpleFoam}
+  (unchanged threshold; Figure~\ref{fig:scaling}).
 \end{description}
 
 \subsection{Results}
@@ -1159,6 +1197,9 @@ to a relative $L_2$ difference of \cfsci{TZeroReOneZeroZeroLTwou} in $u$ and
 below the pass threshold of $10^{-3}$ and consistent with two converged
 solutions of the same discretisation. The history
 (Figure~\ref{fig:t0history}) shows the CFL ramp and the line-search factor.
+The corresponding profiles at $Re=1000$ are shown in
+Figure~\ref{fig:t0profilesRe1000}; the test record is listed in
+Table~\ref{tab:tests}.
 The wall times of the test records were measured on a shared machine and are
 not benchmark results.
 
@@ -1196,23 +1237,52 @@ convergence, measured for all solvers with the same criterion.
 
 \paragraph{Configurations.} For each case in \{T1, T2, T3-SST, T3-GEKO, T4a,
 T4b, T5\}, with identical mesh, decomposition, schemes, turbulence model and
-boundary conditions:
-\begin{description}
-\item[A] \code{simpleFoam} with the tutorial's own solver settings and
-  relaxation factors (for pitzDaily and backwardFacingStep2D the tutorial
-  already uses SIMPLEC, D-025);
-\item[B] \code{simpleFoam}, SIMPLEC with relaxation factors $p$ 1.0,
-  $\Uv$ 0.9, $k,\omega$ 0.9 --- the tuned native baseline;
-\item[C] coupledFoam with default settings;
-\item[D] coupledFoam with the block-diagonal preconditioner (isolates the
-  AMG benefit);
-\item[E] coupledFoam with a V-cycle instead of the default K-cycle on T2,
-  T4b and T5 (isolates the cycle benefit).
-\end{description}
-In addition, T1 and T3-SST are run with a fixed relative tolerance
-(\code{adaptiveRelTol no}; the adaptive variant must not be more than 5\,\%
-slower and must give identical $C_d$ or $\Delta p$ to $10^{-4}$) and with
-Anderson acceleration.
+boundary conditions, the configurations of Table~\ref{tab:configs} are run
+(D-025, amendment B10). Configuration~A is the tutorial as shipped with
+OpenFOAM: pitzDaily, backwardFacingStep2D and motorBike use SIMPLEC
+(\code{consistent yes}) with their own relaxation factors; the airFoil2D
+tutorial uses plain SIMPLE with $p$ relaxed by 0.3 and $\Uv$ and the
+turbulence equations by 0.7, so A on T3 overrides the case setting
+\code{consistent yes} (which serves the reference run of
+Section~\ref{sec:vv}) with \code{consistent no}. The Ahmed body (T5) has no
+tutorial; A there means the motorBike tutorial settings, the closest
+external-aerodynamics tutorial. The native configurations start from the
+initial fields of the case: unlike the motorBike tutorial script, the
+benchmark does not run \code{potentialFoam} before \code{simpleFoam}.
+Configurations E--H isolate single components of coupledFoam; they run
+only on the cases named in B10 (E and H on T2, T4b, T5; F and G on T1 and
+T3-SST). E fixes the V-cycle by also switching the cycle-efficiency
+controller off, since the controller would otherwise promote V to F and W
+(Section~\ref{sec:gamg}); because C differs from E in the cycle \emph{and}
+in the controller, configuration H (K-cycle, controller off) is added as the
+clean reference for the cycle comparison. The harness records the final
+cycle type and post-smoothing count of every coupledFoam run.
+
+\begin{table}[tbp]
+\centering\small
+\caption{Benchmark configurations (D-025, amendment B10).}
+\label{tab:configs}
+\begin{tabular}{llp{6.4cm}l}
+\toprule
+ & solver & settings & cases\\
+\midrule
+A & \code{simpleFoam} & tutorial settings (see text; T3: SIMPLE, $p$ 0.3,
+  $\Uv$, $k$, $\omega$ 0.7) & all\\
+B & \code{simpleFoam} & SIMPLEC, relaxation $p$ 1.0, $\Uv$ 0.9, $k,\omega$ 0.9
+  (tuned native baseline) & all\\
+C & coupledFoam & defaults (K-cycle, controller on, Eisenstat--Walker) & all\\
+D & coupledFoam & block-diagonal preconditioner (isolates the AMG) & all\\
+E & coupledFoam & fixed V-cycle: \code{cycleType V}, \code{autoTune no} &
+  T2, T4b, T5\\
+F & coupledFoam & fixed relative tolerance, \code{adaptiveRelTol no} &
+  T1, T3-SST\\
+G & coupledFoam & Anderson acceleration, \code{anderson.enabled yes} &
+  T1, T3-SST\\
+H & coupledFoam & fixed K-cycle, \code{autoTune no} (reference for E) &
+  T2, T4b, T5\\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \paragraph{Stop criterion.} The solvers' own stop criteria are disabled and
 a fixed iteration budget is run. The harness determines the convergence
@@ -1220,29 +1290,65 @@ iteration identically for all solvers: over the last 100 iterations,
 $\max C_d-\min C_d\le0.002\,|\overline{C_d}|$ and the same for $C_l$ (the
 pressure drop for T1 and T2).
 
-\paragraph{Timing.} Every rank runs under \code{/usr/bin/time -v}. Wall
-time and CPU time (user plus system, summed over ranks) of the whole run are
-scaled to the convergence iteration by the solver's own time progression
-(coupledFoam's cumulative wall time per iteration, \code{simpleFoam}'s
-\code{ClockTime}) (D-025). Peak memory is the per-rank maximum RSS, reported
+\paragraph{Timing.} Every rank of every application that the case script
+starts runs under \code{/usr/bin/time -v}. The total cost of a solution is
+the wall time (maximum over ranks) and the CPU time (user plus system,
+summed over ranks, in CPU-hours) of the solver \emph{plus} that of its
+pre-processing: for coupledFoam this is the \code{potentialFoam}
+initialisation, which the case script runs for coupledFoam only. The
+pre-processing runs before the solver, so its wall and CPU times are added;
+both parts are also recorded separately in every result. The time to
+convergence is
+\begin{equation}
+  t_{\mathrm{conv}} = t_{\mathrm{pre}} + f\,t_{\mathrm{solver}},\qquad
+  c_{\mathrm{conv}} = c_{\mathrm{pre}} + f\,c_{\mathrm{solver}},
+\end{equation}
+with $t$ the wall and $c$ the CPU time, and $f$ the solver's own wall-clock
+progress at the convergence iteration (coupledFoam's cumulative wall time per
+iteration, \code{simpleFoam}'s \code{ClockTime}) divided by its total
+(D-025). The pre-processing is a fixed offset and is not scaled. Using the
+wall-clock fraction $f$ also for the CPU time assumes a constant CPU-to-wall
+ratio during the run. The time per iteration (Figure~\ref{fig:breakdown}) is
+that of the solver alone. Peak memory is the per-rank maximum RSS, reported
 as sum and maximum over ranks. Each configuration is run three times and the
-median (with minimum and maximum) is reported. Speed-up is reported both as a
-wall-time and as a CPU-hour ratio against the better of A and B.
+median (with minimum and maximum) is reported. Speed-up is reported both as
+a wall-time and as a CPU-hour ratio against the better of A and B. Results
+are tagged with a hash of their configuration; results of an outdated
+configuration are excluded from all tables and figures.
+
+\paragraph{Acceptance of the B10 variants.} For F, the adaptive tolerance of
+C must not be more than 5\,\% slower than the fixed tolerance, in wall time
+and in CPU-hours, and the monitored quantity ($C_d$, or $\Delta p$ for T1)
+at the end of the fixed iteration budget must agree to $10^{-4}$ (relative).
+E, G and H have no threshold; their differences to C are reported in wall
+time and CPU-hours.
 
 \paragraph{Hardware.} 16 physical cores (32 logical with SMT), 94\,GB RAM
-visible to WSL; MPI ranks are bound to physical cores
-(\code{--bind-to core --map-by core}); benchmarks run only when no other
-solver runs, and the load average before each run is recorded (D-007).
+visible to WSL, of which at most 10 cores are used (D-031); MPI ranks are
+bound to physical cores (\code{--bind-to core --map-by core}); benchmarks run
+only when no other solver runs, and the load average before each run is
+recorded (D-007).
 
 \subsection{Results}
 
 The executive summary (Table~\ref{tab:summary}) compares the best native
-configuration with coupledFoam; Figures~\ref{fig:benchwall}
-to~\ref{fig:anderson} give the details.
+configuration with coupledFoam in wall-clock time and CPU-hours; the
+per-configuration results are in Figures~\ref{fig:benchwall} (wall time)
+and~\ref{fig:benchcpu} (CPU-hours), the iteration counts in
+Figure~\ref{fig:benchiters}. Figure~\ref{fig:breakdown} splits the time per
+coupledFoam iteration, and Figure~\ref{fig:memory} compares the measured
+peak memory with the budget of Table~\ref{tab:memory}. The acceptance of the
+B10 variants is evaluated in Table~\ref{tab:btenacc}, with the cycle
+comparison (E and H against C) in Figure~\ref{fig:benchcycles} and Anderson
+acceleration (G) in Figure~\ref{fig:anderson}. The block-GAMG hierarchies
+are listed in Table~\ref{tab:gamglevels}, the Eisenstat--Walker forcing terms
+and preconditioner efficiencies are shown in Figure~\ref{fig:etarho}, and the
+strong scaling in Figure~\ref{fig:scaling}.
 
 \cftable{executive_summary}{Executive summary: time to convergence (identical
-window criterion), best native configuration against coupledFoam, as
-wall-clock time and CPU-hours.}{tab:summary}
+window criterion, coupledFoam including its potentialFoam initialisation),
+best native configuration against coupledFoam, as wall-clock time and
+CPU-hours.}{tab:summary}
 
 \cffigure{bench_wall}{Wall-clock time to convergence (median of three runs)
 per case and configuration.}{fig:benchwall}
@@ -1255,27 +1361,44 @@ completeness; the decisive metrics are those of Figures~\ref{fig:benchwall}
 and~\ref{fig:benchcpu}.}{fig:benchiters}
 
 \cffigure{bench_breakdown}{coupledFoam time per outer iteration split into
-assembly, linear solve and turbulence.}{fig:breakdown}
+assembly, linear solve and turbulence: wall time (left) and CPU time summed
+over ranks (right, split in the proportions of the wall-time
+breakdown).}{fig:breakdown}
 
-\cffigure{bench_memory}{Peak memory, sum of the per-rank maximum RSS.}{fig:memory}
+\cffigure{bench_memory}{Peak memory, sum of the per-rank maximum RSS, with
+the B7 budget of Table~\ref{tab:memory} (105--120\,GB at 45\,M cells) scaled
+to the cell count of each case (grey band). On small meshes the fixed
+per-process overhead of OpenFOAM dominates, so the comparison is meaningful
+only for the larger cases.}{fig:memory}
 
-\cffigure{scaling}{Strong scaling on T4b, 1--16 ranks: time per iteration
-and parallel efficiency of coupledFoam and simpleFoam. Pass: the parallel
-efficiency of coupledFoam at 16 ranks is at least 80\,\% of that of
+\cftable{b10_acceptance}{Amendment B10: configurations E, F, G and H against
+C in wall time and CPU-hours; pass/fail for F.}{tab:btenacc}
+
+\cffigure{bench_cycles}{Benchmark cycle comparison on T2, T4b and T5: default
+K-cycle with controller (C), fixed K-cycle (H) and fixed V-cycle (E), wall
+time and CPU-hours to convergence.}{fig:benchcycles}
+
+\cffigure{anderson}{Anderson acceleration on and off (T1, T3-SST): outer
+iterations, wall time and CPU-hours to convergence.}{fig:anderson}
+
+\cffigure{scaling}{Strong scaling on T4b with 1, 2, 4, 8 and 10 ranks (D-031):
+wall time per iteration, parallel efficiency and CPU-hours of the fixed
+iteration count, coupledFoam and simpleFoam. Pass: the parallel efficiency
+of coupledFoam at the largest rank count is at least 80\,\% of that of
 simpleFoam.}{fig:scaling}
 
-\cftable{gamg_levels}{Block-GAMG hierarchy per case: levels, cells and ranks
-per level, coarsening ratios, operator complexity, coarsest-level
+\cftable{gamg_levels}{Block-GAMG hierarchy per run: cycle type and
+post-smoothing sweeps at start and end (autoTune), levels, operator
+complexity, cells, ranks and coarsening ratios per level, coarsest-level
 solver.}{tab:gamglevels}
 
-\cffigure{cycle_comparison}{Cycle types: wall time and Krylov iterations with
-the V-cycle (configuration E) against the default K-cycle.}{fig:cycles}
+\cffigure{cycle_comparison}{Unit test \code{Test-blockGAMG} (not a
+benchmark): Krylov iterations, solve wall time and process CPU time of the
+V-, F-, W- and K-cycles on the block-Poisson system of the $128\times128$
+cavity mesh, serial, solved to $10^{-9}$ (D-023).}{fig:cycles}
 
 \cffigure{eta_rho_history}{Eisenstat--Walker forcing term $\eta_n$ and
 preconditioner efficiency $\rho$ with the controller events.}{fig:etarho}
-
-\cffigure{anderson}{Anderson acceleration on and off (T1, T3-SST): outer
-iterations and wall time.}{fig:anderson}
 
 % =============================================================================
 \section{Discussion and limitations}\label{sec:discussion}
@@ -1292,17 +1415,19 @@ rate, as in mixed-precision iterative refinement.
 reference leaves a near-null space in which the float solve drifts once the
 right-hand side is rounded; the strong reference of D-021 removes it without
 approximation.
-(iii) Linear solves near the float floor can fail. A best-iterate return and
-treating a non-reducing solve as a failed step (D-020) keep a converged
-state from being damaged.
+(iii) Linear solves near the float floor can fail. A best-iterate return
+(D-020) and treating a solve that misses its target as a failed step with a
+CFL cut (D-029) keep a converged state from being damaged.
 (iv) Tolerances must be consistent with the float floor and with the outer
 target. The absolute linear tolerance must lie below the outer target, and at
 least one Krylov iteration must always be made (D-022). Conversely, the
 float floor limits how closely two solves can agree: two solves of the block
 Poisson test stopped at $\|\vect r\|_2/\nu_{\mathrm n}=10^{-8}$ differ by
-$1.3\times10^{-5}$ (relative $L_2$) between 1 and 4 ranks, $9.3\times10^{-7}$
-at $10^{-9}$, and tighter tolerances do not reduce the difference below about
-$6\times10^{-7}$ (D-023). Cross-rank identity of float solves must therefore
+\cfsci{ExpDTwoThreeRelDiffTolEightMinus} (relative $L_2$) between 1 and 4
+ranks, \cfsci{ExpDTwoThreeRelDiffTolNineMinus} at $10^{-9}$, and tighter
+tolerances do not reduce the difference below about
+\cfsci{ExpDTwoThreeRelDiffFloor} (D-023; values from the table of that
+entry, the logs were not kept). Cross-rank identity of float solves must therefore
 be tested at a tolerance matched to that floor.
 
 The precision types are the library's own, because OpenFOAM's \code{SPDP}
@@ -1332,18 +1457,22 @@ convection at angle $\theta$ on a uniform Cartesian grid, with OpenFOAM's
 \code{linearUpwind} (face value from the upwind cell plus its central
 gradient, which in 1D is Fromm's scheme), first-order upwind in
 $\mathsf A_{\mathrm{UD}}$, central diffusion at the cell P\'eclet number
-$Pe_h$, and $\mathsf T$ from~\eqref{eq:dt}; modes with wavelength longer than
-the domain are excluded. For 1D convection the symbol of
+$Pe_h$, and $\mathsf T$ from~\eqref{eq:dt} with $V^{1/3}=h$; modes with
+wavelength longer than the domain ($|\vect k|<2\pi/(128\,h)$) are excluded,
+all other wave vectors in $[-\pi/h,\pi/h]^2$ are sampled. The script
+\code{bench/exploratory\_numbers.py} computes the values quoted here. For 1D
+convection the symbol of
 $\mathsf A_{\mathrm{UD}}^{-1}\mathsf C$ is $\tfrac{\mathrm i}{2}\sin\xi$, so
 $\rho\le\tfrac12$ even at infinite CFL. In 2D, cross-stream modes whose
 upwind operator consists almost entirely of numerical diffusion, which the
 correction removes, bring $\rho$ close to one. In the limit CFL$\to\infty$ at
-$\theta=45^\circ$ we find $\rho(\mathsf G)=0.73$ for $Pe_h\approx7.8$ (the
-$Re=1000$ cavity on $128^2$ cells, based on the lid velocity) and
-$\rho(\mathsf G)=0.97$ for $Pe_h\approx78$. At finite CFL the largest
-$|\mathsf G|$ belongs to the smoothest resolvable modes, which the
-pseudo-time term slows (e.g.\ $0.94$ at CFL~500 and $Pe_h\approx7.8$), not to
-the correction. In this idealised model, therefore, $\rho<1$ at every CFL,
+$\theta=45^\circ$ we find $\rho(\mathsf G)=\cfnum{ExpSymRhoInfPeLow}$ for
+$Pe_h=\cfnum{ExpSymPeLow}$ (the $Re=1000$ cavity on $128^2$ cells, based on
+the lid velocity) and $\rho(\mathsf G)=\cfnum{ExpSymRhoInfPeHigh}$ for
+$Pe_h=\cfnum{ExpSymPeHigh}$. At CFL~500 and $Pe_h=\cfnum{ExpSymPeLow}$ the
+value rises to \cfnum{ExpSymRhoCflFiveHundredPeLow}: at finite CFL the
+largest $|\mathsf G|$ comes from the smoothest resolvable modes, which the
+pseudo-time term slows, not from the correction. In this idealised model, therefore, $\rho<1$ at every CFL,
 but with a small margin at high cell P\'eclet numbers. Effects outside the
 model can push the iteration over the edge: non-uniform and distorted cells,
 boundaries and the singular corners of the cavity, the Picard lag of the
@@ -1353,14 +1482,27 @@ $\mathsf M^{-1}$ by a different approximate inverse.
 This is consistent with what we observed on the $Re=1000$ cavity in
 exploratory runs (logs in \code{run/exp\_re1000}, outside the test protocol).
 With the solver default of that time (BiCGStab preconditioned by block GAMG
-with a Gauss--Seidel smoother, relative tolerance $0.05$), the run stagnated
-once deferred correction was switched on after the upwind start-up: the CFL
-number oscillated between about 3 and 10 with 29 CFL cuts, and after 300
-iterations $R$ was $3\times10^{-4}$ (minimum $2\times10^{-6}$). With pure
-upwind throughout, the same configuration reached CFL~500 and $R<10^{-8}$ in
-186 iterations. With the block ILU(0) smoother and otherwise identical
-settings, deferred correction reached CFL~500 at iteration 19 without cuts
-and converged to $R<10^{-8}$ in 59 iterations. The stagnation is thus not
+with a Gauss--Seidel smoother, relative tolerance
+\cfnum{ExpReOneZeroZeroZeroDefaultRelTol}), the run stagnated once deferred
+correction was switched on after the upwind start-up: after the start-up the
+CFL number stayed between \cfnum{ExpReOneZeroZeroZeroDefaultCflMinAfterStartup}
+and \cfnum{ExpReOneZeroZeroZeroDefaultCflMaxAfterStartup} (5th to 95th
+percentile \cfnum{ExpReOneZeroZeroZeroDefaultCflPZeroFiveAfterStartup} to
+\cfnum{ExpReOneZeroZeroZeroDefaultCflPNineFiveAfterStartup}) with
+\cfnum{ExpReOneZeroZeroZeroDefaultCflCutsTotal} CFL cuts, and after
+\cfnum{ExpReOneZeroZeroZeroDefaultIterations} iterations $R$ was
+\cfsci{ExpReOneZeroZeroZeroDefaultFinalR} (minimum
+\cfsci{ExpReOneZeroZeroZeroDefaultMinR}). With pure upwind throughout, the
+same configuration reached CFL~500 at iteration
+\cfnum{ExpReOneZeroZeroZeroUpwindFirstIterAtCFLmax}
+(\cfnum{ExpReOneZeroZeroZeroUpwindCflCutsTotal} CFL cuts in total) and
+$R<10^{-8}$ in \cfnum{ExpReOneZeroZeroZeroUpwindFirstIterBelowTarget}
+iterations. With the block ILU(0) smoother and otherwise identical settings,
+deferred correction reached CFL~500 at iteration
+\cfnum{ExpReOneZeroZeroZeroIluZeroFirstIterAtCFLmax} with
+\cfnum{ExpReOneZeroZeroZeroIluZeroCflCutsTotal} cuts and converged to
+$R<10^{-8}$ in \cfnum{ExpReOneZeroZeroZeroIluZeroFirstIterBelowTarget}
+iterations. The stagnation is thus not
 intrinsic to deferred correction at CFL~500 for this case; it arises from a
 small theoretical margin combined with an inaccurate inner solve. The design
 consequences are the Eisenstat--Walker forcing (tighter solves as the outer
@@ -1372,11 +1514,17 @@ of~\eqref{eq:dcG} for the assembled operators, which we have not computed.
 
 On the $Re=100$ cavity an exploratory comparison of linear solvers (logs in
 \code{run/exp\_linsolver}) showed the practical weight of the inner solve:
-BiCGStab with the Gauss--Seidel smoother needed 59 outer iterations and about
-2300 Krylov iterations in total, with eight solves reaching the iteration
-limit, whereas the ILU(0) smoother needed 45 outer and about 400 Krylov
-iterations and reduced the solve time by a factor of about five; GMRES with
-the Gauss--Seidel smoother was similarly fast. These runs were made on a
+BiCGStab with the Gauss--Seidel smoother needed
+\cfnum{ExpLinBicgGsIterations} outer iterations and
+\cfnum{ExpLinBicgGsLinIters} Krylov iterations in total, with
+\cfnum{ExpLinBicgGsMaxed} solves reaching the iteration limit, whereas the
+ILU(0) smoother needed \cfnum{ExpLinBicgIluIterations} outer and
+\cfnum{ExpLinBicgIluLinIters} Krylov iterations and reduced the summed solve
+time by a factor of \cfnum{ExpLinSolveRatioGsIlu}
+(\cfnum{ExpLinBicgGsTSolve}\,s against \cfnum{ExpLinBicgIluTSolve}\,s);
+GMRES with the Gauss--Seidel smoother was similarly fast
+(\cfnum{ExpLinGmresGsTSolve}\,s, \cfnum{ExpLinGmresGsIterations} outer
+iterations). These runs were made on a
 loaded machine and are indicative only; the benchmark of
 Section~\ref{sec:perf} is authoritative.
 
@@ -1413,7 +1561,7 @@ Section~\ref{sec:perf} is authoritative.
 
 \subsection{Phase 2}
 
-Block-selective AMG~\cite{Uroic2018,Uroic2020} as an additional preconditioner;
+Block-selective AMG~\cite{Uroic2018,Uroic2021} as an additional preconditioner;
 adaptive mesh refinement with rebalancing (the restart format already
 reserves the refinement history); a single-precision PETSc field-split
 reference; implicit cyclic and AMI block coupling; GPU execution; and the
@@ -1443,11 +1591,13 @@ solver is faster than tuned native SIMPLEC in wall-clock time and CPU-hours
 is answered by the benchmark of Section~\ref{sec:perf}, whose results are
 generated directly from the measurement records.
 
-\paragraph{Reproducibility.} All numbers, tables and figures in
-Sections~\ref{sec:vv} and~\ref{sec:perf} are generated by
-\code{bench/make\_report.py} from the JSON records in \code{results/}; the
-title page states the commit (\code{\cfnum{Commit}}) at which they were
-generated.
+\paragraph{Reproducibility.} All measured numbers, tables and figures are
+generated by \code{bench/make\_report.py} from the JSON records in
+\code{results/}; the numbers of the exploratory runs and of the symbol
+analysis in Section~\ref{sec:discussion} are extracted or computed by
+\code{bench/exploratory\_numbers.py} (with the source of every value
+recorded in \code{results/exploratory/}). The title page states the commit
+(\code{\cfnum{Commit}}) at which they were generated.
 
 \bibliographystyle{plainnat}
 \bibliography{references}
