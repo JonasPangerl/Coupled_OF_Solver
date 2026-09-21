@@ -63,8 +63,14 @@ case "$variant" in
     *) echo "Unknown mesh variant '$variant' (fine|coarse)" 1>&2; exit 1 ;;
 esac
 
+# Core binding (spec 3). On a shared machine: CF_MPI_CPUSET=10-15 pins the
+# ranks to that core set (disjoint from another job); CF_MPI_BIND=none
+# disables binding.
 bind="${CF_MPI_BIND:-core}"
-if [ "$bind" = core ]
+if [ -n "$CF_MPI_CPUSET" ]
+then
+    mpiOpts="--cpu-set $CF_MPI_CPUSET --bind-to core"
+elif [ "$bind" = core ]
 then
     mpiOpts="--bind-to core --map-by core"
 else

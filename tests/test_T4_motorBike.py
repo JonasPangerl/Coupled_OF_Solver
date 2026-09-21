@@ -22,6 +22,7 @@ test_scaling.py.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -37,7 +38,8 @@ sys.path.insert(0, str(cfenv.REPO / "bench"))
 import run_bench  # noqa: E402  (harness criterion, rank timing)
 
 TEMPLATE = "T4_motorBike"
-NP = 16
+# Ranks of the heavy cases; CF_HEAVY_NP (e.g. 6) next to another job
+NP = int(os.environ.get("CF_HEAVY_NP", "16"))
 WINDOW = run_bench.WINDOW           # 100
 TOL = run_bench.TOL                 # 0.002
 TOL_CD = 0.01

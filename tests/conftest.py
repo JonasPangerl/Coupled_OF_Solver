@@ -14,7 +14,9 @@ cached there and reused (delete run/ref_* to recompute).
 
 Shared machine: if other solver/meshing jobs run or the load is high, MPI
 ranks are not bound to cores (CF_MPI_BIND=none) and heavy tests are skipped
-unless CF_FORCE_HEAVY=1.
+unless CF_FORCE_HEAVY=1. With CF_MPI_CPUSET=10-15 (a core set disjoint from
+the other job, which must itself run with --cpu-set) ranks are pinned there
+and heavy tests run; use --ranks / case np not larger than the set.
 """
 
 from __future__ import annotations
@@ -44,7 +46,10 @@ def pytest_collection_modifyitems(config, items):
     if state.busy and "CF_MPI_BIND" not in os.environ:
         os.environ["CF_MPI_BIND"] = "none"
     run_heavy = config.getoption("--heavy")
-    force = os.environ.get("CF_FORCE_HEAVY") == "1"
+    # A dedicated core set (CF_MPI_CPUSET, disjoint from the other job)
+    # makes heavy runs acceptable on a shared machine
+    force = (os.environ.get("CF_FORCE_HEAVY") == "1"
+             or bool(os.environ.get("CF_MPI_CPUSET")))
     for item in items:
         if "heavy" in item.keywords:
             if not run_heavy:

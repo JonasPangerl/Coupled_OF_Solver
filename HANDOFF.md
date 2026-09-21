@@ -1,0 +1,139 @@
+# HANDOFF - state of coupledFoam and review list
+
+Written 2026-09-21 (evening) before a session compaction. Read this first,
+then `PLAN.md`, `DECISIONS.md` (D-001..D-029), `SPEC_amendment_B.md`,
+`AMENDMENT_B_STATUS.md`.
+
+## 1. Where things are
+
+- Repository: WSL `/home/jonas/coupledFoam`, remote
+  `https://github.com/JonasPangerl/Coupled_OF_Solver` (branch `main`,
+  last pushed commit `d0ace1f`). Commits follow `phase-<N>: <what>`.
+- Build: against the read-only system OpenFOAM v2606 DP
+  (`/usr/lib/openfoam/openfoam2606`, NEVER modify, NEVER apt on openfoam*).
+  Products go to `~/OpenFOAM/jonas-v2606/platforms/linux64GccDPInt32Opt/`.
+- Python venv for tests/report: `~/OF/venv` (system-site-packages + pandas,
+  pytest, numpy-stl).
+- Helper scripts (outside the repo): `~/bin/cfenv <sys|dp-debug|dp-opt> cmd`
+  (sources exactly one OpenFOAM bashrc, niced), `~/bin/cf-fixown` (re-owns
+  root-owned files written through `\\wsl.localhost`, restores exec bits).
+  Scratch scripts: Windows scratchpad `.../scratchpad/build_all.sh`
+  (build lib + apps, `build_all.sh 2` = 2 jobs), `pytest_run.sh`,
+  `exp_re1000.sh` (variant runs of T0 Re1000).
+- Tool gotchas (also in Claude memory `wsl-workflow-gotchas`): use
+  `MSYS_NO_PATHCONV=1 wsl.exe -e <abs path> args`; never
+  `wsl.exe -- bash -c '...$var...'`; UNC writes are root-owned -> run
+  cf-fixown; OpenFOAM `etc/bashrc` sources files passed as positional args
+  (cfenv clears them).
+
+## 2. Uncommitted work at handoff time
+
+- `src/blockSolvers/blockGAMG.{H,C}`, new `blockGAMGProcAgglomeration.H`:
+  processor agglomeration (spec amendment 6.3.4), being written by a
+  background subagent when the session was compacted. Its report will
+  arrive as a task notification. After it: rebuild, check the diff,
+  verify serial unchanged and 4-rank on/off identical, then commit.
+- `cases/*/Allrun`, `tests/cflib/env.py`, `tests/conftest.py`,
+  `tests/test_T4_motorBike.py`: `CF_MPI_CPUSET` (disjoint core set next to
+  another job), `CF_HEAVY_NP` (ranks of heavy cases). Ready to commit.
+
+## 3. Results so far (all 1 rank unless stated)
+
+| Test | Result |
+|---|---|
+| test_env, Test-precision, block4Ops, doubleReduce, blockMatrix (1+4 ranks), blockGAMG (1+4, tol 1e-9, D-023) | pass |
+| T0 Re100 | pass: 58 outer its, 9.6 s; profiles 2.9e-6 / 5.5e-6 vs simpleFoam (1932 its, 173 s) |
+| T0 Re1000 | pass: 58 its, 17.9 s; profiles 1.4e-5 |
+| T0 np4 (both Re) | **FAIL: MPI_ERR_TRUNCATE** in coupledFoam (see 4.1) |
+| T1, T2, T3, T-restart, T-fpe | written, not yet run |
+| T4, T5, T-scaling (heavy) | written, not run (user: no heavy tests until the F1 job is stopped and the user says go) |
+| Benchmark (A-G), report, paper PDF | harness/generator written; paper needs LaTeX (user is installing via sudo) |
+
+Key finding (D-028): the block Gauss-Seidel smoother is inadequate for the
+coupled saddle-point system; ILU0 (block DILU) or FGMRES+K-cycle fixes it.
+T0 Re1000 before amendment B: not converged in 300 its (978 s); with
+FGMRES+K+Eisenstat-Walker: 58 its / 18 s (GS) or 69 its / 6 s (ILU0).
+
+## 4. Open problems (do these first)
+
+1. **Parallel MPI_ERR_TRUNCATE** (T0 np4, coupledFoam with FGMRES + K-cycle).
+   The 4-rank Test-blockGAMG with BiCGStab + V passed earlier. Suspects:
+   the build may have contained a half-edited blockGAMG from the
+   proc-agglomeration agent; otherwise a collective mismatch in the K-cycle
+   or coarsest solve (e.g. useDenseLU_ decided differently on different
+   ranks, a rank with 0 coarse cells, K-step dot products on a level
+   communicator, message tags of blockLduInterface reused by two
+   simultaneous exchanges on different levels). Reproduce with
+   `mpirun --bind-to none -np 4 Test-blockGAMG -parallel -cycle K` on
+   `run/unit_cavity`, then coupledFoam on `run/T0_Re100_np4`.
+2. **Formal ILU0 decision** (spec 6.3: Gate B2, >= 15 % wall-clock gain on
+   T2): run T2 with blockGaussSeidel vs blockILU0 (FGMRES+K), record in
+   DECISIONS and set the case default. T0 data already strongly favour ILU0.
+3. Run T1, T2, T3 (SST, GEKO), T-restart, T-fpe (pytest), fix failures.
+4. Heavy (only after the user's go): mesh T4a, T4b, T5 (`run/*_mesh`
+   caches), T4/T5 tests, T-scaling, benchmark A-G (3 repeats; with less time
+   at least 1 repeat on the big cases), then `bench/make_report.py` and
+   `make -C report/paper`.
+5. OpenFOAM DP Debug build in `~/OF/OpenFOAM-v2606-DP-Debug` (needs bison,
+   being installed) for the Debug-build FPE tests (spec 9.1/13); several
+   hours on 8 cores, only when the machine is free.
+6. **F1 readiness** (the user wants to use coupledFoam on the F1 half-car
+   cases next): read the F1 case in the case repo
+   `C:\Users\Dell T5600\OneDrive\Dokumente\SIMS\OpenFoam_cases`
+   (read-only; never touch `f1_halfcar/runs/*`), list its BCs / function
+   objects / schemes / MRF or rotating walls / cyclicAMI and check each is
+   supported by coupledFoam (D-002 generic BC linearisation; cyclic/AMI are
+   explicit per spec 5.5). Prepare a ready-to-use `fvSolution` block for
+   coupledFoam on that case and a short how-to.
+
+## 5. Review list for a stronger agent (before the big tests)
+
+Correctness-critical, worth a careful independent read:
+
+1. `src/assembly/coupledAssembler.C`: signs and completeness of the 4x4
+   block entries (momentum, grad p, div U, Rhie-Chow p-p), processor
+   interface coefficients (native sign convention result -= bouCoeffs),
+   boundary linearisation via valueInternal/BoundaryCoeffs, the strong
+   pressure reference (D-021), the double residual and normFactor.
+   Evidence it is right in serial: T0 matches simpleFoam to 3e-6.
+   Not yet verified: processor faces (parallel failed), cyclic/explicit
+   patches, MRF, non-orthogonal meshes (T1-T5).
+2. `src/assembly/rhieChow.C`: flux update must equal the continuity row
+   exactly (same face formula); D_f boundary policy (D-013); cellLimited
+   gradient in static cells (D-018).
+3. `src/blockSolvers/blockGAMG.C`: K-cycle (Notay-Vassilevski GCR),
+   W/F recursion work-vector aliasing, coarse Galerkin sums incl.
+   faceFlipMap, dense LU, processor agglomeration (new), parallel
+   collectives on level communicators.
+4. `src/blockSolvers/blockFGMRES.C`, `blockGMRES.C`, `blockBiCGStab.C`:
+   Givens/back-substitution, restart logic, best-iterate return, rho.
+5. `applications/coupledFoam/coupledFoam.C`: outer-loop order (5.7),
+   B4 failure/abort path, Eisenstat-Walker placement (eta per assembly,
+   accept only on accepted steps), Anderson placement and flushes,
+   sentinel rollback, restart state completeness (T-restart requires
+   +-2 iterations and 1e-5 on dp/Cd).
+6. `src/control/anderson.C` (D-026 formula), `gamgAutoTune.C`,
+   `remediation.C` zonal part (agent-written, compiled, never run).
+7. `bench/run_bench.py`: configuration definitions A-G (D-025), time to
+   convergence scaling by tWall/ClockTime, CPU-hours from rank_wrapper.
+8. `report/paper/paper.tex`: every claim against DECISIONS.md and the
+   code; the paper agent flagged: Re1000 discussion numbers were
+   hand-copied from exploratory runs (replace by generated ones), author
+   line placeholder, Ceze & Fidkowski 2013 paper number to verify.
+9. Spec compliance gaps to re-check: gradient limiter in static cells only
+   for p (D-018); collated file handler atomic write (D-017); Anderson
+   history not in restart state (D-026).
+
+## 6. User preferences (standing)
+
+- System OpenFOAM stays untouched; coupledFoam is an add-on.
+- Machine shared with F1 runs: check load before any build/run; tiny
+  tests only while F1 runs; heavy tests only after the user says so.
+  Next to F1: `CF_MPI_CPUSET=10-15 CF_HEAVY_NP=6` (F1 itself pinned with
+  `mpirun --cpu-set 0-9 --bind-to core`).
+- Every performance result with wall-clock AND CPU-hours; the goal is the
+  fastest solver, not the fewest iterations.
+- Everything in git in English; final English LaTeX paper with vector
+  figures, regenerable from `results/`.
+- Parallel subagents are welcome to speed up work (give them exclusive
+  files; the lead integrates, builds and commits).

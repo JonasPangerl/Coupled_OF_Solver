@@ -95,6 +95,11 @@ def mpirun_prefix(nprocs: int, busy: bool | None = None) -> list[str]:
 
     CF_MPI_BIND overrides (e.g. "none" or "core").
     """
+    cpuset = os.environ.get("CF_MPI_CPUSET")
+    if cpuset:
+        # Disjoint core set next to another job (e.g. "10-15")
+        return ["mpirun", "-np", str(nprocs), "--cpu-set", cpuset,
+                "--bind-to", "core"]
     if busy is None:
         busy = machine_state().busy
     bind = os.environ.get("CF_MPI_BIND", "none" if busy else "core")
