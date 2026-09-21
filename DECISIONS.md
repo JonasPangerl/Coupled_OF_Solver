@@ -295,3 +295,96 @@ criteria. The cross-rank metric is the relative L2 difference of the whole
 solution vector; per-component integrals are recorded too but not used,
 because the pressure-component integral nearly cancels (~2e-6 against ~8e-5)
 and its relative difference is not a measure of solution identity.
+
+## D-024 - "Outer iterations to R < 1e-5" for simpleFoam (T2)
+
+simpleFoam has no combined residual R. For the T2 iteration-count criterion
+the native iteration count is the first iteration at which all initial
+residuals (p, Ux, Uy, k, omega) are below 1e-5; for coupledFoam it is the
+first iteration with R < 1e-5. The two normalisations differ; the metric is
+reported as defined here, and the report additionally compares both solvers
+with the identical force/pressure-drop window criterion of 12.3(ii) and in
+wall-clock and CPU time, which are the decisive quantities for the user.
+
+## D-025 - Benchmark configurations A and B, time metrics
+
+- A "simpleFoam with tutorial settings": the case's own native solver
+  settings and relaxation factors as shipped with the tutorial (for
+  pitzDaily and backwardFacingStep2D the tutorial itself uses SIMPLEC,
+  consistent yes).
+- B "SIMPLEC, p 1.0 / U 0.9 / k,omega 0.9" as specified.
+- Stop: the solvers' own criteria are disabled (fixed iteration budget);
+  the harness finds the convergence iteration with the window criterion.
+- Time to convergence: every rank runs under `/usr/bin/time -v`; wall time
+  and CPU time (user + sys summed over all ranks, reported in CPU-hours) of
+  the whole run are scaled by the solver's own time progression at the
+  convergence iteration (coupledFoam `tWall`, simpleFoam `ClockTime`).
+  Speed-up is reported both as wall-time and as CPU-hour ratio (user
+  request 2026-09-21: the fastest solver, not the one with the fewest
+  iterations, is the goal).
+
+## D-026 - Anderson acceleration: Walker & Ni Type II update (B5)
+
+The short formula in B5, x_(k+1) = x_k + beta (w_k - sum alpha_j dw_j) with
+x_k taken after the update, omits the state-difference term and, read
+literally, adds w_k twice. Implemented is the Type II form of Walker & Ni
+(2011): with x_k the state the step started from and f_k = omega dx the
+accepted increment,
+    gamma = argmin || S (f_k - sum_j gamma_j dF_j) ||_2
+    x_(k+1) = x_k + beta f_k - sum_j gamma_j (dX_j + beta dF_j),
+S scaling velocity by Uref and pressure by pref (dimensionless least
+squares). The least-squares problem is solved with an updated QR
+factorisation (two Gram-Schmidt passes, Givens down-dating), all dot
+products in double and global. Memory is 2m+2 double 4-vectors per cell
+(m = 4: 320 B/cell, 14.4 GB at 45 M cells, slightly above the 11.5 GB of the
+B7 table). The Anderson history is not part of the restart state (a
+restart starts with an empty history). Flushes: CFL cut, skipped step,
+omegaMin marking, dynamic-set size change, rollback, sentinel rejection.
+
+## D-027 - Zonal factors act only through dt and beta (B6)
+
+Zonal factors act only through the local pseudo-time step (cflFactor) and
+the convection blending factor (beta). A smaller local dt adds a larger
+diagonal term V/dt, i.e. implicit local under-relaxation; the Newton-like
+update stays consistent. Explicit per-patch or per-zone relaxation factors
+on the increment are deliberately not implemented: they would change the
+direction of the increment that the line search judges. Processor
+boundaries need no relaxation (block interfaces are fully implicit).
+Patch-distance layers are computed once by breadth-first growth from the
+patch faces' cells, across processor faces; processor patches are never
+start patches. Several matching entries multiply; the zonal factors apply
+after the static/dynamic rules (dynamic cells keep beta = 0). Input checks:
+cflFactor > 0, 0 <= beta <= 1, nLayers >= 1.
+
+## D-028 - The block Gauss-Seidel smoother is not adequate (measured)
+
+T0 Re 1000 (128x128, linearUpwind deferred correction, 300 outer
+iterations, 1 rank, before amendment B):
+
+| linear solver | iterations to R < 1e-8 | CFL cuts | sum linear its | t_solve |
+|---|---|---|---|---|
+| BiCGStab + blockGaussSeidel | not reached (R 3.4e-4) | 29 | 13757 | 950 s |
+| GMRES + blockGaussSeidel | not reached (R 6.9e-2) | 0 | 58716 | 811 s |
+| BiCGStab + blockILU0 | 59 | 0 | 406 | 26 s |
+| GMRES + blockILU0 | 59 | 0 | 374 | 7 s |
+| BiCGStab + GS, pure upwind (beta 0) | 186 | 14 | 9106 | 509 s |
+
+The outer-iteration oscillation at Re 1000 was first attributed to the
+explicit deferred correction; the ILU0 runs disprove this: with the block
+DILU smoother the same discretisation converges in 59 iterations at CFL
+500 without a single cut. Poor increments from the block Gauss-Seidel
+smoothed solve (the 4x4 point smoother is weak on the saddle-point
+structure of the coupled system) caused the oscillation. The spec's formal
+ILU0 decision (Gate B2, >= 15 % wall-clock gain on T2) is taken on T2; the
+T0 data above are the supporting evidence. A residual-growth rollback that
+was considered for the supposed deferred-correction instability is not
+implemented (not needed).
+
+## D-029 - Linear-solve failure: B4 replaces D-020 item 2
+
+With amendment B4, a linear solve that does not reach eta*||r0|| (or the
+absolute floor) within maxIter is a failure: CFL is cut by kappa and the
+step repeated (counting toward maxCflCuts); maxLinFails consecutive
+failures abort through the 9.3 diagnostic path (last-valid fields written,
+FatalError). D-020 item 1 (best-iterate return) stays. The "skip the step"
+fallback of D-020 remains only for the case maxCflCuts < maxLinFails.

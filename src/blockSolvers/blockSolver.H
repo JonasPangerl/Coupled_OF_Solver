@@ -57,6 +57,11 @@ struct blockSolverPerformance
     bool converged = false;
     bool breakdown = false;
 
+    //- Preconditioner efficiency on the first application of this solve,
+    //  rho = ||r0 - A M^-1 r0|| / ||r0|| (amendment B3 6.3.5); -1 if not
+    //  measured
+    reduceScalar rho = -1;
+
     //- Write one-line summary
     void print(Ostream& os) const;
 };
@@ -82,7 +87,8 @@ protected:
         reduceScalar tolerance_;
 
         //- Relative tolerance to the initial residual of this solve
-        reduceScalar relTol_;
+        //  (mutable: set per outer iteration by Eisenstat-Walker, B2)
+        mutable reduceScalar relTol_;
 
         //- Maximum and minimum number of iterations
         label maxIter_;
@@ -175,6 +181,17 @@ public:
 
         const blockLduMatrix4& matrix() const noexcept { return matrix_; }
         const dictionary& controlDict() const noexcept { return controlDict_; }
+
+        //- Relative tolerance of the next solves
+        reduceScalar relTol() const noexcept { return relTol_; }
+        void setRelTol(const reduceScalar r) const noexcept { relTol_ = r; }
+
+        //- Absolute tolerance
+        reduceScalar tolerance() const noexcept { return tolerance_; }
+
+        //- rho = ||r - A M^-1 r|| / ||r|| for a given r (one preconditioner
+        //  application and one Amul)
+        reduceScalar measureRho(const blockScalarUList& r) const;
 
         //- Preconditioner (may be null)
         const blockPreconditioner* preconditioner() const

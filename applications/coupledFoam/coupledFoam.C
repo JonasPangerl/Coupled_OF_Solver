@@ -53,6 +53,9 @@ Description
 #include "coupledState.H"
 #include "runInfo.H"
 #include "jsonWriter.H"
+#include "gamgAutoTune.H"
+#include "anderson.H"
+#include "adaptiveTolerance.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -128,6 +131,32 @@ int main(int argc, char *argv[])
     lineSearch ls(coupledDict);
     remediation rem(mesh, coupledDict);
     sentinel sen(mesh, coupledDict);
+    anderson aa(mesh, coupledDict);
+    adaptiveTolerance ew(linearDict);
+    const label maxLinFails =
+        coupledDict.subOrEmptyDict("ptc").getOrDefault<label>
+        (
+            "maxLinFails",
+            coupledDefaults::maxLinFails
+        );
+
+    // autoTune controller of the block-GAMG cycle (6.3.5)
+    autoPtr<gamgAutoTune> tuner;
+    {
+        const blockGAMGPrecon* gp =
+            dynamic_cast<const blockGAMGPrecon*>(linSolver->preconditioner());
+        if (gp)
+        {
+            tuner.reset
+            (
+                new gamgAutoTune
+                (
+                    gp->gamg(),
+                    linearDict.subOrEmptyDict("blockGAMG")
+                )
+            );
+        }
+    }
     convergenceMonitor conv(coupledDict);
     coupledState state(mesh, coupledDict);
 
@@ -170,7 +199,18 @@ int main(int argc, char *argv[])
         );
         dictionary lin;
         linSolver->writeSettings(lin);
+        ew.writeSettings(lin);
         eff.add("linearSolver", lin);
+        {
+            dictionary a;
+            aa.writeSettings(a);
+            eff.add("anderson", a);
+        }
+        eff.subDict("ptc").add("maxLinFails", maxLinFails);
+        if (tuner)
+        {
+            eff.add("autoTune", tuner->settings());
+        }
 
         Info<< nl << "coupledFoam: effective settings" << nl
             << eff << endl;
@@ -218,6 +258,7 @@ int main(int argc, char *argv[])
             ptc.readState(st);
             rem.readState(st);
             sen.readState(st);
+            ew.readState(st);
 
             Info<< "coupledFoam: restart from " << runTime.timeName()
                 << " at iteration " << iter << ", CFL " << ptc.CFL()
@@ -283,6 +324,7 @@ int main(int argc, char *argv[])
         ptc.writeState(st);
         rem.writeState(st);
         sen.writeState(st);
+        ew.writeState(st);
         st.set("refinementHistory", labelList());
         return st;
     };
@@ -333,6 +375,7 @@ int main(int argc, char *argv[])
     };
 
     label nCflCutsTotal = 0;
+    label linFails = 0;
     bool converged = false;
     clockTime runTimer;
     scalar lastR = -1;
@@ -368,6 +411,7 @@ int main(int argc, char *argv[])
         label cuts = 0;
         label nLocLim = 0;
         scalar Rraw = 0;
+        scalar eta = 0;
         bool skipStep = false;
 
         // --- Assemble, solve, line search with CFL cuts (7.2)
@@ -387,6 +431,14 @@ int main(int argc, char *argv[])
 
             Rraw = assembler.residualL2();
 
+            // Eisenstat-Walker inner tolerance (amendment B2)
+            {
+                // GUARD: R1 >= VSMALL (9.2)
+                const scalar Rn = Rraw/max((R1 > 0 ? R1 : Rraw), VSMALL);
+                eta = ew.eta(Rn, startupDone);
+                linSolver->setRelTol(eta);
+            }
+
             clockTime ts;
             dx = Zero;
             perf = linSolver->solve(dx, assembler.rhs(), assembler.normFactor());
@@ -404,13 +456,41 @@ int main(int argc, char *argv[])
                 }
             }
 
-            // A linear solve that did not reduce the residual (or produced
-            // non-finite values) is a failed step, like a line-search
-            // failure (DECISIONS.md D-020)
+            // Linear-solve failure (amendment B4): not converged to
+            // eta*||r0|| (or the absolute floor) within maxIter, or
+            // non-finite values. CFL cut and repeat; maxLinFails
+            // consecutive failures abort through the 9.3 path.
             const bool solveFailed =
-                (!perf.converged
-             && !(perf.finalResidual < perf.initialResidual))
+                !perf.converged
              || !std::isfinite(doubleReduce::sumSqr(dx));
+
+            if (solveFailed)
+            {
+                ++linFails;
+                if (linFails >= maxLinFails)
+                {
+                    const sentinel::checkResult chk =
+                        sen.check(U, p, kPtr, omegaPtr, ls.Uref(), ls.pref());
+                    sen.writeLastValid
+                    (
+                        U, p, phi, kPtr, omegaPtr, nutPtr, chk.offending, iter
+                    );
+                    rem.write();
+                    FatalErrorInFunction
+                        << linFails << " consecutive linear-solve failures"
+                        << " (maxLinFails " << maxLinFails << ") at iteration "
+                        << iter << ", last: initial residual "
+                        << perf.initialResidual << ", final "
+                        << perf.finalResidual << " after "
+                        << perf.nIterations << " iterations, eta " << eta
+                        << ". Fields written to " << iter << "_lastValid."
+                        << exit(FatalError);
+                }
+            }
+            else
+            {
+                linFails = 0;
+            }
 
             omega = (solveFailed ? 0 : ls.omega(dx));
 
@@ -427,7 +507,8 @@ int main(int argc, char *argv[])
             }
             if (solveFailed)
             {
-                // No update from a failed solve: skip the step
+                // Cuts exhausted (maxCflCuts < maxLinFails): no update from
+                // a failed solve, skip the step (D-020)
                 skipStep = true;
                 dx = Zero;
                 omega = 0;
@@ -436,8 +517,15 @@ int main(int argc, char *argv[])
             {
                 omega = ls.omegaMin();
                 rem.markDynamic(ls.offendingCells(dx));
+                aa.flush();
             }
             break;
+        }
+
+        // Anderson history is invalid after a CFL change (B5)
+        if (cuts > 0 || skipStep)
+        {
+            aa.flush();
         }
 
         // GUARD: R1 >= VSMALL before division (9.2)
@@ -469,18 +557,45 @@ int main(int argc, char *argv[])
         }
         sen.store(U, p, phi, kPtr, omegaPtr, nutPtr);
 
+        vectorField dUapplied(mesh.nCells());
+        scalarField dpApplied(mesh.nCells());
         {
             vectorField& Ui = U.primitiveFieldRef();
             scalarField& pi = p.primitiveFieldRef();
             forAll(Ui, celli)
             {
                 const blockScalar* d = dx.cdata() + celli*blockDim;
-                Ui[celli] += omega*vector(d[0], d[1], d[2]);
-                pi[celli] += omega*scalar(d[blockP]);
+                dUapplied[celli] = omega*vector(d[0], d[1], d[2]);
+                dpApplied[celli] = omega*scalar(d[blockP]);
+                Ui[celli] += dUapplied[celli];
+                pi[celli] += dpApplied[celli];
             }
         }
         U.correctBoundaryConditions();
         p.correctBoundaryConditions();
+
+        // Anderson acceleration of the accepted update (amendment B5)
+        label andersonStatus = -1;
+        if (aa.enabled() && !skipStep)
+        {
+            const anderson::status st =
+                aa.apply(U, p, dUapplied, dpApplied, ls.Uref(), ls.pref());
+            andersonStatus = label(st);
+            if (st == anderson::status::applied)
+            {
+                U.correctBoundaryConditions();
+                p.correctBoundaryConditions();
+                const sentinel::checkResult chkA =
+                    sen.check(U, p, kPtr, omegaPtr, ls.Uref(), ls.pref());
+                if (!chkA.ok)
+                {
+                    aa.reject(U, p);
+                    U.correctBoundaryConditions();
+                    p.correctBoundaryConditions();
+                    andersonStatus = -2;
+                }
+            }
+        }
 
         assembler.rc().updateFlux(phi, U, p, assembler.noc());
         MRF.makeRelative(phi);
@@ -490,6 +605,7 @@ int main(int argc, char *argv[])
         auto rollback = [&](const sentinel::checkResult& chk)
         {
             sen.restore(U, p, phi, kPtr, omegaPtr, nutPtr);
+            aa.flush();
             ptc.decrease(sen.cflFactor());
             rem.markDynamic(chk.offending);
             rolledBack = true;
@@ -527,10 +643,15 @@ int main(int argc, char *argv[])
 
         if (!rolledBack)
         {
+            const label nDynBefore = rem.nDynamic();
             rem.updateDynamic
             (
                 U, p, kPtr, omegaPtr, ls.Uref(), ls.pref(), iter
             );
+            if (rem.nDynamic() != nDynBefore)
+            {
+                aa.flush();
+            }
 
             // --- Turbulence, segregated (5.8)
             clockTime tt;
@@ -551,6 +672,7 @@ int main(int argc, char *argv[])
         {
             sen.accepted();
             ptc.update(R);
+            ew.accept(R, eta);
 
             if
             (
@@ -568,6 +690,11 @@ int main(int argc, char *argv[])
         lastR = R;
         lastLinIters = perf.nIterations;
 
+        if (tuner)
+        {
+            tuner->record(iter, scalar(perf.rho));
+        }
+
         // --- Log line (12.1)
         Info<< "CF| iter=" << iter
             << " CFL=" << ptc.CFL()
@@ -582,11 +709,18 @@ int main(int argc, char *argv[])
             << " tSolve=" << tSolve
             << " tTurb=" << tTurb
             << " tIter=" << iterTimer.elapsedTime()
+            << " tWall=" << runTime.elapsedClockTime()
             << " nStat=" << rem.nStatic()
             << " nDyn=" << rem.nDynamic()
             << " nLocLim=" << nLocLim
             << " nRollback=" << sen.nRollbacks()
-            << " nClamped=" << nClamped;
+            << " nClamped=" << nClamped
+            << " eta=" << eta
+            << " rho=" << perf.rho;
+        if (aa.enabled())
+        {
+            Info<< " aa=" << andersonStatus;
+        }
         if (nNutCapped)
         {
             Info<< " nNutCapped=" << nNutCapped;
@@ -669,6 +803,18 @@ int main(int argc, char *argv[])
         {
             j.add("Cd", conv.Cd());
             j.add("Cl", conv.Cl());
+        }
+        if (tuner)
+        {
+            j.addRaw("gamgTuneEvents", tuner->eventsJson());
+            j.add("gamgTuneFailed", tuner->failed());
+        }
+        if (aa.enabled())
+        {
+            j.add("andersonApplied", aa.nApplied());
+            j.add("andersonSkipped", aa.nSkipped());
+            j.add("andersonRejected", aa.nRejected());
+            j.add("andersonFlushed", aa.nFlushed());
         }
         const blockGAMGPrecon* gp =
             dynamic_cast<const blockGAMGPrecon*>(linSolver->preconditioner());

@@ -3,26 +3,35 @@
   License: GPL-3.0-or-later
 -------------------------------------------------------------------------------
 Class
-    Foam::blockGMRES
+    Foam::blockFGMRES
 
 Description
-    Restarted GMRES(m) with right preconditioning (Saad 2003, Alg. 9.5;
-    amendment B1): Arnoldi on A M^-1, only V_j is stored and the correction
-    x += M^-1 (V y) is formed once per restart cycle. Correct only for a
-    fixed (linear) preconditioner; use blockFGMRES with the K-cycle.
-    Happy-breakdown guard as blockFGMRES.
+    Flexible GMRES(m) (Saad 2003, Alg. 9.6; amendment B1): the
+    preconditioned vectors z_j = M_j^-1 v_j are stored, so a preconditioner
+    that changes between applications (block-GAMG K-cycle, iterative
+    coarsest-level solve) is handled correctly. Required for cycleType K.
 
-    Dictionary: restart (default 10), legacy keyword gmresRestart.
+    Arnoldi with modified Gram-Schmidt; every inner product through
+    doubleReduce. The Hessenberg matrix, the Givens rotations and the
+    least-squares solve are in double. Happy-breakdown guard: if
+    h_(j+1,j) < VSMALL*||r0|| the cycle stops and the small system is solved.
 
-    Memory: m + 3 block vectors of 4*nCells blockScalar.
+    The first Arnoldi step of every solve also yields the preconditioner
+    efficiency rho = ||v1 - A M^-1 v1|| (autoTune, 6.3.5) at the cost of one
+    extra reduction.
+
+    Dictionary: restart (default 10; 6 above 40 M cells, B7), legacy
+    keyword gmresRestart accepted.
+
+    Memory: 2*m + 2 block vectors of 4*nCells blockScalar.
 
 SourceFiles
-    blockGMRES.C
+    blockFGMRES.C
 
 \*---------------------------------------------------------------------------*/
 
-#ifndef coupledFoam_blockGMRES_H
-#define coupledFoam_blockGMRES_H
+#ifndef coupledFoam_blockFGMRES_H
+#define coupledFoam_blockFGMRES_H
 
 #include "blockSolver.H"
 
@@ -31,7 +40,7 @@ SourceFiles
 namespace Foam
 {
 
-class blockGMRES
+class blockFGMRES
 :
     public blockSolver
 {
@@ -44,16 +53,16 @@ class blockGMRES
 public:
 
     //- Runtime type information
-    TypeName("blockGMRES");
+    TypeName("blockFGMRES");
 
 
     // Constructors
 
-        blockGMRES(const blockLduMatrix4& matrix, const dictionary& dict);
+        blockFGMRES(const blockLduMatrix4& matrix, const dictionary& dict);
 
 
     //- Destructor
-    virtual ~blockGMRES() = default;
+    virtual ~blockFGMRES() = default;
 
 
     // Member Functions

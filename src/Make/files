@@ -5,6 +5,7 @@ blockMatrix/blockLduMatrix4.C
 blockSolvers/blockSolver.C
 blockSolvers/blockBiCGStab.C
 blockSolvers/blockGMRES.C
+blockSolvers/blockFGMRES.C
 blockSolvers/blockGAMG.C
 blockSolvers/blockPreconditioners/blockPreconditioner.C
 blockSolvers/blockPreconditioners/blockDiagonal.C
@@ -25,6 +26,9 @@ control/lineSearch.C
 control/remediation.C
 control/sentinel.C
 control/convergenceMonitor.C
+control/adaptiveTolerance.C
+control/gamgAutoTune.C
+control/anderson.C
 
 io/jsonWriter.C
 io/runInfo.C

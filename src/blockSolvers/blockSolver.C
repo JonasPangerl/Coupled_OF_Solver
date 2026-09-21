@@ -180,6 +180,27 @@ Foam::reduceScalar Foam::blockSolver::normFactor
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
+Foam::reduceScalar Foam::blockSolver::measureRho
+(
+    const blockScalarUList& r
+) const
+{
+    updatePreconditioner();
+    const label n = matrix_.nRows();
+    blockScalarList z(n), Az(n);
+    precondition(z, r);
+    matrix_.Amul(Az, z);
+    for (label i = 0; i < n; ++i)
+    {
+        Az[i] = r[i] - Az[i];
+    }
+    // GUARD: ||r|| > 0
+    return
+        doubleReduce::norm2(Az, matrix_.comm())
+       /max(doubleReduce::norm2(r, matrix_.comm()), doubleScalarVSMALL);
+}
+
+
 void Foam::blockSolver::writeSettings(dictionary& dict) const
 {
     dict.add("solver", type());

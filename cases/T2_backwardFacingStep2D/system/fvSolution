@@ -20,25 +20,38 @@ solvers
 {
     coupled
     {
-        solver          blockBiCGStab;
-        preconditioner  blockGAMG;
+        solver          blockFGMRES;    // blockFGMRES | blockGMRES | blockBiCGStab
+        preconditioner  blockGAMG;      // blockDiagonal | blockGAMG
         tolerance       1e-8;
-        relTol          0.05;
+        relTol          0.05;           // used only if adaptiveRelTol no
+        adaptiveRelTol  yes;            // Eisenstat-Walker (amendment B2)
+        etaMin          1e-3;
+        etaMax          0.5;
+        gammaEW         0.9;
+        alphaEW         2;
+        minIter         1;
         maxIter         200;
-        gmresRestart    10;
+        restart         10;             // 6 above 40 M cells (B7)
         blockGAMG
         {
             agglomerator          faceAreaPair;
-            nCellsInCoarsestLevel 500;
-            mergeLevels           1;
+            mergeLevels           2;
+            nCellsInCoarsestLevel 200;
+            cycleType             K;
+            kCycleThreshold       0.25;
+            kCycleMaxSteps        2;
             smoother              blockGaussSeidel;
             nPreSweeps            1;
             nPostSweeps           2;
             nFinestSweeps         2;
             coarsestSolver        blockBiCGStab;
             coarsestTolerance     1e-3;
+            coarsestMaxIter       50;
             maxOperatorComplexity 1.5;
             cacheAgglomeration    true;
+            autoTune              yes;
+            tuneInterval          50;
+            nPostSweepsMax        4;
         }
     }
 
@@ -81,6 +94,7 @@ coupled
         betaMax         1.5;
         betaExp         1.1;
         nHold           10;
+        maxLinFails     3;      // amendment B4
     }
 
     lineSearch
@@ -110,6 +124,10 @@ coupled
             beta                0;
             nonOrthLimiter      0.2;
             cflFactor           0.5;
+        }
+        zonal
+        {
+            enabled             no;     // amendment B6
         }
         dynamic
         {
@@ -144,6 +162,13 @@ coupled
         residualTol         1e-6;   // converged reattachment; T2 compares iterations to R < 1e-5
     }
 
+    anderson
+    {
+        enabled         no;     // amendment B5
+        m               4;
+        beta            1.0;
+    }
+
     ftz             yes;
     writeState      yes;
 }
@@ -167,6 +192,6 @@ potentialFlow
     nNonOrthogonalCorrectors 3;
 }
 
-#include "relaxation"
+#sinclude "relaxation"     // written by Allrun from relaxation.<solver>
 
 // ************************************************************************* //

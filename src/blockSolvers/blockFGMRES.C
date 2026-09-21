@@ -3,7 +3,7 @@
   License: GPL-3.0-or-later
 \*---------------------------------------------------------------------------*/
 
-#include "blockGMRES.H"
+#include "blockFGMRES.H"
 #include "blockPreconditioner.H"
 #include "doubleReduce.H"
 #include "coupledDefaults.H"
@@ -14,14 +14,14 @@
 
 namespace Foam
 {
-    defineTypeNameAndDebug(blockGMRES, 0);
-    addToRunTimeSelectionTable(blockSolver, blockGMRES, dictionary);
+    defineTypeNameAndDebug(blockFGMRES, 0);
+    addToRunTimeSelectionTable(blockSolver, blockFGMRES, dictionary);
 }
 
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
-Foam::blockGMRES::blockGMRES
+Foam::blockFGMRES::blockFGMRES
 (
     const blockLduMatrix4& matrix,
     const dictionary& dict
@@ -45,7 +45,7 @@ Foam::blockGMRES::blockGMRES
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-Foam::blockSolverPerformance Foam::blockGMRES::solve
+Foam::blockSolverPerformance Foam::blockFGMRES::solve
 (
     blockScalarUList& x,
     const blockScalarUList& b,
@@ -67,10 +67,14 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
     blockScalarList r(n);
     blockScalarList w(n);
     List<blockScalarList> V(m + 1);
-    blockScalarList z(n);
+    List<blockScalarList> Z(m);
     for (label j = 0; j <= m; ++j)
     {
         V[j].resize(n);
+    }
+    for (label j = 0; j < m; ++j)
+    {
+        Z[j].resize(n);
     }
 
     // Hessenberg (m+1) x m, Givens rotations, rhs of the LSQ problem
@@ -115,8 +119,8 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
 
         for (; j < m && perf.nIterations < maxIter_; ++j)
         {
-            precondition(z, V[j]);
-            matrix_.Amul(w, z);
+            precondition(Z[j], V[j]);
+            matrix_.Amul(w, Z[j]);
 
             // rho on the first preconditioner application (6.3.5):
             // ||v0 - w||^2 = 1 - 2 v0.w + w.w  (v0 has unit norm)
@@ -220,23 +224,15 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
                  ? hii : doubleScalarVSMALL);
         }
 
-        // x += M^-1 (V y), one preconditioner application per cycle
+        // x += Z y
+        for (label i = 0; i < j; ++i)
         {
-            blockScalarList Vy(n, Zero);
-            for (label i = 0; i < j; ++i)
-            {
-                const blockScalar yi = narrow(yv[i]);
-                const blockScalar* __restrict__ vi = V[i].cdata();
-                for (label k = 0; k < n; ++k)
-                {
-                    Vy[k] += yi*vi[k];
-                }
-            }
-            precondition(z, Vy);
+            const blockScalar yi = narrow(yv[i]);
             blockScalar* __restrict__ xp = x.data();
+            const blockScalar* __restrict__ zi = Z[i].cdata();
             for (label k = 0; k < n; ++k)
             {
-                xp[k] += z[k];
+                xp[k] += yi*zi[k];
             }
         }
 
@@ -267,7 +263,7 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
 }
 
 
-void Foam::blockGMRES::writeSettings(dictionary& dict) const
+void Foam::blockFGMRES::writeSettings(dictionary& dict) const
 {
     blockSolver::writeSettings(dict);
     dict.add("restart", restart_);

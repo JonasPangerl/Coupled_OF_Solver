@@ -7,22 +7,37 @@ Application
 
 Description
     Unit test of the block-GAMG-preconditioned block Krylov solver
-    (spec 6.4): solve the 4x4-block Poisson-like system of
-    testPoissonSystem.H with b = A x_exact to tolerance 1e-8.
+    (spec 6.4, amendment B9): solve the 4x4-block Poisson-like system of
+    testPoissonSystem.H with b = A x_exact to tolerance 1e-8 (or tighter).
 
     Pass: converged within 20 iterations. The 1-vs-N-rank comparison (1e-5,
     done by pytest) uses global integrals of the solution:
     sum_P x_k V_P and sum_P x_k^2 V_P per component, and the max error to
-    x_exact.
+    x_exact, or the full solution written with -dumpSolution.
 
     The same solve with the blockDiagonal preconditioner is run for
-    comparison (informational).
+    comparison (informational, skipped with -skipDiagonal).
 
     Solver settings: solvers.coupled of system/fvSolution if present,
-    otherwise the spec 6.1 defaults with tolerance 1e-8 and relTol 0.
+    otherwise the spec 6.1 defaults; tolerance 1e-8 (or -tolerance) and
+    relTol 0 always.
+
+    B9 additions:
+      -cycle V|F|W|K     sets blockGAMG.cycleType (default: the dictionary
+                         value, else K) and switches autoTune off so that
+                         the requested cycle is the one measured.
+                         cycleType K forces solver blockFGMRES (B1).
+      -mergeLevels n     sets blockGAMG.mergeLevels
+      -procAgglom on|off sets / removes blockGAMG.processorAgglomerator
+                         masterCoarsest (6.3.4, Test-procAgglom)
+    The JSON records cycleType, mergeLevels (requested and used), the
+    measured coarsening ratios, nIterations, wall seconds, converged.
 
 Usage
-    Test-blockGAMG [-parallel] [-json <file>] [-solver blockBiCGStab|blockGMRES]
+    Test-blockGAMG [-parallel] [-json <file>]
+        [-solver blockBiCGStab|blockGMRES|blockFGMRES] [-tolerance <tol>]
+        [-cycle V|F|W|K] [-mergeLevels <n>] [-procAgglom on|off]
+        [-dumpSolution <file>] [-skipDiagonal]
 
 \*---------------------------------------------------------------------------*/
 
@@ -42,14 +57,25 @@ static constexpr label maxAllowedIters = 20;
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
+struct gamgInfo
+{
+    bool valid = false;
+    word cycleType;
+    label mergeLevels = -1;
+    label nLevels = 0;
+    doubleScalar Cop = 0;
+    List<doubleScalar> ratios;
+};
+
+
 struct solveResult
 {
     blockScalarList x;
     blockSolverPerformance perf;
-    FixedList<doubleScalar, 4> intX;
-    FixedList<doubleScalar, 4> intX2;
-    doubleScalar maxErr;
-    doubleScalar seconds;
+    FixedList<doubleScalar, 4> intX = FixedList<doubleScalar, 4>(Zero);
+    FixedList<doubleScalar, 4> intX2 = FixedList<doubleScalar, 4>(Zero);
+    doubleScalar maxErr = 0;
+    doubleScalar seconds = 0;
 };
 
 
@@ -60,7 +86,8 @@ static solveResult runSolve
     const blockScalarList& xExact,
     const dictionary& solverDict,
     dictionary& settings,
-    dictionary& gamgStats
+    dictionary& gamgStats,
+    gamgInfo& info
 )
 {
     blockScalarList b(B.nRows());
@@ -80,7 +107,19 @@ static solveResult runSolve
         dynamic_cast<const blockGAMGPrecon*>(solver->preconditioner());
     if (gp)
     {
-        gamgStats = gp->gamg().statsDict();
+        const blockGAMG& g = gp->gamg();
+        gamgStats = g.statsDict();
+        info.valid = true;
+        info.cycleType = blockGAMG::cycleName(g.cycleType());
+        info.mergeLevels = g.mergeLevels();
+        info.nLevels = g.nLevels();
+        info.Cop = g.operatorComplexity();
+        const List<reduceScalar>& r = g.ratios();
+        info.ratios.resize(r.size());
+        forAll(r, i)
+        {
+            info.ratios[i] = r[i];
+        }
     }
 
     res.x = x;
@@ -114,7 +153,13 @@ static solveResult runSolve
 int main(int argc, char *argv[])
 {
     argList::addOption("json", "file", "Write results as JSON");
-    argList::addOption("solver", "name", "blockBiCGStab (default) | blockGMRES");
+    argList::addOption
+    (
+        "solver",
+        "name",
+        "blockBiCGStab (default) | blockGMRES | blockFGMRES;"
+        " cycleType K forces blockFGMRES"
+    );
     argList::addOption
     (
         "tolerance",
@@ -127,6 +172,26 @@ int main(int argc, char *argv[])
         "file",
         "Write the blockGAMG solution gathered on the master as CSV"
         " (x y z x0 x1 x2 x3), for the 1-vs-N-rank comparison"
+    );
+    argList::addOption
+    (
+        "cycle",
+        "V|F|W|K",
+        "blockGAMG cycleType (default: dictionary value, else K);"
+        " also sets autoTune off"
+    );
+    argList::addOption("mergeLevels", "n", "blockGAMG mergeLevels");
+    argList::addOption
+    (
+        "procAgglom",
+        "on|off",
+        "on: processorAgglomerator masterCoarsest (6.3.4);"
+        " off: no processor agglomeration (default: dictionary)"
+    );
+    argList::addBoolOption
+    (
+        "skipDiagonal",
+        "Skip the informational blockDiagonal comparison solve"
     );
 
     #include "setRootCase.H"
@@ -142,12 +207,11 @@ int main(int argc, char *argv[])
     const blockScalarList xExact = testPoisson::makeX(mesh);
 
     // Solver controls
-    dictionary solverDict;
-    {
-        const dictionary& fvSol = mesh.solverDict("coupled");
-        solverDict = fvSol;
-    }
-    solverDict.set("solver", args.getOrDefault<word>("solver", "blockBiCGStab"));
+    dictionary solverDict(mesh.solversDict().subOrEmptyDict("coupled"));
+
+    const word requestedSolver =
+        args.getOrDefault<word>("solver", "blockBiCGStab");
+    solverDict.set("solver", requestedSolver);
     solverDict.set("preconditioner", word("blockGAMG"));
     const doubleScalar tol =
         args.getOrDefault<doubleScalar>("tolerance", testTolerance);
@@ -160,27 +224,110 @@ int main(int argc, char *argv[])
     solverDict.set("tolerance", tol);
     solverDict.set("relTol", doubleScalar(0));
 
+    // blockGAMG sub-dictionary: cycle type, mergeLevels, proc agglomeration
+    dictionary gamgDict(solverDict.subOrEmptyDict("blockGAMG"));
+
+    word cycleType = gamgDict.getOrDefault<word>("cycleType", "K");
+    if (args.found("cycle"))
+    {
+        cycleType = args.get<word>("cycle");
+        // The measured cycle must be the requested one (6.3.5)
+        gamgDict.set("autoTune", false);
+    }
+    if
+    (
+        cycleType != "V" && cycleType != "F"
+     && cycleType != "W" && cycleType != "K"
+    )
+    {
+        FatalErrorInFunction
+            << "cycleType " << cycleType << " is not one of V F W K"
+            << exit(FatalError);
+    }
+    gamgDict.set("cycleType", cycleType);
+
+    const label mergeLevelsRequested =
+        args.getOrDefault<label>
+        (
+            "mergeLevels",
+            gamgDict.getOrDefault<label>("mergeLevels", 1)
+        );
+    if (args.found("mergeLevels"))
+    {
+        gamgDict.set("mergeLevels", mergeLevelsRequested);
+    }
+
+    word procAgglom("dictionary");
+    if (args.found("procAgglom"))
+    {
+        procAgglom = args.get<word>("procAgglom");
+        if (procAgglom == "on")
+        {
+            gamgDict.set("processorAgglomerator", word("masterCoarsest"));
+        }
+        else if (procAgglom == "off")
+        {
+            gamgDict.remove("processorAgglomerator");
+        }
+        else
+        {
+            FatalErrorInFunction
+                << "-procAgglom " << procAgglom << ": expected on or off"
+                << exit(FatalError);
+        }
+    }
+    solverDict.set("blockGAMG", gamgDict);
+
+    // B1: cycleType K requires blockFGMRES (variable preconditioner)
+    bool solverForced = false;
+    if (cycleType == "K" && requestedSolver != "blockFGMRES")
+    {
+        solverDict.set("solver", word("blockFGMRES"));
+        solverForced = true;
+        Info<< "cycleType K: solver " << requestedSolver
+            << " replaced by blockFGMRES (amendment B1)" << nl;
+    }
+
+    Info<< "blockGAMG test: cycleType " << cycleType
+        << ", mergeLevels " << mergeLevelsRequested
+        << ", procAgglom " << procAgglom
+        << ", solver " << solverDict.get<word>("solver") << nl << endl;
+
     dictionary settingsGAMG, statsGAMG;
+    gamgInfo infoG;
     const solveResult rG =
-        runSolve(mesh, B, xExact, solverDict, settingsGAMG, statsGAMG);
+        runSolve(mesh, B, xExact, solverDict, settingsGAMG, statsGAMG, infoG);
 
     Info<< "blockGAMG:     ";
     rG.perf.print(Info);
 
-    dictionary diagDict(solverDict);
-    diagDict.set("preconditioner", word("blockDiagonal"));
-    diagDict.set("maxIter", label(10000));
-    dictionary settingsDiag, statsDiag;
-    const solveResult rD =
-        runSolve(mesh, B, xExact, diagDict, settingsDiag, statsDiag);
+    // Informational: blockDiagonal with the requested (not forced) solver
+    const bool runDiagonal = !args.found("skipDiagonal");
+    solveResult rD;
+    if (runDiagonal)
+    {
+        dictionary diagDict(solverDict);
+        diagDict.set("solver", requestedSolver);
+        diagDict.set("preconditioner", word("blockDiagonal"));
+        diagDict.set("maxIter", label(10000));
+        dictionary settingsDiag, statsDiag;
+        gamgInfo infoD;
+        rD = runSolve
+        (
+            mesh, B, xExact, diagDict, settingsDiag, statsDiag, infoD
+        );
 
-    Info<< "blockDiagonal: ";
-    rD.perf.print(Info);
+        Info<< "blockDiagonal: ";
+        rD.perf.print(Info);
+    }
 
     const bool pass =
         rG.perf.converged && rG.perf.nIterations <= maxAllowedIters;
 
     Info<< "GAMG stats " << statsGAMG << nl
+        << "cycleType  " << infoG.cycleType << nl
+        << "mergeLevels used " << infoG.mergeLevels << nl
+        << "ratios     " << infoG.ratios << nl
         << "int x      " << rG.intX << nl
         << "int x^2    " << rG.intX2 << nl
         << "max |x - x_exact| " << rG.maxErr << nl
@@ -228,23 +375,33 @@ int main(int argc, char *argv[])
         j.add("nProcs", UPstream::nProcs());
         j.add("nCells", returnReduce(mesh.nCells(), sumOp<label>()));
         j.add("solver", solverDict.get<word>("solver"));
+        j.add("solverRequested", requestedSolver);
+        j.add("solverForcedByCycleK", solverForced);
         j.add("tolerance", tol);
+        j.add("cycleType", infoG.valid ? infoG.cycleType : cycleType);
+        j.add("cycleTypeRequested", cycleType);
+        j.add("mergeLevelsRequested", mergeLevelsRequested);
+        j.add("mergeLevels", infoG.mergeLevels);
+        j.add("procAgglom", procAgglom);
+        j.addList("ratios", infoG.ratios);
         j.add("converged", rG.perf.converged);
         j.add("nIterations", rG.perf.nIterations);
         j.add("maxAllowedIterations", maxAllowedIters);
         j.add("initialResidual", rG.perf.initialResidual);
         j.add("finalResidual", rG.perf.finalResidual);
+        j.add("rho", rG.perf.rho);
         j.addList("intX", List<doubleScalar>(rG.intX));
         j.addList("intX2", List<doubleScalar>(rG.intX2));
         j.add("maxErrorToExact", rG.maxErr);
         j.add("wallSeconds", rG.seconds);
-        j.add("gamgLevels", statsGAMG.getOrDefault<label>("nLevels", 0));
-        j.add("gamgCop", statsGAMG.getOrDefault<doubleScalar>("Cop", 0));
+        j.add("gamgLevels", infoG.nLevels);
+        j.add("gamgCop", infoG.Cop);
         j.addList
         (
             "gamgCellsPerLevel",
             statsGAMG.getOrDefault<labelList>("cellsPerLevel", labelList())
         );
+        j.add("diagonalRun", runDiagonal);
         j.add("diagonalConverged", rD.perf.converged);
         j.add("diagonalIterations", rD.perf.nIterations);
         j.add("diagonalWallSeconds", rD.seconds);

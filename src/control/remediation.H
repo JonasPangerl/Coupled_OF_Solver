@@ -30,8 +30,29 @@ Description
     overwritten). Hysteresis: a cell leaves the set after nQuietIters
     consecutive iterations without being re-marked.
 
+    Zonal factors (8.3, amendment B6), built once at construction:
+    \verbatim
+    zonal
+    {
+        enabled no;
+        zones ( { cellZone wheelHousing; cflFactor 0.5; beta 0.5; } );
+        patchDistance
+        ( { patches (body); nLayers 3; cflFactor 0.7; beta 1.0; } );
+    }
+    \endverbatim
+    Multipliers on the local time step (cflFactor) and on the convection
+    blending factor (beta) for cells in the named cellZones or within
+    nLayers face-neighbour layers of the named patches (layer 1 = cells
+    adjacent to the patch faces, layer k+1 = face neighbours of layer k,
+    across processor faces as well). Zone and patch names are wordRe
+    (regular expressions and groups allowed). Several matching entries
+    multiply. The multipliers apply on top of the static/dynamic rules
+    (dynamic cells keep beta = 0). Unknown names are a FatalIOError.
+
     Output: cellSets remediationStatic, remediationDynamic and the
-    volScalarField remediationFlag (0 none, 1 static, 2 dynamic, 3 both).
+    volScalarField remediationFlag (0 none, 1 static, 2 dynamic, 3 both);
+    with zonal factors enabled additionally the volScalarField
+    zonalCflFactor.
 
 SourceFiles
     remediation.C
@@ -94,8 +115,45 @@ class remediation
             label nStatic_;
             label nDynamic_;
 
+        // Zonal factors (8.3)
+
+            bool zonalEnabled_;
+
+            //- Per-cell product of the zonal CFL multipliers
+            //  (empty if zonal factors are disabled)
+            scalarField zonalCfl_;
+
+            //- Per-cell product of the zonal beta multipliers
+            //  (empty if zonal factors are disabled)
+            scalarField zonalBeta_;
+
+            //- Effective zonal settings (defaults filled in)
+            dictionary zonalSettings_;
+
 
     // Private Member Functions
+
+        //- Read the zonal dictionary, build the per-cell multipliers and
+        //  print a one-line summary per entry (collective)
+        void buildZonal(const dictionary& zonalDict);
+
+        //- Multiply one entry's factors into the per-cell multipliers.
+        //  Returns the global number of affected cells.
+        label applyZonal
+        (
+            const boolList& mark,
+            const scalar cflFactor,
+            const scalar beta
+        );
+
+        //- Read and check the cflFactor and beta of one zonal entry
+        void readZonalFactors
+        (
+            const dictionary& entryDict,
+            const dictionary& zonalDict,
+            scalar& cflFactor,
+            scalar& beta
+        ) const;
 
         //- Face-neighbour mean of U per cell (processor faces included)
         tmp<vectorField> neighbourMean(const volVectorField& U) const;
@@ -132,10 +190,12 @@ public:
         );
 
         //- Per-cell convection blending factor given the global value
-        //  (start-up switch): static cells static.beta, dynamic cells 0
+        //  (start-up switch): static cells static.beta, dynamic cells 0,
+        //  multiplied by the zonal beta factors
         tmp<scalarField> beta(const scalar betaGlobal) const;
 
-        //- Per-cell CFL factor (1, static, dynamic; the smallest applies)
+        //- Per-cell CFL factor (1, static, dynamic; the smallest applies),
+        //  multiplied by the zonal CFL factors
         tmp<scalarField> cflFactor() const;
 
         //- Clip the velocity increment in dynamic cells (8.2)
@@ -151,8 +211,10 @@ public:
         const boolList& isStatic() const noexcept { return isStatic_; }
         label nStatic() const noexcept { return nStatic_; }
         label nDynamic() const noexcept { return nDynamic_; }
+        bool zonalEnabled() const noexcept { return zonalEnabled_; }
 
         //- Write remediationFlag and the two cellSets for the current time
+        //  (and zonalCflFactor if zonal factors are enabled)
         void write() const;
 
         //- Restart state: dynamic set and ages (local labels)

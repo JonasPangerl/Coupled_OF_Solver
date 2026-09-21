@@ -11,7 +11,27 @@
 #include "calculatedFvPatchFields.H"
 #include "cellSet.H"
 #include "PstreamReduceOps.H"
+#include "wordRes.H"
 #include <cmath>
+
+// * * * * * * * * * * * * * * * Local Constants * * * * * * * * * * * * * * //
+
+namespace Foam
+{
+namespace remediationZonalDefaults
+{
+    //- Default zonal CFL multiplier of an entry (neutral)
+    static constexpr scalar cflFactor = 1;
+
+    //- Default zonal beta multiplier of an entry (neutral)
+    static constexpr scalar beta = 1;
+
+    //- Default number of face layers of a patchDistance entry
+    //  (layer 1 = cells adjacent to the patch faces)
+    static constexpr label nLayers = 1;
+}
+}
+
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
@@ -43,7 +63,11 @@ Foam::remediation::remediation
     age_(mesh.nCells(), -1),
     pending_(mesh.nCells(), false),
     nStatic_(0),
-    nDynamic_(0)
+    nDynamic_(0),
+    zonalEnabled_(coupledDefaults::zonalEnabled),
+    zonalCfl_(),
+    zonalBeta_(),
+    zonalSettings_()
 {
     const dictionary& r = coupledDict.subOrEmptyDict("remediation");
 
@@ -72,6 +96,8 @@ Foam::remediation::remediation
 
     warnFraction_ = r.getOrDefault<scalar>("warnFraction", warnFraction_);
     warnInterval_ = r.getOrDefault<label>("warnInterval", warnInterval_);
+
+    buildZonal(r.subOrEmptyDict("zonal"));
 }
 
 
@@ -173,6 +199,245 @@ void Foam::remediation::growLayer(boolList& mark) const
     }
 
     mark.transfer(grown);
+}
+
+
+void Foam::remediation::readZonalFactors
+(
+    const dictionary& entryDict,
+    const dictionary& zonalDict,
+    scalar& cflFactor,
+    scalar& beta
+) const
+{
+    cflFactor = entryDict.getOrDefault<scalar>
+    (
+        "cflFactor",
+        remediationZonalDefaults::cflFactor
+    );
+    beta = entryDict.getOrDefault<scalar>
+    (
+        "beta",
+        remediationZonalDefaults::beta
+    );
+
+    // Negated comparisons also reject non-finite input
+    if (!(cflFactor > 0))
+    {
+        FatalIOErrorInFunction(zonalDict)
+            << "zonal cflFactor must be > 0, got " << cflFactor
+            << " in entry " << entryDict << exit(FatalIOError);
+    }
+    if (!(beta >= 0 && beta <= 1))
+    {
+        FatalIOErrorInFunction(zonalDict)
+            << "zonal beta must be in [0, 1], got " << beta
+            << " in entry " << entryDict << exit(FatalIOError);
+    }
+}
+
+
+Foam::label Foam::remediation::applyZonal
+(
+    const boolList& mark,
+    const scalar cflFactor,
+    const scalar beta
+)
+{
+    label nAffected = 0;
+    forAll(mark, celli)
+    {
+        if (mark[celli])
+        {
+            zonalCfl_[celli] *= cflFactor;
+            zonalBeta_[celli] *= beta;
+            ++nAffected;
+        }
+    }
+    return returnReduce(nAffected, sumOp<label>());
+}
+
+
+void Foam::remediation::buildZonal(const dictionary& zonalDict)
+{
+    zonalEnabled_ = zonalDict.getOrDefault<bool>("enabled", zonalEnabled_);
+
+    zonalSettings_.clear();
+    zonalSettings_.add("enabled", zonalEnabled_);
+
+    if (!zonalEnabled_)
+    {
+        zonalCfl_.clear();
+        zonalBeta_.clear();
+        return;
+    }
+
+    zonalCfl_ = scalarField(mesh_.nCells(), scalar(1));
+    zonalBeta_ = scalarField(mesh_.nCells(), scalar(1));
+
+    const label nTotal = returnReduce(mesh_.nCells(), sumOp<label>());
+    // GUARD: nTotal >= 1
+    const scalar percentPerCell = 100.0/max(scalar(nTotal), scalar(1));
+
+    const List<dictionary> zoneDicts
+    (
+        zonalDict.getOrDefault<List<dictionary>>("zones", List<dictionary>())
+    );
+    const List<dictionary> patchDicts
+    (
+        zonalDict.getOrDefault<List<dictionary>>
+        (
+            "patchDistance",
+            List<dictionary>()
+        )
+    );
+
+    Info<< "remediation: zonal factors enabled, " << zoneDicts.size()
+        << " cellZone and " << patchDicts.size() << " patchDistance entries"
+        << endl;
+
+    // cellZone entries
+
+    const cellZoneMesh& czm = mesh_.cellZones();
+    List<dictionary> zoneSettings(zoneDicts.size());
+
+    forAll(zoneDicts, entryi)
+    {
+        const dictionary& e = zoneDicts[entryi];
+        const wordRe zoneName(e.get<wordRe>("cellZone"));
+
+        scalar cflFactor = remediationZonalDefaults::cflFactor;
+        scalar beta = remediationZonalDefaults::beta;
+        readZonalFactors(e, zonalDict, cflFactor, beta);
+
+        const labelList zoneIDs(czm.indices(zoneName, true));
+
+        if (!returnReduce(!zoneIDs.empty(), orOp<bool>()))
+        {
+            FatalIOErrorInFunction(zonalDict)
+                << "Unknown cellZone " << zoneName
+                << " in zonal.zones entry " << entryi << nl
+                << "Valid cellZones: " << flatOutput(czm.names()) << nl
+                << "Valid cellZone groups: "
+                << flatOutput(czm.groupZoneIDs().sortedToc())
+                << exit(FatalIOError);
+        }
+
+        boolList mark(mesh_.nCells(), false);
+        for (const label zonei : zoneIDs)
+        {
+            for (const label celli : czm[zonei])
+            {
+                mark[celli] = true;
+            }
+        }
+
+        const label nAffected = applyZonal(mark, cflFactor, beta);
+
+        Info<< "remediation: zonal cellZone " << zoneName << ": "
+            << nAffected << " cells (" << percentPerCell*scalar(nAffected)
+            << " %), cflFactor " << cflFactor << ", beta " << beta << endl;
+
+        dictionary& s = zoneSettings[entryi];
+        s.add("cellZone", zoneName);
+        s.add("cflFactor", cflFactor);
+        s.add("beta", beta);
+    }
+
+    // patchDistance entries
+
+    const polyBoundaryMesh& pbm = mesh_.boundaryMesh();
+
+    // Processor patches come last; they are decomposition artefacts and
+    // never seed a layer (layers still grow across them)
+    const label nNonProc = pbm.nNonProcessor();
+    const wordList allPatchNames(pbm.names());
+    const wordList validPatchNames(SubList<word>(allPatchNames, nNonProc));
+
+    List<dictionary> patchSettings(patchDicts.size());
+
+    forAll(patchDicts, entryi)
+    {
+        const dictionary& e = patchDicts[entryi];
+        const wordRes patchNames(e.get<wordRes>("patches"));
+        const label nLayers = e.getOrDefault<label>
+        (
+            "nLayers",
+            remediationZonalDefaults::nLayers
+        );
+
+        if (nLayers < 1)
+        {
+            FatalIOErrorInFunction(zonalDict)
+                << "zonal patchDistance nLayers must be >= 1, got " << nLayers
+                << " in entry " << entryi << exit(FatalIOError);
+        }
+
+        scalar cflFactor = remediationZonalDefaults::cflFactor;
+        scalar beta = remediationZonalDefaults::beta;
+        readZonalFactors(e, zonalDict, cflFactor, beta);
+
+        boolList selected(pbm.size(), false);
+
+        for (const wordRe& patchName : patchNames)
+        {
+            bool found = false;
+            for (const label patchi : pbm.indices(patchName, true))
+            {
+                if (patchi < nNonProc)
+                {
+                    selected[patchi] = true;
+                    found = true;
+                }
+            }
+
+            if (!returnReduce(found, orOp<bool>()))
+            {
+                FatalIOErrorInFunction(zonalDict)
+                    << "Unknown patch " << patchName
+                    << " in zonal.patchDistance entry " << entryi << nl
+                    << "Valid patches: " << flatOutput(validPatchNames) << nl
+                    << "Valid patch groups: "
+                    << flatOutput(pbm.groupPatchIDs().sortedToc())
+                    << exit(FatalIOError);
+            }
+        }
+
+        // Layer 1: cells adjacent to the patch faces
+        boolList mark(mesh_.nCells(), false);
+        forAll(selected, patchi)
+        {
+            if (selected[patchi])
+            {
+                for (const label celli : pbm[patchi].faceCells())
+                {
+                    mark[celli] = true;
+                }
+            }
+        }
+
+        // Layer k+1: face neighbours of layer k (collective)
+        for (label layer = 1; layer < nLayers; ++layer)
+        {
+            growLayer(mark);
+        }
+
+        const label nAffected = applyZonal(mark, cflFactor, beta);
+
+        Info<< "remediation: zonal patches " << flatOutput(patchNames)
+            << " nLayers " << nLayers << ": " << nAffected << " cells ("
+            << percentPerCell*scalar(nAffected) << " %), cflFactor "
+            << cflFactor << ", beta " << beta << endl;
+
+        dictionary& s = patchSettings[entryi];
+        s.add("patches", patchNames);
+        s.add("nLayers", nLayers);
+        s.add("cflFactor", cflFactor);
+        s.add("beta", beta);
+    }
+
+    zonalSettings_.add("zones", zoneSettings);
+    zonalSettings_.add("patchDistance", patchSettings);
 }
 
 
@@ -416,6 +681,12 @@ Foam::tmp<Foam::scalarField> Foam::remediation::beta
             b[celli] = 0;
         }
     }
+
+    if (zonalEnabled_)
+    {
+        // Multipliers in [0, 1]: dynamic cells stay at 0
+        b *= zonalBeta_;
+    }
     return tb;
 }
 
@@ -435,6 +706,11 @@ Foam::tmp<Foam::scalarField> Foam::remediation::cflFactor() const
         {
             f[celli] = min(f[celli], dynamicCflFactor_);
         }
+    }
+
+    if (zonalEnabled_)
+    {
+        f *= zonalCfl_;
     }
     return tf;
 }
@@ -529,6 +805,28 @@ void Foam::remediation::write() const
     cellSet cd(mesh_, "remediationDynamic", dyn);
     cd.instance() = mesh_.time().timeName();
     cd.write();
+
+    if (zonalEnabled_)
+    {
+        volScalarField zf
+        (
+            IOobject
+            (
+                "zonalCflFactor",
+                mesh_.time().timeName(),
+                mesh_,
+                IOobject::NO_READ,
+                IOobject::NO_WRITE,
+                IOobject::NO_REGISTER
+            ),
+            mesh_,
+            dimensionedScalar(dimless, Zero),
+            calculatedFvPatchScalarField::typeName
+        );
+        zf.primitiveFieldRef() = zonalCfl_;
+        zf.correctBoundaryConditions();
+        zf.write();
+    }
 }
 
 
@@ -600,6 +898,7 @@ void Foam::remediation::writeSettings(dictionary& dict) const
     dictionary r;
     r.add("static", s);
     r.add("dynamic", d);
+    r.add("zonal", zonalSettings_);
     r.add("warnFraction", warnFraction_);
     r.add("warnInterval", warnInterval_);
     dict.add("remediation", r);

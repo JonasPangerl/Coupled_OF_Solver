@@ -49,15 +49,17 @@ else
     mpiOpts="--bind-to $bind"
 fi
 
-# Run an application serial or parallel; log name as $2
+# Run an application serial or parallel; log name as $2.
+# CF_RANK_WRAPPER (benchmark harness) wraps every rank, e.g. for
+# /usr/bin/time -v (bench/rank_wrapper.sh).
 runApp()
 {
     app="$1"; log="$2"; shift 2
     if [ "$np" -gt 1 ]
     then
-        mpirun $mpiOpts -np "$np" "$app" -parallel "$@" > "$log" 2>&1
+        mpirun $mpiOpts -np "$np" $CF_RANK_WRAPPER "$app" -parallel "$@"             > "$log" 2>&1
     else
-        "$app" "$@" > "$log" 2>&1
+        $CF_RANK_WRAPPER "$app" "$@" > "$log" 2>&1
     fi
 }
 

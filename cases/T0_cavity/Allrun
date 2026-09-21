@@ -49,9 +49,9 @@ then
     else
         mpiOpts="--bind-to $bind"
     fi
-    mpirun $mpiOpts -np "$np" "$solver" -parallel > "log.$solver" 2>&1
+    mpirun $mpiOpts -np "$np" $CF_RANK_WRAPPER "$solver" -parallel > "log.$solver" 2>&1
 else
-    runApplication "$solver"
+    $CF_RANK_WRAPPER "$solver" > "log.$solver" 2>&1
 fi
 
 #------------------------------------------------------------------------------

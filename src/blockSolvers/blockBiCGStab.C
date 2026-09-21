@@ -166,6 +166,23 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
         precondition(y, p);
         matrix_.Amul(v, y);
 
+        // rho on the first preconditioner application of the solve (6.3.5):
+        // p = r0 here, rho = ||r0 - A M^-1 r0|| / ||r0||
+        if (perf.rho < 0)
+        {
+            reduceScalar d2 = 0;
+            for (label i = 0; i < n; ++i)
+            {
+                const reduceScalar di = toDouble(pp[i]) - toDouble(vp[i]);
+                d2 += di*di;
+            }
+            d2 = doubleReduce::parSum(d2, comm);
+            // GUARD: ||r0|| > 0 (not converged at iteration 0)
+            perf.rho =
+                std::sqrt(d2)
+               /max(doubleReduce::norm2(p, comm), doubleScalarVSMALL);
+        }
+
         const reduceScalar rA0v = doubleReduce::dot(rA0, v, comm);
 
         // GUARD: denominator of alpha

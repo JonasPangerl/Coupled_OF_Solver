@@ -31,6 +31,20 @@ Foam::blockGAMGPrecon::blockGAMGPrecon
     blockPreconditioner(solver),
     gamg_(solver.matrix(), dict.subOrEmptyDict("blockGAMG"))
 {
+    // Amendment B1: the K-cycle is a variable preconditioner
+    const word solverType(dict.getOrDefault<word>("solver", word::null));
+    if
+    (
+        gamg_.cycleType() == blockGAMG::cycleKind::K
+     && solverType != "blockFGMRES"
+    )
+    {
+        FatalIOErrorInFunction(dict)
+            << "blockGAMG cycleType K requires solver blockFGMRES (found "
+            << solverType << "): the K-cycle is a variable preconditioner"
+            << " (amendment B1)" << exit(FatalIOError);
+    }
+
     gamg_.writeStats(Info);
 }
 
@@ -49,7 +63,7 @@ void Foam::blockGAMGPrecon::precondition
     const blockScalarUList& r
 ) const
 {
-    gamg_.Vcycle(w, r);
+    gamg_.apply(w, r);
 }
 
 

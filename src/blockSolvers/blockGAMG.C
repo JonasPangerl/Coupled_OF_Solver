@@ -4,12 +4,42 @@
 \*---------------------------------------------------------------------------*/
 
 #include "blockGAMG.H"
-#include "doubleReduce.H"
 #include "blockPreconditioner.H"
+#include "block4Ops.H"
+#include "doubleReduce.H"
 #include "coupledDefaults.H"
 #include "lduMesh.H"
 #include "objectRegistry.H"
 #include "PstreamReduceOps.H"
+#include <cmath>
+
+// * * * * * * * * * * * * * * * Static Functions  * * * * * * * * * * * * * //
+
+Foam::blockGAMG::cycleKind Foam::blockGAMG::cycleFromWord(const word& w)
+{
+    if (w == "V") return cycleKind::V;
+    if (w == "F") return cycleKind::F;
+    if (w == "W") return cycleKind::W;
+    if (w == "K") return cycleKind::K;
+    FatalErrorInFunction
+        << "Unknown cycleType " << w << ", valid: V F W K"
+        << exit(FatalError);
+    return cycleKind::V;
+}
+
+
+Foam::word Foam::blockGAMG::cycleName(const cycleKind c)
+{
+    switch (c)
+    {
+        case cycleKind::V: return "V";
+        case cycleKind::F: return "F";
+        case cycleKind::W: return "W";
+        case cycleKind::K: return "K";
+    }
+    return "?";
+}
+
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
@@ -21,6 +51,22 @@ Foam::blockGAMG::blockGAMG
 :
     fine_(fine),
     dict_(dict),
+    cycle_
+    (
+        cycleFromWord(dict.getOrDefault<word>("cycleType", "K"))
+    ),
+    kThreshold_
+    (
+        dict.getOrDefault<doubleScalar>
+        (
+            "kCycleThreshold",
+            coupledDefaults::kCycleThreshold
+        )
+    ),
+    kMaxSteps_
+    (
+        dict.getOrDefault<label>("kCycleMaxSteps", coupledDefaults::kCycleMaxSteps)
+    ),
     nPreSweeps_
     (
         dict.getOrDefault<label>("nPreSweeps", coupledDefaults::nPreSweeps)
@@ -45,98 +91,66 @@ Foam::blockGAMG::blockGAMG
             coupledDefaults::maxOperatorComplexity
         )
     ),
-    maxCopAttempts_
+    minRatio_
+    (
+        dict.getOrDefault<doubleScalar>
+        (
+            "minCoarseningRatio",
+            coupledDefaults::minCoarseningRatio
+        )
+    ),
+    maxMergeLevels_
     (
         dict.getOrDefault<label>
         (
-            "maxCopAttempts",
-            coupledDefaults::maxCopAttempts
+            "maxMergeLevels",
+            coupledDefaults::maxMergeLevels
+        )
+    ),
+    denseLUMaxCells_
+    (
+        dict.getOrDefault<label>
+        (
+            "denseLUMaxCells",
+            coupledDefaults::denseLUMaxCells
         )
     ),
     aggPtr_(nullptr),
     mergeLevelsUsed_(-1),
     Cop_(0),
+    ratios_(),
     coarse_(),
     smoothers_(),
     coarsestSolver_(),
-    x_(),
-    b_(),
-    r_(),
+    useDenseLU_(false),
+    denseLU_(),
+    densePivot_(),
     nCoarsestIters_(0)
 {
-    // Effective defaults written back so that the effective settings print
+    // Effective defaults written back so that the effective-settings print
     // shows every value actually used
-    dict_.add
-    (
-        "agglomerator",
-        dict.getOrDefault<word>("agglomerator", "faceAreaPair"),
-        false
-    );
-    dict_.add
-    (
-        "nCellsInCoarsestLevel",
-        dict.getOrDefault<label>
-        (
-            "nCellsInCoarsestLevel",
-            coupledDefaults::nCellsInCoarsestLevel
-        ),
-        false
-    );
-    dict_.add
-    (
-        "mergeLevels",
-        dict.getOrDefault<label>("mergeLevels", coupledDefaults::mergeLevels),
-        false
-    );
-    dict_.add
-    (
-        "smoother",
-        dict.getOrDefault<word>("smoother", "blockGaussSeidel"),
-        false
-    );
-    dict_.add
-    (
-        "coarsestSolver",
-        dict.getOrDefault<word>("coarsestSolver", "blockBiCGStab"),
-        false
-    );
-    dict_.add
-    (
-        "coarsestTolerance",
-        dict.getOrDefault<doubleScalar>
-        (
-            "coarsestTolerance",
-            coupledDefaults::coarsestTolerance
-        ),
-        false
-    );
-    dict_.add
-    (
-        "coarsestMaxIter",
-        dict.getOrDefault<label>
-        (
-            "coarsestMaxIter",
-            coupledDefaults::coarsestMaxIter
-        ),
-        false
-    );
-    dict_.add
-    (
-        "cacheAgglomeration",
-        dict.getOrDefault<bool>
-        (
-            "cacheAgglomeration",
-            coupledDefaults::cacheAgglomeration
-        ),
-        false
-    );
+    auto setDefault = [this, &dict](const word& key, const auto& value)
+    {
+        if (!dict.found(key))
+        {
+            dict_.add(key, value);
+        }
+    };
+    setDefault("agglomerator", word("faceAreaPair"));
+    setDefault("nCellsInCoarsestLevel", coupledDefaults::nCellsInCoarsestLevel);
+    setDefault("mergeLevels", coupledDefaults::mergeLevels);
+    setDefault("smoother", word("blockGaussSeidel"));
+    setDefault("coarsestSolver", word("blockBiCGStab"));
+    setDefault("coarsestTolerance", coupledDefaults::coarsestTolerance);
+    setDefault("coarsestMaxIter", coupledDefaults::coarsestMaxIter);
+    setDefault("cacheAgglomeration", coupledDefaults::cacheAgglomeration);
+    dict_.set("cycleType", cycleName(cycle_));
 
     agglomerate();
 
     const GAMGAgglomeration& agg = *aggPtr_;
     const label nCoarse = agg.size();
 
-    // Coarse matrices on the native coarse lduMesh levels
     coarse_.resize(nCoarse);
     for (label l = 0; l < nCoarse; ++l)
     {
@@ -153,7 +167,6 @@ Foam::blockGAMG::blockGAMG
         );
     }
 
-    // Smoothers on all but the coarsest level
     const label nLev = nLevels();
     smoothers_.resize(nLev - 1);
     for (label l = 0; l < nLev - 1; ++l)
@@ -161,56 +174,65 @@ Foam::blockGAMG::blockGAMG
         smoothers_.set(l, blockSmoother::New(matrixLevel(l), dict_).ptr());
     }
 
-    // Coarsest-level solver
+    // Coarsest level (6.3.3): dense LU if small and on one rank, else Krylov
     {
-        dictionary cd;
-        cd.add("solver", dict_.get<word>("coarsestSolver"));
-        cd.add("preconditioner", word("blockDiagonal"));
-        cd.add("tolerance", doubleScalar(0));
-        cd.add("relTol", dict_.get<doubleScalar>("coarsestTolerance"));
-        cd.add("maxIter", dict_.get<label>("coarsestMaxIter"));
-        cd.add
-        (
-            "pivotGuard",
-            dict_.getOrDefault<doubleScalar>
+        const blockLduMatrix4& Ac = matrixLevel(L());
+        const bool oneRank =
+            !UPstream::parRun() || UPstream::nProcs(Ac.comm()) == 1;
+        useDenseLU_ =
+            oneRank && Ac.interfaces().empty()
+         && Ac.nCells() <= denseLUMaxCells_;
+
+        if (!useDenseLU_)
+        {
+            dictionary cd;
+            cd.add("solver", dict_.get<word>("coarsestSolver"));
+            cd.add("preconditioner", word("blockDiagonal"));
+            cd.add("tolerance", doubleScalar(0));
+            cd.add("relTol", dict_.get<doubleScalar>("coarsestTolerance"));
+            cd.add("maxIter", dict_.get<label>("coarsestMaxIter"));
+            cd.add
             (
                 "pivotGuard",
-                coupledDefaults::pivotGuard
-            )
-        );
-        coarsestSolver_ = blockSolver::New(matrixLevel(nLev - 1), cd);
+                dict_.getOrDefault<doubleScalar>
+                (
+                    "pivotGuard",
+                    coupledDefaults::pivotGuard
+                )
+            );
+            coarsestSolver_ = blockSolver::New(Ac, cd);
+        }
+        Info<< "blockGAMG: coarsest level " << L() << " ("
+            << returnReduce(Ac.nCells(), sumOp<label>()) << " cells): "
+            << (useDenseLU_ ? "dense LU" : dict_.get<word>("coarsestSolver"))
+            << endl;
     }
 
-    // Work vectors (level 0 uses the caller's vectors)
-    x_.resize(nLev);
-    b_.resize(nLev);
-    r_.resize(nLev);
-    for (label l = 0; l < nLev; ++l)
-    {
-        const label n = matrixLevel(l).nRows();
-        if (l > 0)
-        {
-            x_[l].resize(n, Zero);
-            b_[l].resize(n, Zero);
-        }
-        r_[l].resize(n, Zero);
-    }
+    allocateWork();
 }
 
 
 // * * * * * * * * * * * * * Private Member Functions  * * * * * * * * * * * //
 
-Foam::reduceScalar Foam::blockGAMG::operatorComplexity
+void Foam::blockGAMG::measure
 (
-    const GAMGAgglomeration& agg
+    const GAMGAgglomeration& agg,
+    reduceScalar& cop,
+    List<reduceScalar>& ratios
 ) const
 {
-    reduceScalar nnz[2] = {reduceScalar(fine_.nnzBlocks()), 0};
-    nnz[1] = nnz[0];
+    const label nC = agg.size();
 
-    for (label l = 0; l < agg.size(); ++l)
+    // Per level: cells and nnz blocks, summed over ranks in one call
+    List<reduceScalar> cells(nC + 1, Zero);
+    List<reduceScalar> nnz(nC + 1, Zero);
+    cells[0] = reduceScalar(fine_.nCells());
+    nnz[0] = reduceScalar(fine_.nnzBlocks());
+
+    for (label l = 0; l < nC; ++l)
     {
-        reduceScalar n = reduceScalar(agg.nCells(l)) + 2*reduceScalar(agg.nFaces(l));
+        cells[l + 1] = reduceScalar(agg.nCells(l));
+        reduceScalar n = cells[l + 1] + 2*reduceScalar(agg.nFaces(l));
 
         const lduInterfacePtrsList coarseIfaces = agg.interfaceLevel(l + 1);
         const labelList& nPatchFaces = agg.nPatchFaces(l);
@@ -225,50 +247,117 @@ Foam::reduceScalar Foam::blockGAMG::operatorComplexity
                 n += reduceScalar(nPatchFaces[i]);
             }
         }
-        nnz[1] += n;
+        nnz[l + 1] = n;
     }
 
-    doubleReduce::parSum(nnz, 2, fine_.comm());
+    doubleReduce::parSum(cells.data(), cells.size(), fine_.comm());
+    doubleReduce::parSum(nnz.data(), nnz.size(), fine_.comm());
 
+    reduceScalar total = 0;
+    for (const reduceScalar v : nnz)
+    {
+        total += v;
+    }
     // GUARD: a mesh has at least one cell globally
-    return nnz[1]/std::max(nnz[0], reduceScalar(1));
+    cop = total/std::max(nnz[0], reduceScalar(1));
+
+    ratios.resize(nC);
+    for (label l = 0; l < nC; ++l)
+    {
+        // GUARD: coarse levels are never empty globally
+        ratios[l] = cells[l]/std::max(cells[l + 1], reduceScalar(1));
+    }
+}
+
+
+bool Foam::blockGAMG::ratiosOk(const List<reduceScalar>& ratios) const
+{
+    for (const reduceScalar r : ratios)
+    {
+        if (r < minRatio_)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 
 void Foam::blockGAMG::agglomerate()
 {
     const lduMesh& mesh = fine_.mesh();
-    label m = dict_.get<label>("mergeLevels");
+    const label m0 = dict_.get<label>("mergeLevels");
+    const label mMax = max(m0, maxMergeLevels_);
 
-    for (label attempt = 0; attempt < maxCopAttempts_; ++attempt, ++m)
+    reduceScalar cop = 0;
+    List<reduceScalar> ratios;
+
+    for (label m = m0; m <= mMax; ++m)
     {
         dictionary aggDict(dict_);
         aggDict.set("mergeLevels", m);
         aggDict.set("name", word("blockGAMGAgglomeration_m" + Foam::name(m)));
 
         const GAMGAgglomeration& agg = GAMGAgglomeration::New(mesh, aggDict);
+        measure(agg, cop, ratios);
 
-        const reduceScalar cop = operatorComplexity(agg);
+        const bool copOk = cop <= maxCop_;
+        const bool ratioOk = !needsRatio(cycle_) || ratiosOk(ratios);
 
-        Info<< "blockGAMG: agglomeration attempt " << attempt + 1
-            << " mergeLevels " << m << " levels " << agg.size() + 1
-            << " C_op " << cop << endl;
+        Info<< "blockGAMG: mergeLevels " << m << " levels " << agg.size() + 1
+            << " C_op " << cop << " ratios " << flatOutput(ratios)
+            << (copOk && ratioOk ? " accepted" : " rejected") << endl;
 
-        if (cop <= maxCop_)
+        if (copOk && ratioOk)
         {
             aggPtr_ = &agg;
             mergeLevelsUsed_ = m;
             Cop_ = cop;
+            ratios_ = ratios;
             return;
         }
     }
 
     FatalErrorInFunction
-        << "Operator complexity exceeds maxOperatorComplexity " << maxCop_
-        << " after " << maxCopAttempts_ << " agglomeration attempts"
-        << " (last mergeLevels " << m - 1 << ")." << nl
-        << "Increase mergeLevels or nCellsInCoarsestLevel (spec 6.3)."
-        << exit(FatalError);
+        << "No agglomeration with mergeLevels " << m0 << ".." << mMax
+        << " satisfies maxOperatorComplexity " << maxCop_
+        << (needsRatio(cycle_)
+            ? std::string(" and the coarsening-ratio rule r_l >= ")
+              + Foam::name(minRatio_) + " (cycleType " + cycleName(cycle_)
+              + ", 6.3.1)"
+            : std::string())
+        << nl << "Last measured: C_op " << cop << ", ratios "
+        << flatOutput(ratios) << exit(FatalError);
+}
+
+
+void Foam::blockGAMG::allocateWork()
+{
+    const label nLev = nLevels();
+    for (auto* v : {&b_, &e_, &r_, &t_, &e2_, &z1_, &q1_, &z2_, &q2_, &rk_})
+    {
+        v->resize(nLev);
+    }
+    for (label l = 0; l < nLev; ++l)
+    {
+        const label n = matrixLevel(l).nRows();
+        r_[l].resize(n, Zero);
+        if (l > 0)
+        {
+            b_[l].resize(n, Zero);
+            e_[l].resize(n, Zero);
+            t_[l].resize(n, Zero);
+            e2_[l].resize(n, Zero);
+            if (cycle_ == cycleKind::K)
+            {
+                z1_[l].resize(n, Zero);
+                q1_[l].resize(n, Zero);
+                z2_[l].resize(n, Zero);
+                q2_[l].resize(n, Zero);
+                rk_[l].resize(n, Zero);
+            }
+        }
+    }
 }
 
 
@@ -407,20 +496,337 @@ void Foam::blockGAMG::restrictMatrix(const label fineLevel)
 }
 
 
-void Foam::blockGAMG::restrictResidual(const label l) const
+void Foam::blockGAMG::restrictVector
+(
+    const label l,
+    const blockScalarUList& r,
+    blockScalarUList& bc
+) const
 {
     const labelField& restrictAddr = aggPtr_->restrictAddressing(l);
-    blockScalarList& bc = b_[l + 1];
-    const blockScalarList& rf = r_[l];
-
     bc = Zero;
     forAll(restrictAddr, celli)
     {
         const label c = restrictAddr[celli];
         for (label k = 0; k < blockDim; ++k)
         {
-            bc[c*blockDim + k] += rf[celli*blockDim + k];
+            bc[c*blockDim + k] += r[celli*blockDim + k];
         }
+    }
+}
+
+
+void Foam::blockGAMG::prolongAdd
+(
+    const label l,
+    const blockScalarUList& e,
+    blockScalarUList& x
+) const
+{
+    const labelField& restrictAddr = aggPtr_->restrictAddressing(l);
+    forAll(restrictAddr, celli)
+    {
+        const label c = restrictAddr[celli];
+        for (label k = 0; k < blockDim; ++k)
+        {
+            x[celli*blockDim + k] += e[c*blockDim + k];
+        }
+    }
+}
+
+
+void Foam::blockGAMG::factoriseDense()
+{
+    if (!useDenseLU_)
+    {
+        return;
+    }
+
+    const blockLduMatrix4& A = matrixLevel(L());
+    const label nc = A.nCells();
+    const label n = blockDim*nc;
+
+    denseLU_.resize_nocopy(n*n);
+    denseLU_ = Zero;
+    densePivot_.resize_nocopy(n);
+
+    auto addBlock = [&](const label rc, const label cc, const blockScalar* B)
+    {
+        for (label r = 0; r < blockDim; ++r)
+        {
+            for (label c = 0; c < blockDim; ++c)
+            {
+                denseLU_[(rc*blockDim + r)*n + cc*blockDim + c] +=
+                    toDouble(B[r*blockDim + c]);
+            }
+        }
+    };
+
+    for (label celli = 0; celli < nc; ++celli)
+    {
+        addBlock(celli, celli, A.diagBlock(celli));
+    }
+    const labelUList& lAddr = A.lduAddr().lowerAddr();
+    const labelUList& uAddr = A.lduAddr().upperAddr();
+    forAll(lAddr, facei)
+    {
+        addBlock(lAddr[facei], uAddr[facei], A.upper().cdata() + facei*blockSize);
+        addBlock(uAddr[facei], lAddr[facei], A.lower().cdata() + facei*blockSize);
+    }
+
+    // LU with partial pivoting (in place), pivot guard as block4Ops
+    const reduceScalar guard =
+        dict_.getOrDefault<doubleScalar>("pivotGuard", coupledDefaults::pivotGuard);
+
+    for (label k = 0; k < n; ++k)
+    {
+        label piv = k;
+        reduceScalar big = std::abs(denseLU_[k*n + k]);
+        for (label i = k + 1; i < n; ++i)
+        {
+            const reduceScalar a = std::abs(denseLU_[i*n + k]);
+            if (a > big)
+            {
+                big = a;
+                piv = i;
+            }
+        }
+        densePivot_[k] = piv;
+        if (piv != k)
+        {
+            for (label j = 0; j < n; ++j)
+            {
+                std::swap(denseLU_[k*n + j], denseLU_[piv*n + j]);
+            }
+        }
+        // GUARD: pivot guard
+        if (std::abs(denseLU_[k*n + k]) < guard)
+        {
+            denseLU_[k*n + k] += (denseLU_[k*n + k] < 0 ? -guard : guard);
+        }
+        const reduceScalar rp = 1.0/denseLU_[k*n + k];  // GUARD: guarded
+        for (label i = k + 1; i < n; ++i)
+        {
+            const reduceScalar f = (denseLU_[i*n + k] *= rp);
+            if (f != 0)
+            {
+                for (label j = k + 1; j < n; ++j)
+                {
+                    denseLU_[i*n + j] -= f*denseLU_[k*n + j];
+                }
+            }
+        }
+    }
+}
+
+
+void Foam::blockGAMG::solveCoarsest
+(
+    blockScalarUList& x,
+    const blockScalarUList& b
+) const
+{
+    if (!useDenseLU_)
+    {
+        x = Zero;
+        const blockSolverPerformance perf = coarsestSolver_->solve(x, b);
+        nCoarsestIters_ = perf.nIterations;
+        return;
+    }
+
+    const label n = b.size();
+    reduceScalarList y(n);
+    for (label i = 0; i < n; ++i)
+    {
+        y[i] = toDouble(b[i]);
+    }
+    for (label k = 0; k < n; ++k)
+    {
+        const label p = densePivot_[k];
+        if (p != k)
+        {
+            std::swap(y[k], y[p]);
+        }
+    }
+    for (label i = 0; i < n; ++i)
+    {
+        reduceScalar s = y[i];
+        for (label j = 0; j < i; ++j)
+        {
+            s -= denseLU_[i*n + j]*y[j];
+        }
+        y[i] = s;
+    }
+    for (label i = n - 1; i >= 0; --i)
+    {
+        reduceScalar s = y[i];
+        for (label j = i + 1; j < n; ++j)
+        {
+            s -= denseLU_[i*n + j]*y[j];
+        }
+        y[i] = s/denseLU_[i*n + i];  // GUARD: pivots guarded
+    }
+    for (label i = 0; i < n; ++i)
+    {
+        x[i] = narrow(y[i]);
+    }
+    nCoarsestIters_ = 0;
+}
+
+
+void Foam::blockGAMG::cycle
+(
+    const label l,
+    const blockScalarUList& b,
+    blockScalarUList& x,
+    const cycleKind kind
+) const
+{
+    if (l == L())
+    {
+        solveCoarsest(x, b);
+        return;
+    }
+
+    const blockLduMatrix4& A = matrixLevel(l);
+    const label nPre = (l == 0 ? nFinestSweeps_ : nPreSweeps_);
+    const label nPost = (l == 0 ? nFinestSweeps_ : nPostSweeps_);
+
+    x = Zero;
+    if (nPre > 0)
+    {
+        smoothers_[l].smooth(x, b, nPre);
+    }
+
+    A.residual(r_[l], x, b);
+    restrictVector(l, r_[l], b_[l + 1]);
+
+    blockScalarList& ec = e_[l + 1];
+
+    switch (kind)
+    {
+        case cycleKind::V:
+        {
+            cycle(l + 1, b_[l + 1], ec, cycleKind::V);
+            break;
+        }
+        case cycleKind::F:
+        {
+            cycle(l + 1, b_[l + 1], ec, cycleKind::F);
+            if (l + 1 < L())
+            {
+                matrixLevel(l + 1).residual(t_[l + 1], ec, b_[l + 1]);
+                cycle(l + 1, t_[l + 1], e2_[l + 1], cycleKind::V);
+                const blockScalarList& e2 = e2_[l + 1];
+                forAll(ec, i)
+                {
+                    ec[i] += e2[i];
+                }
+            }
+            break;
+        }
+        case cycleKind::W:
+        {
+            cycle(l + 1, b_[l + 1], ec, cycleKind::W);
+            if (l + 1 < L())
+            {
+                matrixLevel(l + 1).residual(t_[l + 1], ec, b_[l + 1]);
+                cycle(l + 1, t_[l + 1], e2_[l + 1], cycleKind::W);
+                const blockScalarList& e2 = e2_[l + 1];
+                forAll(ec, i)
+                {
+                    ec[i] += e2[i];
+                }
+            }
+            break;
+        }
+        case cycleKind::K:
+        {
+            kstep(l + 1, b_[l + 1], ec);
+            break;
+        }
+    }
+
+    prolongAdd(l, ec, x);
+
+    if (nPost > 0)
+    {
+        smoothers_[l].smooth(x, b, nPost);
+    }
+}
+
+
+void Foam::blockGAMG::kstep
+(
+    const label l,
+    const blockScalarUList& b,
+    blockScalarUList& e
+) const
+{
+    if (l == L())
+    {
+        solveCoarsest(e, b);
+        return;
+    }
+
+    const blockLduMatrix4& A = matrixLevel(l);
+    const label comm = A.comm();
+    const label n = A.nRows();
+
+    blockScalarList& z1 = z1_[l];
+    blockScalarList& q1 = q1_[l];
+    blockScalarList& z2 = z2_[l];
+    blockScalarList& q2 = q2_[l];
+    blockScalarList& r1 = rk_[l];
+
+    const reduceScalar r0norm = doubleReduce::norm2(b, comm);
+
+    // First GCR step: z1 = M^-1 b, q1 = A z1
+    cycle(l, b, z1, cycleKind::K);
+    A.Amul(q1, z1);
+
+    const FixedList<reduceScalar, 2> d1 = doubleReduce::dot2(q1, b, q1, q1, comm);
+    // GUARD: <q1,q1> > 0 unless the correction vanishes
+    const reduceScalar a1 = d1[0]/std::max(d1[1], doubleScalarVSMALL);
+    const blockScalar a1f = narrow(a1);
+
+    for (label i = 0; i < n; ++i)
+    {
+        e[i] = a1f*z1[i];
+        r1[i] = b[i] - a1f*q1[i];
+    }
+
+    if (kMaxSteps_ < 2)
+    {
+        return;
+    }
+    const reduceScalar r1norm = doubleReduce::norm2(r1, comm);
+    if (r1norm <= kThreshold_*r0norm)
+    {
+        return;
+    }
+
+    // Second GCR step, orthogonalised against q1
+    cycle(l, r1, z2, cycleKind::K);
+    A.Amul(q2, z2);
+
+    // coefficient from the pre-orthogonalisation q2 (6.3.2)
+    const reduceScalar c =
+        doubleReduce::dot(q2, q1, comm)/std::max(d1[1], doubleScalarVSMALL);
+    const blockScalar cf = narrow(c);
+    for (label i = 0; i < n; ++i)
+    {
+        q2[i] -= cf*q1[i];
+        z2[i] -= cf*z1[i];
+    }
+
+    const FixedList<reduceScalar, 2> d2 = doubleReduce::dot2(q2, r1, q2, q2, comm);
+    // GUARD: <q2,q2> > 0 unless the correction vanishes
+    const reduceScalar a2 = d2[0]/std::max(d2[1], doubleScalarVSMALL);
+    const blockScalar a2f = narrow(a2);
+    for (label i = 0; i < n; ++i)
+    {
+        e[i] += a2f*z2[i];
     }
 }
 
@@ -455,12 +861,34 @@ Foam::label Foam::blockGAMG::nSingularDiag() const
 }
 
 
+bool Foam::blockGAMG::setCycleType(const cycleKind c) const
+{
+    if (needsRatio(c) && !ratiosOk(ratios_))
+    {
+        return false;
+    }
+    if (c == cycleKind::K && z1_.size() > 1 && z1_[1].empty())
+    {
+        // K workspace was not allocated for the start-up cycle type
+        for (label l = 1; l < nLevels(); ++l)
+        {
+            const label n = matrixLevel(l).nRows();
+            z1_[l].resize(n, Zero);
+            q1_[l].resize(n, Zero);
+            z2_[l].resize(n, Zero);
+            q2_[l].resize(n, Zero);
+            rk_[l].resize(n, Zero);
+        }
+    }
+    cycle_ = c;
+    return true;
+}
+
+
 void Foam::blockGAMG::update()
 {
     if (!dict_.get<bool>("cacheAgglomeration"))
     {
-        // Re-agglomerate: drop the cached object and select again. The level
-        // sizes must not change for a static mesh; guard anyway.
         const label nLevOld = nLevels();
         fine_.mesh().thisDb().checkOut
         (
@@ -485,70 +913,18 @@ void Foam::blockGAMG::update()
     {
         smoothers_[l].update();
     }
+
+    factoriseDense();
 }
 
 
-void Foam::blockGAMG::Vcycle
+void Foam::blockGAMG::apply
 (
     blockScalarUList& x,
     const blockScalarUList& b
 ) const
 {
-    const label nLev = nLevels();
-
-    auto X = [&](const label l) -> blockScalarUList&
-    {
-        return (l == 0 ? x : static_cast<blockScalarUList&>(x_[l]));
-    };
-    auto B = [&](const label l) -> const blockScalarUList&
-    {
-        return (l == 0 ? b : static_cast<const blockScalarUList&>(b_[l]));
-    };
-
-    // Downward leg
-    for (label l = 0; l < nLev - 1; ++l)
-    {
-        X(l) = Zero;
-        if (nPreSweeps_ > 0)
-        {
-            smoothers_[l].smooth(X(l), B(l), nPreSweeps_);
-        }
-        matrixLevel(l).residual(r_[l], X(l), B(l));
-        restrictResidual(l);
-    }
-
-    // Coarsest level
-    {
-        blockScalarUList& xc = X(nLev - 1);
-        xc = Zero;
-        const blockSolverPerformance perf =
-            coarsestSolver_->solve(xc, B(nLev - 1));
-        nCoarsestIters_ = perf.nIterations;
-    }
-
-    // Upward leg
-    for (label l = nLev - 2; l >= 0; --l)
-    {
-        // Prolong: X(l) += P x_{l+1}
-        const labelField& restrictAddr = aggPtr_->restrictAddressing(l);
-        const blockScalarList& xc = x_[l + 1];
-        blockScalarUList& xf = X(l);
-        forAll(restrictAddr, celli)
-        {
-            const label c = restrictAddr[celli];
-            for (label k = 0; k < blockDim; ++k)
-            {
-                xf[celli*blockDim + k] += xc[c*blockDim + k];
-            }
-        }
-
-        smoothers_[l].smooth
-        (
-            xf,
-            B(l),
-            (l == 0 ? nFinestSweeps_ : nPostSweeps_)
-        );
-    }
+    cycle(0, b, x, cycle_);
 }
 
 
@@ -557,8 +933,10 @@ void Foam::blockGAMG::writeStats(Ostream& os) const
     const labelList n = globalCellsPerLevel();
     os  << "blockGAMG: levels " << nLevels()
         << ", mergeLevels " << mergeLevelsUsed_
-        << ", C_op " << Cop_ << nl
-        << "blockGAMG: cells per level " << flatOutput(n) << endl;
+        << ", C_op " << Cop_
+        << ", cycle " << cycleName(cycle_) << nl
+        << "blockGAMG: cells per level " << flatOutput(n) << nl
+        << "blockGAMG: coarsening ratios " << flatOutput(ratios_) << endl;
 }
 
 
@@ -568,7 +946,11 @@ Foam::dictionary Foam::blockGAMG::statsDict() const
     d.add("nLevels", nLevels());
     d.add("mergeLevels", mergeLevelsUsed_);
     d.add("Cop", Cop_);
+    d.add("cycleType", cycleName(cycle_));
+    d.add("nPostSweeps", nPostSweeps_);
     d.add("cellsPerLevel", globalCellsPerLevel());
+    d.add("ratios", List<doubleScalar>(ratios_));
+    d.add("denseCoarsest", useDenseLU_);
     return d;
 }
 
@@ -576,11 +958,17 @@ Foam::dictionary Foam::blockGAMG::statsDict() const
 void Foam::blockGAMG::writeSettings(dictionary& dict) const
 {
     dict.merge(dict_);
+    dict.set("cycleType", cycleName(cycle_));
+    dict.set("kCycleThreshold", kThreshold_);
+    dict.set("kCycleMaxSteps", kMaxSteps_);
     dict.set("nPreSweeps", nPreSweeps_);
     dict.set("nPostSweeps", nPostSweeps_);
     dict.set("nFinestSweeps", nFinestSweeps_);
     dict.set("maxOperatorComplexity", maxCop_);
-    dict.set("maxCopAttempts", maxCopAttempts_);
+    dict.set("minCoarseningRatio", minRatio_);
+    dict.set("maxMergeLevels", maxMergeLevels_);
+    dict.set("mergeLevelsUsed", mergeLevelsUsed_);
+    dict.set("denseLUMaxCells", denseLUMaxCells_);
 }
 
 

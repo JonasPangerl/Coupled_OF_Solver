@@ -34,18 +34,44 @@ namespace coupledDefaults
 constexpr doubleScalar tolerance = 1e-8;
 constexpr doubleScalar relTol = 0.05;
 constexpr label maxIter = 200;
-constexpr label minIter = 0;
-constexpr label gmresRestart = 10;
+constexpr label minIter = 1;                     // B1: never a zero increment
+constexpr label restart = 10;                    // B1: FGMRES/GMRES restart
+constexpr label restartLarge = 6;                // B7: above restartLargeCells
+constexpr label restartLargeCells = 40000000;
+
+// Eisenstat-Walker adaptive inner tolerance (amendment B2)
+constexpr bool adaptiveRelTol = true;
+constexpr doubleScalar etaMin = 1e-3;
+constexpr doubleScalar etaMax = 0.5;
+constexpr doubleScalar gammaEW = 0.9;
+constexpr doubleScalar alphaEW = 2;
+constexpr doubleScalar etaSafeguard = 0.1;      // B2 safeguard 1 threshold
 constexpr label maxRestarts = 3;                 // 6.2 breakdown restarts
 
 // blockGAMG (spec 6.1, 6.3)
-constexpr label nCellsInCoarsestLevel = 500;
-constexpr label mergeLevels = 1;
+constexpr label nCellsInCoarsestLevel = 200;     // B3 6.3.1
+constexpr label mergeLevels = 2;                 // B3 6.3.1
 constexpr label nPreSweeps = 1;
 constexpr label nPostSweeps = 2;
 constexpr label nFinestSweeps = 2;
 constexpr doubleScalar coarsestTolerance = 1e-3;
-constexpr label coarsestMaxIter = 100;           // D-008
+constexpr label coarsestMaxIter = 50;            // B3 6.3.3
+constexpr label denseLUMaxCells = 64;            // B3 6.3.3
+
+// Cycles, ratio rule, controller (amendment B3)
+constexpr doubleScalar kCycleThreshold = 0.25;
+constexpr label kCycleMaxSteps = 2;
+constexpr doubleScalar minCoarseningRatio = 3.0; // 6.3.1, W and K cycles
+constexpr label maxMergeLevels = 4;              // 6.3.1
+constexpr label procAgglomCellsPerRank = 5000;   // 6.3.4
+constexpr label procAgglomDivisor = 4;           // 6.3.4: nRanks/4
+constexpr bool autoTune = true;                  // 6.3.5
+constexpr label tuneInterval = 50;
+constexpr label nPostSweepsMax = 4;
+constexpr doubleScalar tuneRhoHigh = 0.7;
+constexpr doubleScalar tuneRhoLow = 0.3;
+constexpr doubleScalar tuneRhoDemote = 0.2;
+constexpr doubleScalar tuneRhoFail = 0.9;
 constexpr doubleScalar maxOperatorComplexity = 1.5;
 constexpr label maxCopAttempts = 3;              // 6.3, D-008
 constexpr bool cacheAgglomeration = true;
@@ -69,6 +95,7 @@ constexpr doubleScalar ptcGamma = 1;
 constexpr doubleScalar betaMax = 1.5;
 constexpr doubleScalar betaExp = 1.1;
 constexpr label nHold = 10;
+constexpr label maxLinFails = 3;                 // B4
 
 // Line search (spec 7.2)
 constexpr doubleScalar fU = 0.3;
@@ -120,6 +147,15 @@ constexpr doubleScalar nutMaxFactor = 1e5;
 constexpr label forceCoeffsWindow = 100;
 constexpr doubleScalar forceCoeffsTol = 0.002;
 constexpr doubleScalar residualTol = 1e-6;
+
+// Anderson acceleration (amendment B5)
+constexpr bool andersonEnabled = false;
+constexpr label andersonM = 4;
+constexpr doubleScalar andersonBeta = 1.0;
+constexpr doubleScalar andersonMaxAlpha = 10;
+
+// Zonal factors (amendment B6)
+constexpr bool zonalEnabled = false;
 
 // Misc (spec 9.1, 10)
 constexpr bool ftz = true;

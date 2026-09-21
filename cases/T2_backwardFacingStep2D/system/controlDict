@@ -43,6 +43,27 @@ runTimeModifiable false;
 
 functions
 {
+    // Pressure drop inlet -> outlet: convergence monitor of the benchmark
+    // harness (spec 14)
+    inletP
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            inlet;
+        operation       areaAverage;
+        fields          (p);
+    }
+    outletP
+    {
+        $inletP;
+        name            outlet;
+    }
+
     // Wall shear stress on the lower wall (reattachment, spec 13 T2)
     wallShearStress
     {
