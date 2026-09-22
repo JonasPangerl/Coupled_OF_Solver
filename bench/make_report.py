@@ -76,17 +76,30 @@ C_NATIVE = "#D55E00"
 C_NATIVE2 = "#E69F00"
 C_COUPLED = "#0072B2"
 C_COUPLED2 = "#56B4E9"
+# benchmark configurations (run_bench.CONFIGS, D-068); E is now an alias of
+# C. Colour-blind safe (Okabe-Ito for the main ones, Tol muted for the
+# Amendment C7 variants E-*)
 CONFIG_COLOR = {"A": C_NATIVE2, "B": C_NATIVE, "C": C_COUPLED, "D": C_COUPLED2,
-                "E": "#6baed6", "F": "#08306b", "G": "#d95f02", "H": "#9467bd"}
+                "F": "#08306b", "G": "#009E73", "H": "#CC79A7",
+                "H-tune": "#882255",
+                "E-rcScalar": "#44AA99", "E-nonOrth60": "#999933",
+                "E-nonOrth65": "#DDCC77", "E-algPair": "#AA4499",
+                "E-noSFD": "#117733", "E-eta07": "#888888"}
 CONFIG_LABEL = {
     "A": "simpleFoam (tutorial)",
     "B": "simpleFoam SIMPLEC",
-    "C": "coupledFoam",
+    "C": "coupledFoam (V-cycle, default)",
     "D": "coupledFoam, blockDiagonal",
-    "E": "coupledFoam, fixed V-cycle",
     "F": "coupledFoam, fixed relTol",
     "G": "coupledFoam, Anderson",
     "H": "coupledFoam, fixed K-cycle",
+    "H-tune": "coupledFoam, K-cycle + autoTune",
+    "E-rcScalar": "coupledFoam, scalar Rhie-Chow",
+    "E-nonOrth60": "coupledFoam, nonOrth limit 60",
+    "E-nonOrth65": "coupledFoam, nonOrth limit 65",
+    "E-algPair": "coupledFoam, algebraic pair agglomeration",
+    "E-noSFD": "coupledFoam, SFD off",
+    "E-eta07": "coupledFoam, etaMax 0.7",
 }
 
 # Amendment B7 memory budget (spec constants, not measurements): total
@@ -558,7 +571,8 @@ def _bars(ax, rows, cases, cfgs, key, ylabel, log=True):
     for j, cfg in enumerate(cfgs):
         vals = [_med(rows, c, cfg, key) or 0 for c in cases]
         ax.bar(np.arange(len(cases)) + j * width, vals, width,
-               color=CONFIG_COLOR[cfg], label=CONFIG_LABEL[cfg])
+               color=CONFIG_COLOR.get(cfg, ps.GREY),
+               label=CONFIG_LABEL.get(cfg, f"coupledFoam, {cfg}"))
     ax.set_xticks(np.arange(len(cases)) + width * (len(cfgs) - 1) / 2)
     ax.set_xticklabels(cases)
     ax.set_ylabel(ylabel)
@@ -581,8 +595,9 @@ def fig_bench(rows: list[dict]) -> str:
     ):
         fig, ax = plt.subplots(figsize=(ps.WIDTH, 3.4))
         _bars(ax, rows, cases, cfgs, key, ylabel)
-        ax.legend(fontsize=ps.FS_NOTE, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.12))
-        save(fig, fname, f"Benchmark: {ylabel} (median of the repeats).")
+        ps.legend_below(fig, *ax.get_legend_handles_labels(), ncol=3)
+        save(fig, fname, f"Benchmark: {ylabel} (median of the repeats).",
+             layout=False)
 
     # Time per iteration breakdown of coupledFoam: wall and CPU
     br = [(c, _med(rows, c, "C", "t_assembly"), _med(rows, c, "C", "t_linsolve"),
@@ -670,10 +685,11 @@ def fig_memory(rows: list[dict], cases: list[str], cfgs: list[str]) -> None:
         first = False
         mc = _med(rows, c, "C", "peakRSS_GB_sum")
         num(f"memory budget ratio {c}", mc / hi if mc else None, "{:.2f}")
-    ax.legend(fontsize=ps.FS_NOTE, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.12))
+    ps.legend_below(fig, *ax.get_legend_handles_labels(), ncol=3)
     save(fig, "bench_memory",
          "Peak memory (sum of the per-rank maximum RSS) against the B7 "
-         "budget (105-120 GB at 45 M cells) scaled per cell (grey band).")
+         "budget (105-120 GB at 45 M cells) scaled per cell (grey band).",
+         layout=False)
 
 
 def tests_table(tests: dict) -> str:
@@ -791,23 +807,27 @@ def fig_cycles(tests: dict) -> None:
 
 
 def fig_bench_cycles(rows: list[dict]) -> None:
-    """Benchmark C (K, autoTune) vs H (fixed K) vs E (fixed V): wall and
-    CPU-hours to convergence on the B10 cycle cases."""
-    sel = [d for d in rows if d["config"] in ("C", "E", "H")]
-    cases = sorted({d["case"] for d in sel if d["config"] == "E"})
+    """Benchmark cycle comparison (D-068): C (default V-cycle) vs H (fixed
+    K-cycle) vs H-tune (K-cycle with autoTune): wall time and CPU-hours to
+    convergence on the cases that ran H or H-tune."""
+    cyc = ("C", "H", "H-tune")
+    sel = [d for d in rows if d["config"] in cyc]
+    cases = sorted({d["case"] for d in sel if d["config"] in ("H", "H-tune")})
     if not cases:
-        notes.append("benchmark cycle comparison: no configuration E results")
+        notes.append("benchmark cycle comparison: no configuration H / "
+                     "H-tune results")
         return
-    cfgs = [c for c in ("C", "H", "E") if any(d["config"] == c for d in sel)]
-    fig, ax = plt.subplots(1, 2, figsize=(ps.WIDTH, 2.6))
+    cfgs = [c for c in cyc if any(d["config"] == c for d in sel)]
+    fig, ax = plt.subplots(1, 2, figsize=(ps.WIDTH, 2.8))
     _bars(ax[0], sel, cases, cfgs, "wall_to_conv_s",
           "wall time to convergence [s]", log=False)
     _bars(ax[1], sel, cases, cfgs, "cpu_to_conv_h",
           "CPU time to convergence [CPU-h]", log=False)
-    ax[0].legend(fontsize=ps.FS_LEGEND)
+    ps.legend_below(fig, *ax[0].get_legend_handles_labels(), ncol=3)
     save(fig, "bench_cycles",
-         "Benchmark: default K-cycle with autoTune (C), fixed K-cycle (H) "
-         "and fixed V-cycle (E): wall time and CPU-hours to convergence.")
+         "Benchmark: default V-cycle (C), fixed K-cycle (H) and K-cycle "
+         "with autoTune (H-tune): wall time and CPU-hours to convergence.",
+         layout=False)
 
 
 def fig_anderson(rows: list[dict]) -> None:

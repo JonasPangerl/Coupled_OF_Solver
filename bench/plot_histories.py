@@ -94,11 +94,21 @@ SPLIT_RATIO = 5.0  # run lengths differing by more: zoom panels for the short ru
 SPLIT = {"tAsm": "#9ecae1", "tSolve": "#1f5fbf", "tTurb": "#fdae6b",
          "other": "#d9d9d9"}
 
+def _t5_run() -> str:
+    """T5 run the report shows, the same rule as bench/make_report.py
+    _t5_run: CF_T5_MESH if set, else the variant (fine, then coarse) that
+    has a test record, else the fine one (names: run_bench.t5_run_name)."""
+    import os  # noqa: PLC0415
+    env = os.environ.get("CF_T5_MESH")
+    for v in ([env] if env else []) + ["fine", "coarse"]:
+        n = run_bench.t5_run_name(run_bench.HEAVY_NP, v)
+        if (REPO / "results" / "tests" / f"{n}.json").exists():
+            return n
+    return run_bench.t5_run_name(run_bench.HEAVY_NP, env or "fine")
+
+
 # run name: coupledFoam dir, simpleFoam reference dir, title, monitor
-# T5 on the coarse development mesh (CF_T5_MESH=coarse, D-059) unless only
-# the fine-mesh run exists
-T5_RUN = ("T5_np10" if (RUN / "T5_np10").is_dir()
-          and not (RUN / "T5_coarse_np10").is_dir() else "T5_coarse_np10")
+T5_RUN = _t5_run()
 RUNS = {
     "T0_Re100_np1": ("T0_Re100_np1", "ref_T0_Re100", "T0 cavity, Re 100, 1 rank", None),
     "T0_Re100_np4": ("T0_Re100_np4", "ref_T0_Re100", "T0 cavity, Re 100, 4 ranks", None),
@@ -115,7 +125,6 @@ RUNS = {
     T5_RUN: (T5_RUN, "ref_" + T5_RUN, "T5 Ahmed body, 10 ranks"
              + (" (coarse mesh)" if "coarse" in T5_RUN else ""), "forces"),
 }
-OSCILLATORY = ("T4", "T5")      # D-042 wake cases
 
 ps.apply()
 
@@ -276,9 +285,29 @@ def _dat(path: Path) -> np.ndarray | None:
     return a
 
 
+def _cut_reference(case: Path, h: dict | None) -> dict | None:
+    """A continued simpleFoam reference is its original run only: samples
+    beyond run_bench.reference_t_max(case) are dropped (M7, as in every
+    evaluation of the reference)."""
+    if h is None:
+        return None
+    t_max = run_bench.reference_t_max(case)
+    if t_max is None:
+        return h
+    keep = h["iter"] <= t_max
+    if not keep.any():
+        return None
+    return {k: v[keep] for k, v in h.items()}
+
+
 def forces(case: Path) -> dict | None:
     """Cd, Cl, CmPitch per iteration, restarts concatenated (later start
-    directories override earlier iterations)."""
+    directories override earlier iterations); a continued reference is cut
+    at its original budget."""
+    return _cut_reference(case, _forces_all(case))
+
+
+def _forces_all(case: Path) -> dict | None:
     pp = case / "postProcessing"
     fos = sorted(pp.glob("forceCoeffs*")) if pp.is_dir() else []
     for fo in fos:
@@ -318,7 +347,12 @@ def _float(s: str) -> float:
 
 
 def pressure_drop(case: Path) -> dict | None:
-    """areaAverage(p) inlet - outlet per iteration (surfaceFieldValue)."""
+    """areaAverage(p) inlet - outlet per iteration (surfaceFieldValue); a
+    continued reference is cut at its original budget."""
+    return _cut_reference(case, _pressure_drop_all(case))
+
+
+def _pressure_drop_all(case: Path) -> dict | None:
     vals = {}
     for side in ("inletP", "outletP"):
         d = case / "postProcessing" / side
@@ -475,20 +509,20 @@ def _clip_to(x, y, xmax):
     x, y = np.asarray(x, float), np.asarray(y, float)
     k = np.isfinite(x) & (x <= xmax)
     return x[k], y[k]
+
+
 # --------------------------------------------------------------------------- #
 # figures
 # --------------------------------------------------------------------------- #
 
 def load_series(cf, sf, cfd, sfd, monitor, info):
     """[(solver, colour, iterations, wall time at each, {quantity: values},
-    continuation)].
+    None)] (the last element is kept for the tuple layout of the callers).
 
-    continuation is None, or (iterations, {quantity: values}) of a
-    simpleFoam reference continuation beyond the original reference budget
-    (Allrun -restart for the mean fields, D-042 addendum). The reference
-    itself is its original run only (tests/test_T4_motorBike.py
-    force_history(t_max=continuation startTime)), so the continuation is
-    split off here and never evaluated."""
+    A continued simpleFoam reference (Allrun -restart for the mean fields,
+    D-042 addendum) is its original run only: forces()/pressure_drop() cut
+    it at run_bench.reference_t_max, as every evaluation of the reference
+    (M7)."""
     series = []
     for solver, d, case, col, taxis in (
             ("simpleFoam", sf, sfd, C_NATIVE, sf["t"] if sf else None),
@@ -500,22 +534,13 @@ def load_series(cf, sf, cfd, sfd, monitor, info):
             continue
         it = h["iter"]
         qs = {k: v for k, v in h.items() if k != "iter"}
-        cont = None
-        if solver == "simpleFoam":
-            c = (d.get("ref") or {}).get("continuation") or {}
-            t_end = c.get("startTime")
-            if t_end is not None and np.any(it > t_end):
-                keep = it <= t_end
-                cont = (it[~keep], {k: v[~keep] for k, v in qs.items()})
-                it = it[keep]
-                qs = {k: v[keep] for k, v in qs.items()}
-                if info is not None:
-                    info["notes"].append(
-                        f"simpleFoam: the reference is its original run of "
-                        f"{int(t_end)} iterations, as in the tables; its "
-                        f"continuation to iteration {int(cont[0].max())} "
-                        "(mean fields, D-042 addendum) is neither shown "
-                        "nor evaluated")
+        t_max = run_bench.reference_t_max(case)
+        if t_max is not None and info is not None:
+            info["notes"].append(
+                f"{solver}: the reference is its original run of "
+                f"{int(t_max)} iterations, as in the tables; its "
+                "continuation (mean fields, D-042 addendum) is neither "
+                "shown nor evaluated")
         # wall time at each monitored iteration (monitor iteration i is the
         # i-th solver iteration of the run); iterations beyond the logged
         # ones (a continuation whose log is elsewhere) have no wall time
@@ -526,7 +551,7 @@ def load_series(cf, sf, cfd, sfd, monitor, info):
                 f"{solver}: the monitor has {int(it.max())} iterations, the "
                 f"solver log {len(taxis)}; the later iterations have no "
                 "wall-clock time (right column)")
-        series.append((solver, col, it, tt, qs, cont))
+        series.append((solver, col, it, tt, qs, None))
     return series
 
 
@@ -539,42 +564,22 @@ def _user_iteration(run: str, solver: str) -> int | None:
         return None
 
 
-def _case_of(run: str) -> str:
-    """run_bench / user_convergence case key of a test run (T4a_np10 ->
-    T4a, T3_kOmegaSST_np1 -> T3-SST, T5_coarse_np10 -> T5)."""
-    try:
-        import user_convergence as ucv  # noqa: PLC0415
-        k = ucv.case_key(run)
-        if k:
-            return k
-    except Exception:  # noqa: BLE001
-        pass
-    return run.split("_np")[0].split("_")[0]
-
-
-def _with_case(fn, *args, case=None):
-    """Call a run_bench window function with the case when it takes one
-    (D-068: one common stationary window per case for both solvers); the
-    case name reaches every stat_window / iters_to_stationary /
-    stationary_eval call of this module through here."""
-    if case is not None:
-        import inspect  # noqa: PLC0415
-        try:
-            if "case" in inspect.signature(fn).parameters:
-                return fn(*args, case=case)
-        except (TypeError, ValueError):
-            pass
-    return fn(*args)
+def _case_of(run: str) -> str | None:
+    """run_bench case key of a run name (T4a_np10, ref_T4a_np10 -> T4a;
+    T3_kOmegaSST_np1 -> T3-SST; T5_coarse_np10 -> T5; T0 -> None). Every
+    stat_window / iters_to_stationary / stationary_eval call of this module
+    gets it, so both solvers of a wake case share one window (D-068)."""
+    return run_bench.case_of_run(run)
 
 
 def stat_window(n: int, case: str | None = None) -> int:
-    return _with_case(run_bench.stat_window, n, case=case)
+    return run_bench.stat_window(n, case)
 
 
 def _oscillatory(run: str) -> bool:
     """D-042 wake case (T4, T5): stationary window mean; otherwise (T3)
     criterion 12.3(ii)."""
-    return run.startswith(OSCILLATORY)
+    return run_bench.is_oscillatory(run_bench.case_of_run(run) or "")
 
 
 LOAD_LABELS = {"Cd": "$C_d$", "Cl": "$C_l$", "CmPitch": "$C_m$ (pitch)",
@@ -685,8 +690,8 @@ def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
                     ev = {}
                     try:
                         if osc:
-                            its = _with_case(run_bench.iters_to_stationary, hist, case=case)
-                            ev = _with_case(run_bench.stationary_eval, hist, case=case)
+                            its = run_bench.iters_to_stationary(hist, case=case)
+                            ev = run_bench.stationary_eval(hist, case=case)
                         else:
                             its = run_bench.iters_to_conv(hist)
                     except Exception:  # noqa: BLE001
@@ -1331,17 +1336,20 @@ def tex_section(run, title, made, info, status) -> str:
         L += [r"\begin{itemize}\setlength{\itemsep}{0pt}\small"]
         L += [rf"\item {x}." for x in s]
         L += [r"\end{itemize}", ""]
-    marker = ("dash-dot: iterations to a stationary window (D-042)"
+    forces_case = (RUNS.get(run) or (None,) * 4)[3] == "forces"
+    marker = ("" if not forces_case else
+              ", dash-dot: iterations to a stationary window (D-042)"
               if _oscillatory(run) else
-              "dash-dot-dot: criterion 12.3(ii) met")
+              ", dash-dot-dot: criterion 12.3(ii) met")
     caps = {
         "loads": "monitored quantities per outer iteration (left) and over "
                  "wall-clock time (right), both solvers on the same axes; "
                  "thin line or light band: per-iteration values (long runs: "
                  "min--max per bin with the bin median), dashed with band: "
                  "running mean $\\pm$RMS over the averaging window $W$, "
-                 f"shaded: final averaging window, {marker}, solid: user "
-                 "convergence point (D-060, if set); triangles at the axis "
+                 f"shaded: final averaging window{marker}"
+                 + (", solid: user convergence point (D-060, if set)" if forces_case else "")
+                 + "; triangles at the axis "
                  "edge mark start-up values outside the plotted range; runs "
                  "of very different length get zoom panels on the shorter "
                  "run (an extra column, or a second row per quantity)",
