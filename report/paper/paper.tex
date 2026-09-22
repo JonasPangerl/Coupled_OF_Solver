@@ -138,7 +138,7 @@
 \maketitle
 
 \begin{abstract}
-We describe \textbf{coupledFoam}, a steady, incompressible, Reynolds-averaged
+This paper describes \textbf{coupledFoam}, a steady, incompressible, Reynolds-averaged
 Navier--Stokes solver for OpenFOAM v2606 in which velocity and pressure are
 solved simultaneously as one $4\times4$-block system per cell, while the
 turbulence model is solved segregated and unmodified. The block matrix and
@@ -257,7 +257,7 @@ contributions are:
 
 \subsection{Governing equations and notation}
 
-We solve the steady incompressible RANS equations for the velocity $\Uv$ and
+The solver treats the steady incompressible RANS equations for the velocity $\Uv$ and
 the kinematic pressure $p$,
 \begin{align}
   \nabla\cdot(\Uv_{\mathrm{r}}\Uv)
@@ -275,7 +275,7 @@ zones $\Uv_{\mathrm{r}}=\Uv$ and $\vect\Omega=0$. The turbulence quantities
 ($k$, $\omega$, $\nu_t$) are frozen during the coupled solve and updated
 afterwards (Section~\ref{sec:turb}).
 
-For a cell $P$ with volume $V_P$ and face $f$ shared with neighbour $N$, we use
+For a cell $P$ with volume $V_P$ and face $f$ shared with neighbour $N$, the notation comprises
 the face area vector $\Sf$ (pointing out of the owner), $|\Sf|$, the
 interpolation weight $w_f$ of the owner, the face flux $\phi_f$
 ($\mathrm{m^3\,s^{-1}}$), the non-orthogonal delta coefficient
@@ -686,19 +686,41 @@ phase is skipped.
 
 \subsection{Remediation cell sets}\label{sec:remediation}
 
-\paragraph{Static set.} Built once from OpenFOAM's per-face mesh-quality
-measures: a cell is marked if any of its faces has non-orthogonality
-above $70^\circ$ or skewness above 4, if its volume ratio to any neighbour
-exceeds 20, or its aspect ratio exceeds 1000. Static cells receive
-$\beta_P=\min(\beta_P,\beta_{\mathrm{static}})$ with $\beta_{\mathrm{static}}=0$
-(upwind) by default, the stronger non-orthogonal limiter $0.2$ on their
-faces, a limited (\code{cellLimited Gauss linear 1}) pressure gradient in the
-Rhie--Chow term, and a CFL factor $0.5$. The gradient inside the user's
-high-order convection scheme cannot be overridden per cell; with the default
-$\beta_{\mathrm{static}}=0$ it does not enter (D-018).
+\paragraph{Static set.} Built once before the first iteration and split
+into four categories, each with its own switch, criteria and treatment in
+the case dictionary (D-066; D-063 asked for every such setting to be a
+run-time keyword):
+\begin{itemize}
+\item \emph{meshQuality}: a face with non-orthogonality above $85^\circ$ or
+  skewness above 6, a volume ratio above 30 to a neighbour, or an aspect
+  ratio above 2000 (OpenFOAM's per-face quality measures; thresholds of
+  D-047);
+\item \emph{badMesh}: severe defects: a volume ratio above 50 to a neighbour
+  (volume jump), open cells whose face area vectors do not close, and
+  optionally faces beyond severe non-orthogonality or skewness limits;
+\item \emph{processor}: cells with both a processor and a cyclicAMI face,
+  optionally a number of cell layers next to every processor boundary;
+\item \emph{wall}: optionally ``starved'' wall cells with at most two
+  internal neighbours (off by default) and cell layers next to named
+  patches.
+\end{itemize}
+The first two categories hold defective cells and receive the \emph{full}
+treatment: $\beta_P=\min(\beta_P,\beta_{\mathrm{cat}})$ with
+$\beta_{\mathrm{cat}}=0$ (upwind), the stronger non-orthogonal limiter $0.2$
+on their faces, a limited (\code{cellLimited Gauss linear 1}) pressure
+gradient in the Rhie--Chow term, and a CFL factor $0.5$. Processor and wall
+cells are selected by position, not by quality, and receive a \emph{mild}
+treatment by default: the CFL factor only, with the full convection scheme
+and no limiters. First-order convection on a dozen well-shaped wall cells of
+the motorbike body changed $C_l$ by $-18\,\%$ (D-061), which is why the
+position-based categories keep the scheme. A cell in several categories
+receives the most restrictive value of each parameter. The gradient inside
+the user's high-order convection scheme cannot be overridden per cell; with
+$\beta_{\mathrm{cat}}=0$ it does not enter (D-018). Table~\ref{tab:remcat}
+lists the cells per category of every test run.
 
 \paragraph{Dynamic set.} Updated every iteration. A cell is marked if
-$|\Uv_P|>2U_{\mathrm{ref}}$, $|p_P|>5p_{\mathrm{ref}}$,
+$|\Uv_P|>4U_{\mathrm{ref}}$, $|p_P|>15p_{\mathrm{ref}}$ (D-044),
 $|\Uv_P-\bar{\Uv}_{N(P)}|>0.5\,U_{\mathrm{ref}}$ (face-neighbour mean), any of
 $\Uv,p,k,\omega$ is non-finite, or it is passed in by the line search or the
 sentinel. Marked cells plus one layer of face neighbours (across processor
@@ -1724,10 +1746,13 @@ preconditioner efficiency $\rho$ with the controller events.}{fig:etarho}
 Until the benchmark matrix has run, the test records give a first
 measurement of the speed-up (single runs on the shared machine, not
 benchmark quality; D-007): serial on T0--T3, 10 ranks on the motorbike.
-Each solver is stopped by its own test criterion:
-coupledFoam at the residual target of the test ($R<10^{-8}$ for T0,
-$10^{-5}$ for T1 and T2), \code{simpleFoam} at its \code{residualControl}.
-The residual normalisations differ (Section~\ref{sec:norms}), so the time
+Both solvers are evaluated at the same criterion: the residual target of
+the test ($10^{-8}$ for T0, $10^{-5}$ for T1 and T2), reached by the
+combined residual $R$ of coupledFoam and by all initial residuals of
+\code{simpleFoam} (on T2 the native iteration count of D-024); the
+stationary window mean on the motorbike; on T3 the solver's own stop, if
+the run converged. Wall-clock time and CPU-hours are taken at that
+iteration from each solver's time log. The residual normalisations differ (Section~\ref{sec:norms}), so the time
 axis, not the residual level, is the comparable quantity; the field
 comparisons of Section~\ref{sec:flowfields} show that both runs end at the
 same solution. On the serial runs CPU-hours and wall-clock time are nearly
@@ -1792,6 +1817,107 @@ constant time per iteration. coupledFoam trades far fewer iterations for
 more expensive ones; it is faster where the arrow points
 down.}{fig:speedtrade}
 
+\clearpage
+\subsection{Metrics for comparison with other solvers}\label{sec:metrics}
+
+Validation and performance reports of commercial and research coupled
+solvers~\cite{cmp-Fluent12TG,cmp-StarEffortless2020,cmp-HelyxCoupled,Uroic2021}
+typically quantify cost per unit of mesh, memory per million cells,
+residual reduction against iterations and time, parallel efficiency, and
+the growth of the iteration count with the mesh size. The same quantities
+are computed here from the existing test records and logs, so that the
+results of this paper can be placed next to such reports; they are no
+substitute for a comparison on identical cases and hardware.
+Table~\ref{tab:metcost} normalises the cost per outer iteration and the peak
+memory by the cell count, Table~\ref{tab:metres} gives the iterations and
+wall-clock time to reduce the residual by two to four orders of magnitude,
+Table~\ref{tab:metscal} the parallel efficiency of the strong-scaling test,
+and Table~\ref{tab:metgrid} the dependence on the mesh of the motorbike.
+Robustness on a deliberately degraded mesh, weak scaling, energy to
+solution and a memory breakdown by data structure are not reported: they
+require a degraded-mesh variant of a test case, a mesh series at constant
+cells per rank, a power measurement, and allocation counters in the solver,
+none of which is part of the present campaign.
+
+\cftable{metrics_cost}{Cost and memory per million cells.}{tab:metcost}
+\cftable{metrics_residual}{Residual reduction: iterations and wall-clock
+time.}{tab:metres}
+\cftable{metrics_scaling}{Strong scaling: time per iteration and parallel
+efficiency.}{tab:metscal}
+\cftable{metrics_grid}{Mesh dependence on the motorbike (T4a against
+T4b).}{tab:metgrid}
+
+\clearpage
+\subsection{Single precision}\label{sec:sp}
+
+Amendment D adds full single precision (SP) as a build option: a second
+OpenFOAM v2606 build with \code{WM\_PRECISION\_OPTION=SP}, in which fields,
+geometry, all matrices and all solves are 4-byte floats. The reference is
+the double-precision build (DP) used for every other result of this paper;
+the amendment names the mixed build \code{SPDP} as the reference, but no
+such build is made (D-062). Both builds use identical compiler flags (the
+unmodified \code{linux64Gcc} rules, \code{-O3}), so that the timings compare
+precision and not compilers. The meshes are generated in DP and copied to
+the SP case in ASCII with 12 significant digits; SP is a solve-only mode.
+
+\paragraph{Where the gain comes from.} coupledFoam already stores its block
+matrix and all Krylov and multigrid vectors in float
+(Section~\ref{sec:storage}). SP halves in addition the fields, the mesh
+geometry, the scalar matrices of the turbulence equations and the files
+written, so its expected gain is confined to assembly, turbulence and I/O,
+about 15--20\,\% of the wall-clock time according to the amendment (D12).
+\code{simpleFoam}, whose linear solvers work in double in the DP build, is
+run in SP as well. In the benchmark the SP configurations are F1
+(\code{simpleFoam}, settings of B) and F2 (coupledFoam, settings of C);
+each solver is compared with itself in the other precision, never across
+precisions.
+
+\paragraph{Safeguards.} Everything accumulated over many cells stays in
+double in both builds: norms, dot products, sums, the Galerkin coarse
+operators, the small dense systems of the Krylov and Anderson methods, and
+the force and moment integration (a dedicated double-accumulated force
+evaluation, used identically for both solvers). The stabilising constants
+\code{SMALL} and \code{VSMALL}, whose values change with the precision, are
+replaced by explicit guard constants. Two geometric risks are specific to SP.
+A float resolves about seven significant digits, so a coordinate of 10\,m
+is represented to about 1\,$\mu$m; the difference of two nearby cell
+centres, from which face weights, gradients and wall distances are formed,
+loses the digits that the absolute coordinates carry. Before every SP run
+the mesh is therefore translated so that the centre of its bounding box is
+the origin; the centre of rotation of the moments, probes and sampling
+lines are shifted with it, which is where an omission would produce silently
+wrong moments. The shifted mesh must then pass a checkMesh gate: no check
+may fail in SP that passes in DP, and no cell may have a negative volume or
+a wrong orientation; otherwise the case is marked \code{SP-geometry-fail}
+and its SP benchmark is skipped. The static remediation cells are
+recomputed in SP, and the difference in their number is reported. Finally,
+the precision profile raises the attainable targets in SP (outer residual
+target $10^{-5}$ instead of $10^{-6}$, absolute linear tolerance $10^{-6}$,
+$\eta_{\min}=10^{-2}$), because a field increment below about $10^{-6}$ of
+the field value is lost to rounding; the force window remains the decisive
+convergence test.
+
+\paragraph{Evaluation.} SP is compared with DP on a few cases only
+(D-063). Table~\ref{tab:spperf} gives the wall-clock time, CPU-hours and
+peak memory of both solvers in both precisions,
+Table~\ref{tab:spbreak} the time per coupledFoam iteration by component,
+Figure~\ref{fig:spfloor} the residual histories (the convergence floor),
+and Table~\ref{tab:spverdict} the verdict per case: SP is \emph{usable} on a
+case if the monitored quantity of coupledFoam ($C_d$; $\Delta p$ for T1,
+$x_r/h$ for T2) lies within 0.5\,\% of DP and the checkMesh gate passed,
+otherwise \emph{not usable}, with the reason. \cfnum{SpStatus}
+
+\cftable{sp_performance}{Single against double precision: wall-clock time,
+CPU-hours and peak memory of both solvers.}{tab:spperf}
+\cftable{sp_breakdown}{coupledFoam time per iteration by component, DP and
+SP.}{tab:spbreak}
+\cffigure{sp_convergence_floor}{Convergence floor: combined residual $R_n$
+of coupledFoam in DP (solid) and SP (dashed) on the same case; dotted: the
+SP residual target of the precision profile.}{fig:spfloor}
+\cftable{sp_verdict}{Single-precision verdict per case: monitored quantity
+in DP and SP, checkMesh gate, change of the static remediation set, origin
+shift, verdict.}{tab:spverdict}
+
 % =============================================================================
 \section{Discussion and limitations}\label{sec:discussion}
 % =============================================================================
@@ -1844,7 +1970,7 @@ smooth modes. As CFL$\to\infty$, $\mathsf T\to0$ and
 $\mathsf G\to-\mathsf A_{\mathrm{UD}}^{-1}\mathsf C$, so the damping by the
 pseudo-time term disappears exactly when the CFL control removes it.
 
-For a first estimate we evaluated the symbol of~\eqref{eq:dcG} for constant
+For a first estimate, the symbol of~\eqref{eq:dcG} was evaluated for constant
 convection at angle $\theta$ on a uniform Cartesian grid, with OpenFOAM's
 \code{linearUpwind} (face value from the upwind cell plus its central
 gradient, which in 1D is Fromm's scheme), first-order upwind in
@@ -1858,7 +1984,7 @@ $\mathsf A_{\mathrm{UD}}^{-1}\mathsf C$ is $\tfrac{\mathrm i}{2}\sin\xi$, so
 $\rho\le\tfrac12$ even at infinite CFL. In 2D, cross-stream modes whose
 upwind operator consists almost entirely of numerical diffusion, which the
 correction removes, bring $\rho$ close to one. In the limit CFL$\to\infty$ at
-$\theta=45^\circ$ we find $\rho(\mathsf G)=\cfnum{ExpSymRhoInfPeLow}$ for
+$\theta=45^\circ$ the result is $\rho(\mathsf G)=\cfnum{ExpSymRhoInfPeLow}$ for
 $Pe_h=\cfnum{ExpSymPeLow}$ (the $Re=1000$ cavity on $128^2$ cells, based on
 the lid velocity) and $\rho(\mathsf G)=\cfnum{ExpSymRhoInfPeHigh}$ for
 $Pe_h=\cfnum{ExpSymPeHigh}$. At CFL~500 and $Pe_h=\cfnum{ExpSymPeLow}$ the
@@ -1871,7 +1997,7 @@ boundaries and the singular corners of the cavity, the Picard lag of the
 convecting flux, and above all an inexact linear solve, which replaces
 $\mathsf M^{-1}$ by a different approximate inverse.
 
-This is consistent with what we observed on the $Re=1000$ cavity in
+This is consistent with the observations on the $Re=1000$ cavity in
 exploratory runs (logs in \code{run/exp\_re1000}, outside the test protocol).
 With the solver default of that time (BiCGStab preconditioned by block GAMG
 with a Gauss--Seidel smoother, relative tolerance
@@ -1902,7 +2028,7 @@ iteration converges), the stronger smoothers and cycles of
 Section~\ref{sec:gamg}, the treatment of failed solves, and remediation,
 which sets $\beta_P=0$ where the correction is locally destabilising. A
 rigorous statement for the actual discretisation would require the spectrum
-of~\eqref{eq:dcG} for the assembled operators, which we have not computed.
+of~\eqref{eq:dcG} for the assembled operators, which has not been computed.
 
 On the $Re=100$ cavity an exploratory comparison of linear solvers (logs in
 \code{run/exp\_linsolver}) showed the practical weight of the inner solve:

@@ -130,7 +130,7 @@
 \newtcolorbox{bblock}[1]{cfbase, colback=cfblkbg, colframe=cfblk,
   title={Building block: #1}}
 \newcommand{\bbwhat}{\par\smallskip\noindent\textbf{What is it?}\ }
-\newcommand{\bbwhy}{\par\smallskip\noindent\textbf{Why do we need it?}\ }
+\newcommand{\bbwhy}{\par\smallskip\noindent\textbf{Why is it needed?}\ }
 \newcommand{\bbwithout}{\par\smallskip\noindent\textbf{What would go wrong
   without it?}\ }
 
@@ -225,7 +225,7 @@ The decision log records every point where the implementation deviates
 from, or had to interpret, the original specification.
 
 % =============================================================================
-\section{What problem are we solving?}\label{sec:problem}
+\section{The problem to be solved}\label{sec:problem}
 % =============================================================================
 
 \subsection{The flow equations in words}
@@ -261,7 +261,7 @@ is in OpenFOAM (Section~\ref{sec:turb}).
 
 \subsection{Why pressure is the awkward one}\label{sec:pressurehard}
 
-Look at the list of equations again. Each velocity component has ``its''
+In the list of equations, each velocity component has ``its''
 equation: the $u$-momentum equation. But which equation belongs to the
 pressure? The continuity equation $\nabla\cdot\Uv=0$ does not contain $p$
 at all. Pressure has \emph{no equation of its own}.
@@ -343,7 +343,7 @@ matrix are zero: the matrix is \emph{sparse}. OpenFOAM stores such a matrix
 in its ``LDU'' format: a diagonal entry per cell and one ``upper'' and one
 ``lower'' entry per internal face.
 
-\subsection{Residuals: how far are we from the answer?}\label{sec:residual}
+\subsection{Residuals: how far from the answer?}\label{sec:residual}
 
 A steady solver cannot compute the answer in one go, because the equations
 are \emph{nonlinear}: the velocity convects itself, so the coefficients of
@@ -970,15 +970,25 @@ some cells may temporarily misbehave. coupledFoam handles both with
 whole simulation more cautious.
 
 \begin{description}
-\item[Static set (bad mesh).] Built once from OpenFOAM's mesh-quality
-  measures: non-orthogonality above $70^\circ$, skewness above 4, a
-  volume ratio to a neighbour above 20, or aspect ratio above 1000. These
-  cells get pure upwind convection, a stronger limiter on the
-  non-orthogonal correction, a limited pressure gradient in the
-  Rhie--Chow term, and half the time step.
+\item[Static set (chosen in advance).] Built once before the first
+  iteration, in four categories that can each be switched on or off and
+  tuned in the case files (D-066):
+  \emph{meshQuality} (faces too non-orthogonal or skewed, a large volume
+  jump to a neighbour, or very stretched cells), \emph{badMesh} (severe
+  defects such as a neighbour more than 50 times larger, or cells whose
+  faces do not close), \emph{processor} (cells at the boundaries between
+  the parts of a parallel run) and \emph{wall} (optionally, cells next to
+  chosen walls). The defective cells of the first two categories get pure
+  upwind convection, a stronger limiter on the non-orthogonal correction,
+  a limited pressure gradient in the Rhie--Chow term, and half the time
+  step. The processor and wall cells are chosen by where they are, not
+  because they are bad; they only get half the time step and keep the
+  accurate convection scheme. Giving a dozen well-shaped cells on the
+  motorbike body the full treatment changed the lift by 18\,\% (D-061).
 \item[Dynamic set (bad behaviour).] Updated every iteration. A cell is
-  added if its velocity exceeds twice the reference, its pressure exceeds
-  five times the reference, it differs strongly from its neighbours, any
+  added if its velocity exceeds four times the reference, its pressure
+  exceeds 15 times the reference (D-044), it differs strongly from its
+  neighbours, any
   value is not a finite number, or the line search or the rollback
   (Section~\ref{sec:sentinel}) points at it. The cell and its direct
   neighbours then get pure upwind, a tenth of the time step, and a clip on
@@ -1057,8 +1067,8 @@ once per outer iteration. For millions of cells a direct solution
   matrix''. It starts with the current error (the residual), multiplies it
   by the matrix, multiplies the result again, and so on. Each product shows
   how the system ``responds'' to a certain pattern. From these responses it
-  builds a combination that best explains the right-hand side. Think of
-  tuning a sound system: a few test signals are played, the response of
+  builds a combination that best explains the right-hand side. A
+  comparison is the tuning of a sound system: a few test signals are played, the response of
   the room is recorded, and they are combined into the correction that best
   cancels the echo.
 \end{intuition}
@@ -1687,7 +1697,7 @@ and line-search factor $\omega$ (right).}{fig:t0history}
 
 \paragraph{How to read Figure~\ref{fig:t0history}.} Left: residuals against
 iteration on a log axis; coupledFoam's $R$ together with the $p$ and $U_x$
-initial residuals of \code{simpleFoam}. Look at the \emph{shapes}: the
+initial residuals of \code{simpleFoam}. The \emph{shapes} matter: the
 coupled residual falls steeply within few iterations, the native ones
 decrease slowly over far more iterations. Right: the CFL number (log axis) ramps up from its start
 value to the maximum, and the line-search factor $\omega$ (right axis,
@@ -1821,6 +1831,13 @@ the test runs.}{fig:remediation}
 \cftable{remediation_categories}{Remediation cells per category and test
 run.}{tab:remcat}
 
+\paragraph{How to read Table~\ref{tab:remcat}.} One row per test run: the
+number of pre-selected cells in each category (where the run records
+them), their total and share of the mesh, and the largest and the final
+size of the dynamic set. A static share above about 1\,\% points to a mesh
+that needs attention; a dynamic set that is not empty at the end means
+some cells were still misbehaving when the run stopped.
+
 \paragraph{How to read Figure~\ref{fig:remediation}.} The number of cells in
 the dynamic remediation set against the iteration. Typical and healthy: a
 peak during the early, violent iterations, then decay to (nearly) zero as
@@ -1844,8 +1861,8 @@ equal values. The white lines in the velocity pictures are streamlines:
 lines that follow the flow direction, so vortices appear as closed loops.
 The third panel is the difference coupledFoam minus \code{simpleFoam}; its
 colour scale is centred on zero: white means ``no difference'', red means
-coupledFoam is higher, blue means it is lower. Look at the numbers on its
-colour bar: the scale is chosen from the data, so even tiny differences
+coupledFoam is higher, blue means it is lower. The numbers on its
+colour bar matter: the scale is chosen from the data, so even tiny differences
 look colourful. The title gives the RMS (a typical size) and the maximum of
 the difference. All values are made dimensionless: the velocity divided by
 a reference speed $U_{ref}$ (the lid speed, the inlet speed or the
@@ -2176,8 +2193,8 @@ the K-cycle instead of the default V-cycle.
 completeness; the decisive metrics are those of Figures~\ref{fig:benchwall}
 and~\ref{fig:benchcpu}.}{fig:benchiters}
 
-\paragraph{Figure~\ref{fig:benchiters}} shows iteration counts. Expect
-coupledFoam to need far fewer; that alone proves nothing
+\paragraph{Figure~\ref{fig:benchiters}} shows iteration counts. coupledFoam
+is expected to need far fewer; that alone proves nothing
 (Section~\ref{sec:fair}). The ratio of the iteration ratio to the time
 ratio gives how much more expensive a coupled iteration is.
 
@@ -2245,7 +2262,7 @@ iterations but each is more expensive; the time panel decides.
 preconditioner efficiency $\rho$ with the controller events.}{fig:etarho}
 
 \paragraph{Controller histories (Figure~\ref{fig:etarho}).} Left: the linear
-tolerance $\eta_n$ chosen by Eisenstat--Walker, on a log axis. Expect it at
+tolerance $\eta_n$ chosen by Eisenstat--Walker, on a log axis. It is typically
 0.5 during the start-up and falling as the outer iteration speeds up.
 Right: the measured cycle efficiency $\rho$ (lower is better); dotted
 vertical lines mark changes made by the autoTune controller.
@@ -2262,9 +2279,10 @@ only if the right panel shows a clear gain.
 
 The benchmark above is the careful measurement. The test runs give a first
 look already now: single runs on a shared machine (one core on T0--T3, 10
-cores on the motorbike), so the numbers are indicative only.\pro{Speed-up measured on the test runs} Each
-solver stops at its own test criterion, and the two residuals are
-normalised differently (Section~\ref{sec:residual}), so the picture to
+cores on the motorbike), so the numbers are indicative only.\pro{Speed-up measured on the test runs} Both
+solvers are timed up to the same criterion (the residual target of the
+test, or the settled average forces on the motorbike), but the two
+residuals are normalised differently (Section~\ref{sec:residual}), so the picture to
 trust is the one with \emph{time} on the horizontal axis.
 
 \cffigure{speed_residual_wall}{Residual against wall-clock time, both
@@ -2275,9 +2293,8 @@ The vertical axis is the residual (``how wrong is the current answer''), on
 a log scale: each grid step down means ten times smaller. The horizontal
 axis is the time on the clock since the start. Blue is coupledFoam, orange
 \code{simpleFoam} (solid: pressure, dashed: velocity). The solver whose
-curve reaches the bottom further \emph{left} is the faster one. Do not
-compare the heights of the two curves at the same moment, only how quickly
-each one falls.
+curve reaches the bottom further \emph{left} is the faster one. The heights of the two curves at the same moment
+are not comparable, only how quickly each one falls.
 
 \cffigure{speed_time_to_conv}{Wall-clock time and CPU-hours to convergence
 with the speed-up factors.}{fig:speedconv}
@@ -2333,6 +2350,104 @@ changes only the number of iterations. The arrows point far to the left
 whether the arrow ends lower than it started: pointing down-left is a win,
 pointing up is a loss. This is the fair comparison of
 Section~\ref{sec:fair} in one picture.
+
+\subsection{Numbers in the format of other solvers' reports}\label{sec:metrics}
+
+Vendors and research groups describe the performance of their solvers with
+a small set of standard numbers (Section~\ref{sec:compare}). The same
+numbers are computed here from the existing runs, so that coupledFoam can
+be placed next to such reports:\pro{Metrics for comparison with other solvers}
+\begin{itemize}
+\item \emph{cost per cell}: CPU-seconds per outer iteration per million
+  cells, or its inverse, the number of cell updates per CPU-second
+  (Table~\ref{tab:metcost}); this removes the mesh size from the time;
+\item \emph{memory per million cells} (same table), the number used to
+  plan the hardware for a large case; on small meshes it is dominated by
+  the fixed memory of every OpenFOAM process and is meaningless;
+\item \emph{residual reduction}: after how many iterations and seconds the
+  residual has dropped by a factor of 100, 1000 and 10\,000
+  (Table~\ref{tab:metres});
+\item \emph{parallel efficiency} per number of cores
+  (Table~\ref{tab:metscal});
+\item \emph{mesh dependence}: whether the number of iterations to
+  convergence grows when the mesh is refined (Table~\ref{tab:metgrid}).
+\end{itemize}
+Such numbers are only comparable between solvers when the cases, meshes,
+hardware and convergence criteria are the same, which is never the case for
+published vendor figures; they indicate orders of magnitude, not a ranking.
+
+\cftable{metrics_cost}{Cost and memory per million cells.}{tab:metcost}
+\cftable{metrics_residual}{Residual reduction: iterations and wall-clock
+time.}{tab:metres}
+\cftable{metrics_scaling}{Strong scaling: time per iteration and parallel
+efficiency.}{tab:metscal}
+\cftable{metrics_grid}{Mesh dependence on the motorbike (T4a against
+T4b).}{tab:metgrid}
+
+\clearpage
+\subsection{Full single precision: faster, but still the right answer?}\label{sec:sp}
+
+\paragraph{What single precision means.} Section~\ref{sec:precision}
+explained that coupledFoam already keeps its big block matrix in 4-byte
+floats (about seven significant digits) while everything else stays in
+8-byte doubles (about sixteen digits). OpenFOAM can also be compiled so
+that \emph{everything} is a float: every field, every mesh coordinate, every
+matrix of \code{simpleFoam} and of the turbulence equations, and every file
+written. This is called a single-precision (SP) build. The project built
+one next to the normal double-precision (DP) build, with exactly the same
+compiler settings, and compares the two (D-062).\pro{Single precision}
+
+\paragraph{Where the speed comes from.} A CFD solver spends most of its
+time moving numbers between memory and processor, not calculating with
+them. Half the bytes per number means roughly half the memory traffic, and
+also half the memory and half the size of the result files. For
+coupledFoam the gain is smaller than for \code{simpleFoam}, because the
+most expensive part, the linear solve of the block matrix, is already in
+float; what gets faster is building the matrix, the turbulence update and
+writing results. The specification expects about 15--20\,\% less
+wall-clock time for coupledFoam.
+
+\paragraph{The risks.} Two things can go wrong.
+\begin{description}
+\item[The rounding floor.] Seven digits mean that a change smaller than
+  about one millionth of a value disappears when it is added to that value.
+  The residual of an SP run therefore stops falling at a higher level than
+  in DP: the run is not wrong, it simply cannot get more precise. The SP
+  settings account for this by asking for a residual of $10^{-5}$ instead of
+  $10^{-6}$, and the forces remain the real test of convergence.
+  Sums over millions of cells, such as the total drag force, are always
+  added up in double, even in the SP build, because a float running sum
+  would lose the small contributions.
+\item[The origin shift.] A float coordinate of 10\,m is stored only to about
+  a thousandth of a millimetre. The solver constantly subtracts coordinates
+  of neighbouring cells, and for the thin cells next to a car body these
+  differences are tiny, so the lost digits matter. Before an SP run the
+  mesh is therefore moved so that its centre sits at the origin, where the
+  coordinates are small and the digits are spent on the differences. Every
+  point given in the case files must move with it: the centre about which
+  the moments are computed, probe locations and sampling lines. Forgetting
+  one of them gives moments that look plausible but are wrong. After the
+  move, OpenFOAM's mesh check must report nothing that it does not also
+  report in DP; otherwise the case is marked as not suitable for SP.
+\end{description}
+
+\paragraph{How to read the results.} Table~\ref{tab:spperf} compares time,
+CPU-hours and memory of the same case in both precisions; a ratio DP/SP
+above one means SP is faster or smaller. Table~\ref{tab:spbreak} shows
+which part of a coupledFoam iteration became faster.
+Figure~\ref{fig:spfloor} shows the rounding floor: the dashed SP residual
+flattens out earlier than the solid DP one. Table~\ref{tab:spverdict} gives
+the verdict per case: ``SP usable'' when the drag (or the pressure drop,
+or the reattachment length) differs by less than 0.5\,\% from DP and the
+mesh check passed. \cfnum{SpStatus}
+
+\cftable{sp_performance}{Single against double precision: wall-clock time,
+CPU-hours and peak memory of both solvers.}{tab:spperf}
+\cftable{sp_breakdown}{coupledFoam time per iteration by component, DP and
+SP.}{tab:spbreak}
+\cffigure{sp_convergence_floor}{The rounding floor: residual of coupledFoam
+in double (solid) and single precision (dashed).}{fig:spfloor}
+\cftable{sp_verdict}{Single-precision verdict per case.}{tab:spverdict}
 
 % =============================================================================
 \section{What this means for the F1 half-car}\label{sec:f1}
@@ -2650,8 +2765,8 @@ band no longer shrinks. The right column is the same over the wall-clock
 time; there the solver whose curve settles further left is the faster one.
 
 \smallskip
-\textbf{Residuals.} Log scale, each grid step is a factor of ten. Look at
-the slope, not the level: the two solvers normalise differently.
+\textbf{Residuals.} Log scale, each grid step is a factor of ten. The slope
+matters, not the level: the two solvers normalise differently.
 
 \smallskip
 \textbf{Wall clock.} Top: seconds since the start against the iteration.

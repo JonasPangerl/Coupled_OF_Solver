@@ -92,7 +92,12 @@ RENDER_PROVENANCE = "render_provenance.json"
 CASES = {
     "T4a": dict(cf="T4a_np10", sf="ref_T4a_np10", title="T4a motorBike (354k cells)"),
     "T4b": dict(cf="T4b_np10", sf="ref_T4b_np10", title="T4b motorBike (1.70M cells)"),
-    "T5": dict(cf="T5_np10", sf="ref_T5_np10", title="T5 Ahmed body"),
+    # run names as in bench/plot_histories.py: the coarse development mesh
+    # (CF_T5_MESH=coarse) unless only the fine run exists
+    "T5": (dict(cf="T5_np10", sf="ref_T5_np10", title="T5 Ahmed body")
+           if (RUN / "T5_np10").is_dir() and not (RUN / "T5_coarse_np10").is_dir()
+           else dict(cf="T5_coarse_np10", sf="ref_T5_coarse_np10",
+                     title="T5 Ahmed body (coarse mesh)")),
 }
 # D-063: T5 (Ahmed body) is not run for now (user decision)
 DEFAULT_CASES = ["T4a", "T4b"]

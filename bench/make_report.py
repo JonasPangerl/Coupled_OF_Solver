@@ -1066,8 +1066,13 @@ SPEED_CASES = [
     ("T3 GEKO", "T3_GEKO_np1", "T3_GEKO_np1", "ref_T3_GEKO"),
     ("T4a", "T4a_np10", "T4a_np10", "ref_T4a_np10"),
     ("T4b", "T4b_np10", "T4b_np10", "ref_T4b_np10"),
-    ("T5", "T5_np10", "T5_np10", "ref_T5_np10"),
 ]
+# T5 is deferred (D-063); if it is run again, its run names follow
+# bench/plot_histories.py (coarse development mesh unless only the fine
+# run exists)
+_T5 = ("T5_np10" if (RUN / "T5_np10").is_dir()
+       and not (RUN / "T5_coarse_np10").is_dir() else "T5_coarse_np10")
+SPEED_CASES.append(("T5", _T5, _T5, "ref_" + _T5))
 BUSY_MINUTES = 10.0   # a log written less than this ago belongs to a live run
 _RES_LINE = logs._RES
 _EXEC_LINE = logs._EXEC
@@ -1155,14 +1160,19 @@ def _speed_record(tests: dict, rec: str, cfd: str, sfd: str) -> dict | None:
         return None
     ref = d.get("reference") or {}
     n_cf = d.get("iterations")
-    it_cf = d.get("iterationsToR") or d.get("iterationsToR_coupled")
+    # convergence point of coupledFoam (harness review M1): the residual
+    # target of the test (T0-T2), else the stationary window mean (T4,
+    # itersToConv), else the solver's own stop if the run converged (T3)
+    it_cf = d.get("iterationsToR") or d.get("iterationsToR_coupled") \
+        or d.get("itersToConv")
+    if it_cf is None and d.get("converged") and d.get("autoIteration"):
+        it_cf = d.get("autoIteration")
     wall_cf_run = d.get("wallSecondsSolver") or d.get("wallSeconds")
     cpu_cf_run = d.get("cpuHoursSolver") or d.get("cpuHours")
     if not (n_cf and wall_cf_run and cpu_cf_run):
         return None
-    # records without an iteration count to the residual target (T3: the
-    # residual target was not reached in the 3000 iterations) count as not
-    # converged; the bar is then the whole run
+    # records without a convergence point count as not converged; the bar
+    # is then the whole run
     conv_cf = bool(it_cf)
     cft = cf_timeline(RUN / cfd)
     if conv_cf and cft is not None and it_cf <= len(cft["t"]):
@@ -1171,8 +1181,26 @@ def _speed_record(tests: dict, rec: str, cfd: str, sfd: str) -> dict | None:
         frac = it_cf / n_cf
     else:
         frac = 1.0
-    it_sf = ref.get("convergedAt")
     n_sf = ref.get("iterations")
+    # convergence point of simpleFoam with the SAME criterion as coupledFoam
+    # (review M1): the residual target of the test on all initial residuals
+    # (T0, T1), the native iteration count of D-024 (T2), the stationary
+    # window mean (T4), else its own residualControl stop (T3)
+    it_sf = None
+    tgt = d.get("Rtarget")
+    sflog = RUN / sfd / "log.simpleFoam"
+    if tgt and sflog.exists():
+        nat = logs.parse_native(sflog)
+        it_sf = logs.native_iterations_to(nat, tgt,
+                                          tuple(nat["residuals"].keys()))
+    elif d.get("iterationsToR_native") is not None:
+        it_sf = d["iterationsToR_native"]
+        if n_sf and it_sf >= n_sf:
+            it_sf = None
+    elif ref.get("itersToConv") is not None:
+        it_sf = ref["itersToConv"]
+    else:
+        it_sf = ref.get("convergedAt")
     conv_sf = it_sf is not None
     ta = ref.get("timingAllrun") or {}
     wall_sf = ref.get("wallSecondsSolver") or ref.get("wallSeconds") \
@@ -1183,6 +1211,13 @@ def _speed_record(tests: dict, rec: str, cfd: str, sfd: str) -> dict | None:
         cpu_sf = wall_sf * nproc_sf / 3600.0   # serial reference: CPU = wall
     if not wall_sf:
         return None
+    if conv_sf:
+        sft = sf_timeline(RUN / sfd)
+        if sft is not None and it_sf <= len(sft["t"]) and sft["t"][-1] > 0:
+            fs = sft["t"][it_sf - 1] / sft["t"][-1]
+        else:
+            fs = it_sf / n_sf if n_sf else 1.0
+        wall_sf, cpu_sf = wall_sf * fs, cpu_sf * fs
     return {
         "wall_cf": wall_cf_run * frac, "cpu_cf": cpu_cf_run * frac,
         "it_cf": it_cf if conv_cf else n_cf, "conv_cf": conv_cf,
@@ -1563,7 +1598,9 @@ def exploratory_numbers() -> None:
 
 SP_SUFFIX = "_sp"
 SP_TOL = 0.005          # D11 verdict: monitored quantity within 0.5 % of DP
-SP_BENCH_DP = {"F1": "A", "F2": "C"}
+# DP counterpart of the SP benchmark configurations (amend-d-forces:
+# run_bench.SP_BASE; the record's dpCounterpart.config wins)
+SP_BENCH_DP = {"F1": "B", "F2": "C"}
 # monitored integral quantity per case family: (label, record keys)
 SP_QUANTITY = (("C_d", ("Cd", "Cd_mean")), ("dp", ("dp",)),
                ("x_r/h", ("xr_over_h",)))
@@ -1576,8 +1613,8 @@ def _sp_pairs(tests: dict) -> list[tuple[str, dict, str, dict | None]]:
         is_sp = n.endswith(SP_SUFFIX) or str(d.get("precision", "")).upper() == "SP"
         if not is_sp:
             continue
-        dpn = d.get("dpRecord") or (n[:-len(SP_SUFFIX)] if n.endswith(SP_SUFFIX)
-                                    else None)
+        dpn = (d.get("dpRecord") or (d.get("dpCounterpart") or {}).get("record")
+               or (n[:-len(SP_SUFFIX)] if n.endswith(SP_SUFFIX) else None))
         out.append((n, d, dpn or "?", tests.get(dpn) if dpn else None))
     return out
 
@@ -1590,7 +1627,11 @@ def _sp_quantity(sp: dict, dp: dict | None) -> tuple[str, float | None,
         if vs is None:
             continue
         vd = next((dp[k] for k in keys if dp and dp.get(k) is not None), None)
-        rel = sp.get("Cd_rel_to_DP") if lab == "C_d" else None
+        rel = next((sp[f"{k}_rel_to_DP"] for k in keys
+                    if sp.get(f"{k}_rel_to_DP") is not None), None)
+        if vd is None:
+            vd = next((sp[f"{k}_DP"] for k in keys
+                       if sp.get(f"{k}_DP") is not None), None)
         if rel is None and vd:
             rel = (vs - vd) / abs(vd)
         return lab, vd, vs, rel
@@ -1599,8 +1640,8 @@ def _sp_quantity(sp: dict, dp: dict | None) -> tuple[str, float | None,
 
 def _sp_gate(sp: dict) -> tuple[bool | None, str]:
     """checkMesh gate of D5.3: (passed, text). None: not recorded."""
-    if str(sp.get("status", "")).lower() == "sp-geometry-fail" \
-            or sp.get("spGeometryFail"):
+    if any(str(sp.get(k, "")).lower() == "sp-geometry-fail"
+           for k in ("spGeometry", "status")):
         return False, "SP-geometry-fail"
     diff = sp.get("checkMeshDiff")
     if diff is None:
@@ -1608,13 +1649,22 @@ def _sp_gate(sp: dict) -> tuple[bool | None, str]:
     if isinstance(diff, dict):
         diff = [k for k, v in diff.items() if v]
     if diff:
-        return False, "differs: " + ", ".join(str(x) for x in diff)[:60]
+        # amend-d-forces: [{"check": ..., "only": "sp"|"dp"}]
+        txt = [f"{x.get('check')} (only {x.get('only')})"
+               if isinstance(x, dict) else str(x) for x in diff]
+        sp_only = [x for x in diff if not isinstance(x, dict)
+                   or str(x.get("only", "sp")).lower() == "sp"]
+        if not sp_only:
+            return True, "passed (DP-only: " + ", ".join(txt)[:40] + ")"
+        return False, "differs: " + ", ".join(txt)[:60]
     return True, "passed"
 
 
 def _shift_norm(v) -> str:
     if isinstance(v, dict):
         v = v.get("vector") or v.get("translate")
+    if v is None:
+        return "n/a"
     try:
         return f"{float(np.linalg.norm(np.asarray(v, dtype=float))):.3g} m"
     except (TypeError, ValueError):
@@ -1655,6 +1705,9 @@ def sp_section(tests: dict, bench: list[dict]) -> None:
     num("sp n cases", len(pairs), "{}")
     if not pairs and not brows:
         notes.append("single precision: no SP records (*_sp, F1/F2) yet")
+        num("sp status", "No single-precision runs are available for this "
+            "document yet; the tables and the figure of this section are "
+            "added when the report is regenerated after the SP runs.")
         return
     # ---- performance: wall, CPU-h, peak RSS, both solvers
     perf = []
@@ -1682,8 +1735,12 @@ def sp_section(tests: dict, bench: list[dict]) -> None:
                     "{:.2f}")
     for cfg, dpcfg0 in SP_BENCH_DP.items():
         for c in sorted({d["case"] for d in brows if d["config"] == cfg}):
-            dpcfg = next((d.get("dpConfig") for d in brows
-                          if d["config"] == cfg and d.get("dpConfig")), dpcfg0)
+            dpcfg = next(((d.get("dpConfig")
+                           or (d.get("dpCounterpart") or {}).get("config"))
+                          for d in brows if d["config"] == cfg
+                          and (d.get("dpConfig") or (d.get("dpCounterpart")
+                                                     or {}).get("config"))),
+                         dpcfg0)
             ws, wd = _med(bench, c, cfg, "wall_to_conv_s"), \
                 _med(bench, c, dpcfg, "wall_to_conv_s")
             cs, cd = _med(bench, c, cfg, "cpu_to_conv_h"), \
@@ -1732,7 +1789,15 @@ def sp_section(tests: dict, bench: list[dict]) -> None:
     # ---- verdict (D11)
     ver = []
     n_ok = 0
-    for n, sp, dpn, dp in pairs:
+    items = [(dpn, sp, dp) for _, sp, dpn, dp in pairs]
+    n_tests = len(items)
+    # benchmark F2 (coupledFoam SP): one record per case (D-063: 1 repeat),
+    # compared by its own <m>_rel_to_DP fields
+    for c in sorted({d["case"] for d in brows if d["config"] == "F2"}):
+        r = next(d for d in sorted(brows, key=lambda x: x.get("run", 0))
+                 if d["case"] == c and d["config"] == "F2")
+        items.append((f"bench {c} (F2)", r, None))
+    for dpn, sp, dp in items:
         lab, vd, vs, rel = _sp_quantity(sp, dp)
         gate, gtxt = _sp_gate(sp)
         reasons = []
@@ -1771,6 +1836,11 @@ def sp_section(tests: dict, bench: list[dict]) -> None:
             "negative volumes), else ``SP not usable'' with the reason.",
             "tab:spverdict", resize=True)
         num("sp n usable", n_ok, "{}")
+    nb = len(ver) - n_tests
+    num("sp status",
+        f"Single-precision results exist for {n_tests} test record(s) and "
+        f"{nb} benchmark case(s) (F2); {n_ok} of these {len(ver)} "
+        f"{'is' if n_ok == 1 else 'are'} usable by this rule.")
     # ---- convergence floor: R_n in SP against DP
     hist = [(dpn, (dp or {}).get("history", {}).get("R"),
              sp.get("history", {}).get("R")) for _, sp, dpn, dp in pairs]
@@ -2018,7 +2088,7 @@ def table_wake_speedup(tests: dict) -> None:
     referenceTimingConditionsUnknown)."""
     rows = []
     for name in sorted(tests):
-        if not name.startswith(("T4a_np", "T4b_np")):
+        if not name.startswith(("T4a_np", "T4b_np")) or name.endswith(SP_SUFFIX):
             continue
         d = tests[name]
         ref = d.get("reference") or {}
@@ -2106,6 +2176,9 @@ def table_remediation_categories(tests: dict) -> None:
     for n, d in sorted(tests.items()):
         h = d.get("history") or {}
         c = _rem_categories(d)
+        if not c and (RUN / n).is_dir() and run_ok(RUN / n):
+            # D-066: summary.json of the run carries staticCategories
+            c = _rem_categories(logs.coupled_summary(RUN / n) or {})
         if not (c or d.get("staticCells") is not None or h.get("nStat")
                 or h.get("nDyn")):
             continue
