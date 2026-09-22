@@ -270,3 +270,20 @@ iterations and the GEKO reference Cl is 0.838 vs SST 0.253).
 Note: probe c did not change the switch point materially - the start-up
 switch also fires on R < 1e-2 (D-008), so startupUpwindIters alone
 cannot extend the upwind phase.
+
+### 5. np4 runs are not bit-reproducible run to run (found by TASK 5, 2026-09-22)
+
+T0 np4 on the main-install binary: three identical runs gave 7 / 9 / 9
+linear iterations at outer iteration 1, with different rho. Serial runs
+are bit-identical. Suspects: a reduction whose order depends on message
+arrival (e.g. a non-deterministic gather/sum in the processor
+agglomeration or the coarsest-level gather), or uninitialised data on
+interface buffers. D-034 states bit-exact np4 restart round trips; that
+was measured within one run pair and may only hold by chance. Relevant
+for the chaotic T0-Re1000 np4 counts (item 1). To do: run T0 Re100 np4
+three times with -procAgglom none (Test-blockGAMG / processorAgglomerator
+none) and with GAMG disabled (blockDiagonal) to bisect.
+TASK 5 (branch task5-diagnostics, commits 28fc54b eaedf50 4085f4d)
+waits for a quiet window: `/home/jonas/bin/cfenv sys bash
+bench/task5_acceptance.sh` (np4 checks + wall-clock overhead gates),
+then merge.
