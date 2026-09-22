@@ -79,6 +79,9 @@ RANGES = {
 PRESETS = {"magUrel": "Viridis (matplotlib)", "Cp": "Cool to Warm",
            "magUMeanDeltaRel": "Inferno (matplotlib)",
            "CpMeanDelta": "Blue Orange (divergent)"}
+# inverted: zero difference light (the dark end of Inferno would hide the
+# panel titles and read as "large")
+INVERT = {"magUMeanDeltaRel"}
 BG = [1.0, 1.0, 1.0]
 PANEL_PX = (1300, 620)     # one view; figures are 2 x 2 or 1 x 2 views
 
@@ -181,6 +184,8 @@ def with_norm(src, uinf: float, have: set[str]):
 def lut(array: str, rng_key: str | None = None):
     lt = GetColorTransferFunction(array)
     lt.ApplyPreset(PRESETS.get(rng_key or array, "Viridis (matplotlib)"), True)
+    if (rng_key or array) in INVERT:
+        lt.InvertTransferFunction()
     lo, hi = RANGES[rng_key or array]
     lt.RescaleTransferFunction(lo, hi)
     lt.AutomaticRescaleRangeMode = "Never"

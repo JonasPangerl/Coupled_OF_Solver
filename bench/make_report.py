@@ -1163,6 +1163,19 @@ def fig_fields() -> None:
             notes.append(f"3D renders failed: {e}")
 
 
+def fig_iteration_histories() -> None:
+    """Per-case iteration histories and the appendix text
+    (bench/plot_histories.py -> figures/hist_*.pdf, figures/histories.tex)."""
+    try:
+        import plot_histories  # noqa: PLC0415
+    except ImportError as e:
+        notes.append(f"histories: {e}")
+        return
+    figs, nts = plot_histories.run(log=lambda s: print(s, flush=True))
+    notes.extend(nts)
+    figures_pdf_only.extend(figs)
+
+
 # figures written by the helper modules (PDF/PNG in report/paper/figures
 # only, not in report/figures); listed in REPORT.md without an image
 figures_pdf_only: list[tuple[str, str]] = []
@@ -1253,6 +1266,7 @@ def main() -> int:
     exploratory_numbers()
     fig_speed(tests)
     fig_fields()
+    fig_iteration_histories()
 
     t0 =tests.get("T0_Re100_np1", {})
     num("T0 Re100 iterations", t0.get("iterations"), "{}")
