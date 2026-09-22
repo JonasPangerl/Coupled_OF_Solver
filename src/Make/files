@@ -26,6 +26,8 @@ assembly/coupledAssembler.C
 control/ptcControl.C
 control/lineSearch.C
 control/remediation.C
+control/staticCriteria.C
+control/zonalSets.C
 control/sentinel.C
 control/convergenceMonitor.C
 control/adaptiveTolerance.C
@@ -37,5 +39,6 @@ io/jsonWriter.C
 io/runInfo.C
 io/coupledState.C
 io/diagnostics.C
+io/diagnosticFields.C
 
 LIB = $(FOAM_USER_LIBBIN)/libcoupledFoam

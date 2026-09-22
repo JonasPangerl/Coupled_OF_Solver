@@ -48,6 +48,7 @@ Description
 #include "ptcControl.H"
 #include "lineSearch.H"
 #include "remediation.H"
+#include "diagnosticFields.H"
 #include "sentinel.H"
 #include "convergenceMonitor.H"
 #include "coupledState.H"
@@ -205,6 +206,8 @@ int main(int argc, char *argv[])
     // guarded with diag.active(n); at level 0 the solver and the assembler
     // get no diagnostics object and take no clock readings.
     diagnostics diag(coupledDict);
+    // Write-time diagnostic fields (amendment C6)
+    diagnosticFields dfields(mesh, coupledDict);
     if (diag.active(1))
     {
         linSolver->setDiagnostics(&diag);
@@ -269,6 +272,7 @@ int main(int argc, char *argv[])
             dg.add("echo", diag.echo());
             eff.add("diagnostics", dg);
         }
+        dfields.writeSettings(eff);
 
         Info<< nl << "coupledFoam: effective settings" << nl
             << eff << endl;
@@ -504,6 +508,8 @@ int main(int argc, char *argv[])
     auto writeOutputs = [&]()
     {
         rem.write();
+        // C6 (C3 hook: dfields.setSFD(&Ubar) while SFD is active -> USFD)
+        dfields.write(phi);
         state.writeD(assembler.rc().D());
         state.writeQ(assembler.rc().q());
         state.write(stateDict());
@@ -653,6 +659,7 @@ int main(int argc, char *argv[])
                 assembler.momentumResidual(),
                 ls.Uref()
             );
+            dfields.record(rDTV, cflF, beta);                   // C6
             assembler.assembleContinuity(rDTV);
             tAsm += ta.elapsedTime();
 
@@ -781,6 +788,7 @@ int main(int argc, char *argv[])
                         validIter
                     );
                     rem.write(sentinel::lastValidName(validIter));
+                    dfields.write(phi, sentinel::lastValidName(validIter));
                     FatalErrorInFunction
                         << linFails << " consecutive linear-solve failures"
                         << " (maxLinFails " << maxLinFails << ") at iteration "
@@ -999,6 +1007,7 @@ int main(int argc, char *argv[])
                     validIter
                 );
                 rem.write(sentinel::lastValidName(validIter));
+                dfields.write(phi, sentinel::lastValidName(validIter));
                 FatalErrorInFunction
                     << sen.consecutive() << " consecutive rollbacks (limit "
                     << sen.maxRollbacks() << ") at iteration " << iter
