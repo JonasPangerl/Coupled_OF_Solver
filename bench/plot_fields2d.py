@@ -30,7 +30,14 @@ The delta statistics (area-weighted RMS and max of the deltas) are returned
 to bench/make_report.py, which quotes them in the paper, and are written to
 report/paper/figures/fields2d_stats.json.
 
-Usage: /home/jonas/OF/venv/bin/python bench/plot_fields2d.py [case ...]
+Staleness guard (TASK 6): the coupledFoam run is read only if its
+provenance.json names the target commit (tests/cflib/provenance.py);
+otherwise the case is skipped (its figures stay pending). From
+bench/make_report.py the guard of the report run is used; standalone:
+--commit (default HEAD), --allow-stale. The simpleFoam reference is exempt.
+
+Usage: /home/jonas/OF/venv/bin/python bench/plot_fields2d.py
+           [--commit SHA] [--allow-stale] [case ...]
        (no OpenFOAM environment needed; runs serially, nice it)
 """
 
@@ -50,6 +57,8 @@ import numpy as np  # noqa: E402
 REPO = Path(__file__).resolve().parents[1]
 RUN = REPO / "run"
 FIG = REPO / "report" / "paper" / "figures"
+sys.path.insert(0, str(REPO / "tests"))
+from cflib import provenance  # noqa: E402
 
 C_NATIVE = "#D55E00"     # same colour pair as make_report/plot_histories
 C_COUPLED = "#0072B2"
@@ -517,6 +526,10 @@ def run(names: list[str] | None = None, outdir: Path = FIG,
         if not (cfd.is_dir() and sfd.is_dir()):
             notes.append(f"fields {name}: run/{cfg['cf']} or run/{cfg['sf']} missing")
             continue
+        if not provenance.active().check_run(cfd):
+            notes.append(f"fields {name}: run/{cfg['cf']} is not from the "
+                         "report's commit, skipped (pending)")
+            continue
         patches = tuple(p for p in (cfg.get("airfoil"),
                                     (cfg.get("view") or "")[6:]
                                     if isinstance(cfg.get("view"), str) else None)
@@ -541,7 +554,16 @@ def run(names: list[str] | None = None, outdir: Path = FIG,
 
 
 if __name__ == "__main__":
-    f, s, n = run(sys.argv[1:] or None)
+    import argparse  # noqa: PLC0415
+    _ap = argparse.ArgumentParser()
+    _ap.add_argument("cases", nargs="*")
+    _ap.add_argument("--commit", default="HEAD")
+    _ap.add_argument("--allow-stale", action="store_true")
+    _a = _ap.parse_args()
+    if not _a.allow_stale:
+        provenance.ACTIVE = provenance.Guard(
+            provenance.git_resolve(_a.commit) or _a.commit)
+    f, s, n = run(_a.cases or None)
     for stem, _ in f:
         print("wrote", stem)
     for x in n:

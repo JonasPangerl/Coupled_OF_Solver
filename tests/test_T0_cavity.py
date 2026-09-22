@@ -12,7 +12,7 @@ import pytest
 
 from cflib import case as cfcase
 from cflib import env as cfenv
-from cflib import logs, post, results
+from cflib import logs, post, refcase, results
 
 MAX_ITERS = 300
 R_TARGET = 1e-8
@@ -89,12 +89,13 @@ def test_T0(foam, re, nprocs):
         "fpeTrap": fpe_trap, "fpeEnabled": "trapFpe" in text,
         "nClampedMax": n_clamped,
         "rollbacks": summ.get("rollbacks"),
-        "wallSeconds": summ.get("wallSeconds"),
+        # wall-clock AND CPU-hours of both solvers (solver loop only)
+        **refcase.coupled_timing(summ, timing),
         "timingAllrun": timing,
         "peakRSS_MB_sum": summ.get("peakRSS_MB_sum"),
         "reference": {"solver": "simpleFoam", "iterations": ref_log["iterations"],
                       "convergedAt": ref_log["convergedAt"],
-                      "wallSeconds": ref_log["wall"]},
+                      **refcase.native_timing(ref / "log.simpleFoam", 1)},
         "history": {k: [r.get(k) for r in rows]
                     for k in ("R", "CFL", "omega", "cuts", "linIters", "tIter",
                               "tWall", "eta", "rho")},
