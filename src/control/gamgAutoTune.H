@@ -66,7 +66,7 @@ public:
     {
         label iter;
         std::string what;
-        scalar rhoMed;
+        doubleScalar rhoMed;
     };
 
 private:
@@ -82,13 +82,23 @@ private:
         label tuneInterval_;
         label nPostSweepsMax_;
 
+        //- Decision thresholds of 6.3.5 (keywords tuneRhoHigh, tuneRhoLow,
+        //  tuneRhoDemote, tuneRhoFail, tuneConsecutiveWindows,
+        //  nPostSweepsMin; D-066)
+        doubleScalar rhoHigh_;
+        doubleScalar rhoLow_;
+        doubleScalar rhoDemote_;
+        doubleScalar rhoFail_;
+        label consecutiveWindows_;
+        label nPostSweepsMin_;
+
         //- Cycle type given by the user (lower bound for demotion)
         blockGAMG::cycleKind userCycle_;
 
         // State
 
             //- Measured rho values of the current window
-            DynamicList<scalar> window_;
+            DynamicList<doubleScalar> window_;
 
             //- Outer iterations recorded in the current window
             label nInWindow_;
@@ -122,14 +132,14 @@ private:
     // Private Member Functions
 
         //- Exact median (copy + sort); requires a non-empty list
-        static scalar median(const UList<scalar>& v);
+        static doubleScalar median(const UList<doubleScalar>& v);
 
         //- Evaluate a completed window
-        void evaluate(const label iter, const scalar rhoMed);
+        void evaluate(const label iter, const doubleScalar rhoMed);
 
         //- Apply the high / low rule
-        void applyHigh(const label iter, const scalar rhoMed);
-        void applyLow(const label iter, const scalar rhoMed);
+        void applyHigh(const label iter, const doubleScalar rhoMed);
+        void applyLow(const label iter, const doubleScalar rhoMed);
 
         //- Cycle type one demotion step below the current one if the
         //  controller promoted it (not below the user's type), else the
@@ -137,14 +147,14 @@ private:
         blockGAMG::cycleKind demotionTarget() const;
 
         //- Demote one step (if demotionTarget() differs)
-        void demote(const label iter, const scalar rhoMed);
+        void demote(const label iter, const doubleScalar rhoMed);
 
         //- Log and store an event
         void addEvent
         (
             const label iter,
             const std::string& what,
-            const scalar rhoMed
+            const doubleScalar rhoMed
         );
 
 
@@ -167,7 +177,7 @@ public:
         //  or not to be used - rejected/failed solves). Evaluates the
         //  window after every tuneInterval calls. Returns true if the
         //  sweeps or the cycle type were changed.
-        bool record(const label iter, const scalar rho);
+        bool record(const label iter, const doubleScalar rho);
 
         //- Restart state (subdictionary gamgAutoTune): sweeps, cycle type,
         //  rho window, hysteresis and failure counters, latches.

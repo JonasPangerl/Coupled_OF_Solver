@@ -19,9 +19,13 @@ File: report/user_convergence.json (tracked; edited by hand)
 
 Case keys: T3-SST, T3-GEKO, T4a, T4b, T5. Within a case:
   "coupledFoam" / "simpleFoam"  the test run and its simpleFoam reference
-  "A" ... "H", "E-..."          one benchmark configuration (all repeats)
+  "A" ... "H", "H-tune", "E-..." one benchmark configuration (all repeats)
 A missing or null entry keeps the automatic value. Keys starting with "_"
 are comments.
+
+A cached reference that was continued with averaging (ref_T4a, ref_T4b)
+is read up to the end of its original budget only (M7): a user iteration
+beyond it is ignored and flagged like one beyond the end of a run.
 
 With a user iteration N of a run with n iterations:
   iterations to convergence  = N
@@ -74,12 +78,15 @@ def lookup(table: dict, case: str | None, key: str) -> int | None:
 
 
 def force_hist(case: Path) -> dict[str, np.ndarray]:
-    from cflib import post  # noqa: PLC0415
-    try:
-        fc = post.force_coeffs(case)
-    except (FileNotFoundError, KeyError, OSError):
+    """Cd / Cl history of a run. A continued simpleFoam reference (ref_*
+    with reference.json "continuation") is cut at the end of its ORIGINAL
+    budget (M7): the continuation samples are not part of the reference run,
+    as in the test's own evaluation (t_max)."""
+    import run_bench  # noqa: PLC0415
+    h = run_bench.force_history(case)
+    if not h:
         return {}
-    return {"Cd": np.asarray(fc["Cd"], float), "Cl": np.asarray(fc["Cl"], float)}
+    return {"Cd": np.asarray(h["Cd"], float), "Cl": np.asarray(h["Cl"], float)}
 
 
 def _rt(rec: dict) -> dict:
@@ -95,16 +102,37 @@ def _rt(rec: dict) -> dict:
     return {}
 
 
+def guard_ok(case: Path, rec: dict) -> bool:
+    """The run directory may be read for record `rec` (M9): it passes the
+    active staleness guard of the report (provenance at the target commit
+    and build; run/ref_* exempt) and is still the run the record was made
+    from. Always true without an active guard."""
+    import run_bench  # noqa: PLC0415, F401  (puts tests/ on sys.path)
+    from cflib import provenance  # noqa: PLC0415
+    return provenance.active().check_record_run(Path(case).name, rec,
+                                                Path(case))
+
+
 def evaluate(case: Path, solver: str, it: int, rec: dict) -> dict:
-    """Numbers of a run converged at iteration `it` (see module doc)."""
+    """Numbers of a run converged at iteration `it` (see module doc). A run
+    directory rejected by the staleness guard (guard_ok) is not read: the
+    result is flagged "ignored"."""
     import run_bench  # noqa: PLC0415
     out: dict = {"iters": it}
+    if not guard_ok(case, rec):
+        out["ignored"] = (f"run directory {Path(case).name} rejected by the "
+                          "staleness guard (listed in the appendix)")
+        return out
     h = force_hist(case)
     if h:
         n = min(len(h["Cd"]), len(h["Cl"]))
         out["iterationsRun"] = n
         if it > n:
-            out["ignored"] = f"iteration {it} > {n} iterations run"
+            cont = run_bench.reference_t_max(case) is not None
+            out["ignored"] = (f"iteration {it} > {n} iterations run"
+                              + (" (the original reference budget; the "
+                                 "continuation is not part of the "
+                                 "reference, D-060)" if cont else ""))
             return out
         k = min(max(it, 1), n) - 1
         for q in ("Cd", "Cl"):
@@ -184,6 +212,8 @@ def auto_iteration(rec: dict, case: Path) -> int | None:
     if rec.get("convergedAt") is not None:
         return rec["convergedAt"]
     import run_bench  # noqa: PLC0415
+    if not Path(case).is_dir() or not guard_ok(case, rec):
+        return rec.get("iterations")
     h = force_hist(case)
     it = (run_bench.iters_to_conv({k: v.tolist() for k, v in h.items()})
           if h else None)
@@ -219,6 +249,11 @@ def apply_test(name: str, rec: dict, table: dict) -> dict:
         rec["cpuHoursToConv"] = ev["cpu_to_conv_h"]
         if "Cd" in ev:
             rec["Cd"], rec["Cl"] = ev["Cd"], ev["Cl"]
+            # wake-case tables read the *_mean keys: keep both consistent
+            # (review M9: the reference side was updated, this side not)
+            if rec.get("Cd_mean") is not None:
+                rec["Cd_mean"], rec["Cl_mean"] = ev["Cd"], ev["Cl"]
+                rec["Cd_std"], rec["Cl_std"] = ev["Cd_std"], ev["Cl_std"]
     if its is not None and rdir.is_dir():
         ev = evaluate(rdir, "simpleFoam", its, ref)
         if ev.get("ignored"):
@@ -233,6 +268,7 @@ def apply_test(name: str, rec: dict, table: dict) -> dict:
         if "Cd" in ev:
             ref["Cd"], ref["Cl"] = ev["Cd"], ev["Cl"]
             ref["Cd_mean"], ref["Cl_mean"] = ev["Cd"], ev["Cl"]
+            ref["Cd_std"], ref["Cl_std"] = ev["Cd_std"], ev["Cl_std"]
             rec["CdRef"], rec["ClRef"] = ev["Cd"], ev["Cl"]
     if rec.get("Cd") is not None and rec.get("CdRef"):
         rec["CdRelDiff"] = abs(rec["Cd"] - rec["CdRef"]) / abs(rec["CdRef"])

@@ -45,20 +45,20 @@ class adaptiveTolerance
     // Private Data
 
         bool enabled_;
-        scalar etaMin_;
-        scalar etaMax_;
-        scalar gamma_;
-        scalar alpha_;
-        scalar safeguard_;
-        scalar relTolFixed_;
+        doubleScalar etaMin_;
+        doubleScalar etaMax_;
+        doubleScalar gamma_;
+        doubleScalar alpha_;
+        doubleScalar safeguard_;
+        doubleScalar relTolFixed_;
 
         //- Previous eta and R (-1: none)
-        scalar etaPrev_;
-        scalar Rprev_;
+        doubleScalar etaPrev_;
+        doubleScalar Rprev_;
 
         //- Diagnostics of the last eta() call: the raw Eisenstat-Walker
         //  value (-1: not evaluated) and the rule that set the result
-        scalar lastRaw_;
+        doubleScalar lastRaw_;
         const char* lastClip_;
 
 
@@ -75,17 +75,17 @@ public:
 
         //- eta for the current outer iteration given R_n (call once per
         //  assembly; a repeated step after a CFL cut passes the same R)
-        scalar eta(const scalar R, const bool startupDone);
+        doubleScalar eta(const doubleScalar R, const bool startupDone);
 
         //- Raw EW value of the last eta() call (-1: not evaluated)
-        scalar lastRaw() const noexcept { return lastRaw_; }
+        doubleScalar lastRaw() const noexcept { return lastRaw_; }
 
         //- Rule that set the last eta: none | fixed | noHistory |
         //  safeguard1 | etaMin | etaMax
         const char* lastClip() const noexcept { return lastClip_; }
 
         //- Accept the iteration: R becomes R_(n-1) of the next one
-        void accept(const scalar R, const scalar eta);
+        void accept(const doubleScalar R, const doubleScalar eta);
 
         //- Restart state
         void writeState(dictionary& dict) const;

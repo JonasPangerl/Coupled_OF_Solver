@@ -47,10 +47,15 @@ Every case in `cases/` has `Allrun` and `Allclean`:
     cd cases/T0_cavity && ./Allrun
 
 Solver controls live in `system/fvSolution` (`solvers.coupled` for the linear
-solver, top-level `coupled` for the outer iteration); every keyword and its
-default is listed in spec Section 11 and printed at start-up under
-`coupledFoam: effective settings`. Keywords added after the spec (all with
-their defaults in `src/include/coupledDefaults.H`):
+solver, top-level `coupled` for the outer iteration). The complete keyword
+reference - every keyword with its default, range, meaning and decision - is
+`docs/KEYWORDS.md` (D-066: every tunable setting is a run-time keyword);
+the effective values are printed at start-up under
+`coupledFoam: effective settings`. The pre-selected remediation cells come
+in four categories with their own switches and treatment
+(`coupled.remediation.meshQuality`, `badMesh`, `processor`, `wall`; see
+`docs/KEYWORDS.md`). Keywords added after the spec (all with their defaults
+in `src/include/coupledDefaults.H`) include:
 
 - `coupled.startupMode upwind | hybrid | none` (D-048, default `upwind`,
   the original behaviour): `hybrid` ramps the convection blending beta
@@ -77,6 +82,33 @@ their defaults in `src/include/coupledDefaults.H`):
   with `reduction` a linear solve that hit `maxIter` counts as a success if
   it is finite and reduced the residual to at most `linAcceptReduction`
   (0.9) times its start value (`linAcceptedUnconverged` in the summary).
+- `coupled.precisionProfile auto | dp | sp` (amendment D7, D-064, default
+  `auto`: `sp` if `sizeof(scalar) == 4`): the DEFAULTS of
+  `convergence.residualTol` (1e-6 | 1e-5), `solvers.coupled.tolerance`
+  (1e-8 | 1e-6), `etaMin` (1e-3 | 1e-2), `bounds.omegaMin` (1e-6 | 1e-5),
+  `bounds.kMin` (1e-12 | 1e-10) and the Anderson cell rule
+  (`anderson.maxCells`, default 35 M: dp disables Anderson above it, sp
+  keeps it with `m <= 4`). An explicitly set keyword always wins - the
+  case templates set all five, so an SP run that should use the SP
+  defaults must remove them from `system/fvSolution`. The profile is
+  logged once at start-up and listed in the effective settings.
+
+### Single precision (amendment D, D-064)
+
+- Build against an OpenFOAM v2606 with `WM_PRECISION_OPTION=SP`
+  (`scalar = solveScalar = float`); the same source compiles warning-free
+  in DP and SP. The block matrix is float and every reduction double in
+  every build (D-001); in SP the assembler writes the diagonal blocks
+  directly into the matrix (no staging buffer, D8.1). FTZ/DAZ is on by
+  default (`coupled.ftz`); an SP run without it is warned about (D8.2).
+- Meshes are generated in DP and transferred as ASCII with 12 digits
+  (D5.1): in the DP case set `writeFormat ascii; writePrecision 12;` in
+  `system/controlDict`, run the mesher, copy `constant/polyMesh` into the
+  SP case.
+- Binary I/O (D8.3) is already the default of every case template
+  (`writeFormat binary; writePrecision 12; writeCompression off;`); an SP
+  run writes float fields (header `arch "...;scalar=32"`). Restart only
+  within the same build.
 
 An abort (B4 linear-solve failures or the sentinel rollback limit) writes
 the last accepted fields, `sentinelFlag`, `remediationFlag` and the

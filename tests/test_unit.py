@@ -101,11 +101,22 @@ def test_blockMatrix(foam, cavity_mesh):
     assert passed, (cross, out)
 
 
-def _sorted_solution(path: Path) -> np.ndarray:
-    """Solution rows sorted by cell centre (decomposition independent)."""
-    d = np.loadtxt(path)
-    order = np.lexsort((d[:, 2], d[:, 1], d[:, 0]))
-    return d[order]
+def _matched_solutions(f1: Path, f2: Path):
+    """Rows of two -dumpSolution files paired by cell centre: nearest
+    neighbour within 1e-6 of the domain span, one-to-one. Decomposition
+    independent, and robust to the round-off of float cell centres in an
+    SP build (a sort by the centres pairs the wrong rows there, D-064).
+    Returns (rows of f1, matching rows of f2) or None."""
+    from scipy.spatial import cKDTree
+    d1 = np.loadtxt(f1)
+    d2 = np.loadtxt(f2)
+    if d1.shape != d2.shape:
+        return None
+    span = float(np.ptp(d1[:, :3], axis=0).max())
+    dist, idx = cKDTree(d2[:, :3]).query(d1[:, :3])
+    if dist.max() > 1e-6 * span or np.unique(idx).size != idx.size:
+        return None
+    return d1, d2[idx]
 
 
 @pytest.mark.unit
@@ -118,10 +129,9 @@ def test_blockGAMG(foam, cavity_mesh):
                               "-tolerance", str(GAMG_TOLERANCE)])
     # "Identical solution 1 vs 4 ranks to 1e-5" (6.4): relative L2 difference
     # of the whole solution vector, cells matched by their centres
-    s1 = _sorted_solution(cavity_mesh / "bg1.xyz")
-    s4 = _sorted_solution(cavity_mesh / "bg4.xyz")
-    assert np.allclose(s1[:, :3], s4[:, :3]), "cell centres do not match"
-    x1, x4 = s1[:, 3:], s4[:, 3:]
+    m = _matched_solutions(cavity_mesh / "bg1.xyz", cavity_mesh / "bg4.xyz")
+    assert m is not None, "cell centres do not match"
+    x1, x4 = m[0][:, 3:], m[1][:, 3:]
     cross = float(np.linalg.norm(x1 - x4) / np.linalg.norm(x1))
     max_abs = float(np.max(np.abs(x1 - x4)))
     passed = (all(v["rc"] == 0 and v.get("pass") for v in out.values())
@@ -151,11 +161,10 @@ MOTORBIKE_MESH_CASE = "T4a_mesh"    # cases/T4_motorBike: Allrun -mesh a -mesh-o
 def _compare_solutions(f1: Path, f2: Path) -> dict:
     """Relative L2 and max abs difference of two -dumpSolution files, cells
     matched by their centres (decomposition independent)."""
-    s1 = _sorted_solution(f1)
-    s2 = _sorted_solution(f2)
-    if s1.shape != s2.shape or not np.allclose(s1[:, :3], s2[:, :3]):
+    m = _matched_solutions(f1, f2)
+    if m is None:
         return {"centresMatch": False, "relDiff": None, "maxAbsDiff": None}
-    x1, x2 = s1[:, 3:], s2[:, 3:]
+    x1, x2 = m[0][:, 3:], m[1][:, 3:]
     return {"centresMatch": True,
             "relDiff": float(np.linalg.norm(x1 - x2) / np.linalg.norm(x1)),
             "maxAbsDiff": float(np.max(np.abs(x1 - x2)))}

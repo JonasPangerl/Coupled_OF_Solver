@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "diagnostics.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "Time.H"
 #include "OSspecific.H"
@@ -803,15 +804,43 @@ void Foam::diagnostics::writeRecord(const std::string& level1)
 
 // * * * * * * * * * * * * * * * * diagPhase * * * * * * * * * * * * * * * * //
 
-Foam::diagPhase::diagPhase()
+Foam::diagPhase::diagPhase(const dictionary& diagDict)
 :
-    window_(coupledDefaults::diagStallWindow),
-    resFactor_(coupledDefaults::diagAsymptoticResidualFactor),
-    forceFactor_(coupledDefaults::diagAsymptoticForceFactor),
+    window_
+    (
+        diagDict.getOrDefault<label>
+        (
+            "stallWindow",
+            coupledDefaults::diagStallWindow
+        )
+    ),
+    resFactor_
+    (
+        diagDict.getOrDefault<doubleScalar>
+        (
+            "asymptoticResidualFactor",
+            coupledDefaults::diagAsymptoticResidualFactor
+        )
+    ),
+    forceFactor_
+    (
+        diagDict.getOrDefault<doubleScalar>
+        (
+            "asymptoticForceFactor",
+            coupledDefaults::diagAsymptoticForceFactor
+        )
+    ),
     ring_(),
     head_(0),
-    bestBefore_(GREAT)
-{}
+    bestBefore_(cfGreat<doubleScalar>())
+{
+    if (window_ < 1 || !(resFactor_ > 0) || !(forceFactor_ > 0))
+    {
+        FatalIOErrorInFunction(diagDict)
+            << "diagnostics.stallWindow must be >= 1 and the asymptotic"
+            << " factors > 0" << exit(FatalIOError);
+    }
+}
 
 
 const char* Foam::diagPhase::classify
@@ -841,9 +870,9 @@ const char* Foam::diagPhase::classify
     }
 
     // 2. stalled: no new minimum within the last window iterations
-    if (ring_.size() == window_ && bestBefore_ < GREAT)
+    if (ring_.size() == window_ && bestBefore_ < cfGreat<doubleScalar>())
     {
-        doubleScalar wmin = GREAT;
+        doubleScalar wmin = cfGreat<doubleScalar>();
         for (const doubleScalar r : ring_)
         {
             wmin = min(wmin, r);

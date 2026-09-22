@@ -67,11 +67,20 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
     const reduceScalar nf =
         (normFactorIn > 0 ? normFactorIn : normFactor(x, b));
 
-    // Work vectors 64-byte aligned (6.5.3)
-    alignedList<blockScalar> r(n);
-    alignedList<blockScalar> w(n);
-    List<alignedList<blockScalar>> V(m + 1);
-    List<alignedList<blockScalar>> Z(m);
+    // Work vectors 64-byte aligned (6.5.3), kept across solves (D-069 F12)
+    r_.resize_nocopy(n);
+    w_.resize_nocopy(n);
+    if (V_.size() != m + 1)
+    {
+        V_.clear();
+        V_.resize(m + 1);
+        Z_.clear();
+        Z_.resize(m);
+    }
+    alignedList<blockScalar>& r = r_;
+    alignedList<blockScalar>& w = w_;
+    List<alignedList<blockScalar>>& V = V_;
+    List<alignedList<blockScalar>>& Z = Z_;
     List<const blockScalar*> zPtr(m);
     for (label j = 0; j <= m; ++j)
     {
@@ -91,14 +100,15 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
     reduceScalarList yv(m, Zero);
 
     // Iterate in double (iterative refinement, see class description)
-    alignedList<reduceScalar> xd(n);
+    xd_.resize_nocopy(n);
+    alignedList<reduceScalar>& xd = xd_;
     blockKernels::widen(n, x.cdata(), xd.data());
 
     matrix_.residualDouble(r, xd, b);
     reduceScalar beta = doubleReduce::norm2(r, comm);
     const reduceScalar beta0 = beta;
 
-    perf.initialResidual = beta/nf;  // GUARD: nf >= SMALL
+    perf.initialResidual = beta/nf;  // GUARD: nf >= cfVSmall
     perf.finalResidual = perf.initialResidual;
 
     if (converged(perf.initialResidual, perf.initialResidual, 0))

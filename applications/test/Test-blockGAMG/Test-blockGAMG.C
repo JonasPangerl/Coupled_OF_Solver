@@ -296,6 +296,13 @@ int main(int argc, char *argv[])
                 << exit(FatalError);
         }
     }
+    if (requestedSolver != "blockFGMRES")
+    {
+        // The unit test compares the V/F/W cycles with the requested
+        // (fixed-preconditioner) solver as before; the iterative coarsest
+        // solve is accepted explicitly here (D-069 F10)
+        gamgDict.set("allowVariableCoarsest", true);
+    }
     solverDict.set("blockGAMG", gamgDict);
 
     // B1: cycleType K requires blockFGMRES (variable preconditioner)

@@ -68,7 +68,8 @@ def test_T1(foam, nprocs):
     rec["pass"] = passed
     results.write("tests", name, rec)
 
-    assert rec["rc"] == 0 and not rec["fpeTrap"]
+    assert rec["rc"] == 0 and not rec["fpeTrap"], \
+        (rec.get("failure"), rec.get("logTail"))
     assert it_conv is not None and it_conv <= MAX_ITERS, \
         f"R < {R_TARGET} not reached in {MAX_ITERS} (final {rec['finalR']})"
     assert rec["dpRelDiff"] < TOL_DP, (dp, dp_ref)

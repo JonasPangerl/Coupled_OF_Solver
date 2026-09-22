@@ -30,8 +30,16 @@ Description
     complete after its own face and narrowed once. The residual b - A x is
     accumulated in double from the same double coefficients (D-012).
 
+    Zero-copy assembly (amendment D2.3/D8.1, DECISIONS.md D-064): when
+    scalar == blockScalar (the SP build) the diagonal blocks are accumulated
+    directly in the matrix array (no double staging buffer, no conversion
+    pass); the row-3 scaling and the clamp count of the diagonal blocks are
+    applied in the pass that adds the row-3 diagonal to A x. In DP (and
+    SPDP) the staging path is unchanged. A x, b and the residual stay double
+    in every build (D2.2a, D-012).
+
     Norms (after row scaling), see DECISIONS.md D-016:
-        normFactor = sum_i |(A x)_i| + |b_i| + SMALL  (all rows except the
+        normFactor = sum_i |(A x)_i| + |b_i| + cfVSmall (all rows except the
                                                        replaced row of the
                                                        pressure reference,
                                                        D-021)
@@ -57,6 +65,7 @@ SourceFiles
 #include "MRFCoupling.H"
 #include "volFields.H"
 #include "surfaceFields.H"
+#include <type_traits>
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -66,6 +75,15 @@ namespace Foam
 class coupledAssembler
 {
 public:
+
+    //- Zero-copy assembly (D2.3, D8.1): fields and block coefficients have
+    //  the same type (SP build)
+    static constexpr bool zeroCopy = std::is_same<scalar, blockScalar>::value;
+
+    //- Accumulation type of the diagonal blocks: double staging buffer
+    //  (DP, SPDP) or the matrix array itself (SP)
+    typedef std::conditional_t<zeroCopy, blockScalar, doubleScalar>
+        diagScalar;
 
     //- Wall-time split of the assembly (diagnostics, TASK 5), seconds,
     //  accumulated until resetTimes()
@@ -113,6 +131,10 @@ private:
         //- Clamp for the narrowing to blockScalar (9.2)
         const doubleScalar clampValue_;
 
+        //- Relative flux-balance tolerance of a closed domain (D-021;
+        //  guards.refFluxBalanceTol)
+        const doubleScalar refFluxBalanceTol_;
+
         //- Pressure reference
         bool needRef_;
         label pRefCell_;
@@ -125,8 +147,11 @@ private:
         blockLduMatrix4 A_;
         blockScalarList rhs_;
 
+        //- Double staging buffer of the diagonal blocks (empty with
+        //  zeroCopy, where the diagonal is accumulated in A_.diag())
+        List<diagScalar> DdStage_;
+
         //- Double work storage
-        reduceScalarList Dd_;
         reduceScalarList Ax_;
         reduceScalarList b_;
 
@@ -143,18 +168,46 @@ private:
         const volVectorField* UPtr_;
         const volScalarField* pPtr_;
 
-        //- Results
-        scalar sp_;
+        //- Results (row scale in double, D2.2)
+        doubleScalar sp_;
         reduceScalar normFactor_;
         reduceScalar residualL2_;
         reduceScalar rU_;
         reduceScalar rp_;
         label nClamped_;
+        //- NaN coefficients of the last assembly (D-069 F9)
+        label nNonFinite_;
 
 
     // Private Member Functions
 
-        //- Index into Dd_ for cell, row, column
+        //- Accumulation array of the diagonal blocks: the matrix array if
+        //  T == blockScalar (zero-copy), else the staging buffer. A template
+        //  so that the discarded branch is not instantiated.
+        template<class T>
+        static T* diagAccumulator
+        (
+            blockScalarList& matrixDiag,
+            List<T>& stage
+        ) noexcept
+        {
+            if constexpr (std::is_same<T, blockScalar>::value)
+            {
+                return matrixDiag.data();
+            }
+            else
+            {
+                return stage.data();
+            }
+        }
+
+        //- Accumulation array of the diagonal blocks (16 per cell)
+        diagScalar* diagAcc() noexcept
+        {
+            return diagAccumulator(A_.diag(), DdStage_);
+        }
+
+        //- Index into the diagonal blocks for cell, row, column
         static label di(const label celli, const label r, const label c)
         {
             return celli*blockSize + r*blockDim + c;
@@ -163,7 +216,7 @@ private:
         //- Narrow with clamping and counting
         blockScalar store(const doubleScalar v)
         {
-            return toBlock(v, clampValue_, nClamped_);
+            return toBlock(v, clampValue_, nClamped_, nNonFinite_);
         }
 
         //- True if the patch carries no flux by construction
@@ -196,8 +249,15 @@ public:
 
         // Set-up
 
-            //- Static remediation cells (8.1): per-face limiter selection
-            void setStaticCells(const boolList& isStatic);
+            //- Limited remediation cells (8.1, categories D-066): cells
+            //  whose p gradient in the Rhie-Chow terms uses the limited
+            //  scheme, and cells whose faces use the limited non-orthogonal
+            //  coefficient. Collective.
+            void setLimitedCells
+            (
+                const boolList& gradLimited,
+                const boolList& nonOrthLimited
+            );
 
             //- SFD forcing (7.6) of the next assemblies: a_P += chi V_P,
             //  b_P += chi V_P Ubar_P on the momentum rows; chi = 0 or
@@ -256,10 +316,13 @@ public:
             const rhieChow& rc() const noexcept { return rc_; }
             const nonOrthCorrection& noc() const noexcept { return noc_; }
 
+            //- Effective clamp value of the block coefficients (9.2)
+            doubleScalar clampValue() const noexcept { return clampValue_; }
+
             const scalarField& abar() const noexcept { return abar_; }
 
             //- Continuity row scale s_p (5.3f)
-            scalar rowScale() const noexcept { return sp_; }
+            doubleScalar rowScale() const noexcept { return sp_; }
 
             reduceScalar normFactor() const noexcept { return normFactor_; }
 
@@ -271,6 +334,9 @@ public:
 
             //- Clamped coefficients of the last assembly (this rank)
             label nClamped() const noexcept { return nClamped_; }
+
+            //- NaN coefficients of the last assembly (this rank)
+            label nNonFinite() const noexcept { return nNonFinite_; }
 
             const List<boundaryCoupling::patchKind>& kinds() const noexcept
             {

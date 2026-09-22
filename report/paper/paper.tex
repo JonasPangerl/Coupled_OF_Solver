@@ -53,31 +53,46 @@
     \centering\small\rule{0pt}{2.2ex}\textit{Results pending.} #1\par
     \rule{0pt}{1.5ex}}}\par}
 
+% \cfpendingitem{figure|table}{caption}{label}: compact, non-floating
+% placeholder of a missing generated figure or table (numbered, so every
+% \ref resolves; a run of missing items stacks as a few short lines instead
+% of a cascade of full-size boxes)
+\makeatletter
+\def\cf@figname{figure}
+\newcommand{\cfpendingitem}[3]{%
+  \par\smallskip\noindent\refstepcounter{#1}\label{#3}%
+  \def\cf@kind{#1}%
+  {\footnotesize\fbox{\scriptsize pending}~\textbf{\ifx\cf@kind\cf@figname
+    Figure\else Table\fi~\csname the#1\endcsname.} #2\par}\smallskip}
+
 % \cffigure[width]{file stem}{caption}{label}
 % (figures/<stem>.pdf, else figures/<stem>.png - the ParaView
-% renders -, else the pending box)
+% renders -, else the compact pending line)
 \newcommand{\cffigure}[4][0.95]{%
+  \IfFileExists{figures/#2.pdf}%
+    {\cf@figure{#1}{figures/#2.pdf}{#3}{#4}}%
+    {\IfFileExists{figures/#2.png}%
+      {\cf@figure{#1}{figures/#2.png}{#3}{#4}}%
+      {\cfpendingitem{figure}{#3}{#4}}}}
+\newcommand{\cf@figure}[4]{%
   \begin{figure}[tbp]
-    \centering
-    \IfFileExists{figures/#2.pdf}%
-      {\includegraphics[width=#1\linewidth]{figures/#2.pdf}}%
-      {\IfFileExists{figures/#2.png}%
-        {\includegraphics[width=#1\linewidth]{figures/#2.png}}%
-        {\pending{Figure \texttt{figures/\detokenize{#2}} is written by
-          \texttt{bench/make\_report.py} once its data exist.}}}
+    \centering\includegraphics[width=#1\linewidth]{#2}%
     \caption{#3}\label{#4}
   \end{figure}}
+\makeatother
 
 % \cftable{file stem}{caption of the placeholder}{label}
 % (a generated table carries its own caption and label)
 \newcommand{\cftable}[3]{%
   \IfFileExists{tables/#1.tex}%
     {\input{tables/#1.tex}}%
-    {\begin{table}[tbp]
-       \centering\caption{#2}\label{#3}
-       \pending{Table \texttt{tables/\detokenize{#1}.tex} is written by
-         \texttt{bench/make\_report.py} once its data exist.}
-     \end{table}}}
+    {\cfpendingitem{table}{#2}{#3}}}
+
+% \cfrenderflag{Case}: caption note of a ParaView render that is kept
+% although its coupledFoam run is not from the target commit (only with
+% --allow-stale; written by bench/make_report.py as \cfRenderFlag<Case>)
+\newcommand{\cfrenderflag}[1]{%
+  \ifcsname cfRenderFlag#1\endcsname\ \csname cfRenderFlag#1\endcsname\fi}
 
 % Simple non-floating algorithm block (no extra packages needed). Tab stops
 % (\>) are used for indentation at the start of a line only.
@@ -123,7 +138,7 @@
 \maketitle
 
 \begin{abstract}
-We describe \textbf{coupledFoam}, a steady, incompressible, Reynolds-averaged
+This paper describes \textbf{coupledFoam}, a steady, incompressible, Reynolds-averaged
 Navier--Stokes solver for OpenFOAM v2606 in which velocity and pressure are
 solved simultaneously as one $4\times4$-block system per cell, while the
 turbulence model is solved segregated and unmodified. The block matrix and
@@ -242,7 +257,7 @@ contributions are:
 
 \subsection{Governing equations and notation}
 
-We solve the steady incompressible RANS equations for the velocity $\Uv$ and
+The solver treats the steady incompressible RANS equations for the velocity $\Uv$ and
 the kinematic pressure $p$,
 \begin{align}
   \nabla\cdot(\Uv_{\mathrm{r}}\Uv)
@@ -260,7 +275,7 @@ zones $\Uv_{\mathrm{r}}=\Uv$ and $\vect\Omega=0$. The turbulence quantities
 ($k$, $\omega$, $\nu_t$) are frozen during the coupled solve and updated
 afterwards (Section~\ref{sec:turb}).
 
-For a cell $P$ with volume $V_P$ and face $f$ shared with neighbour $N$, we use
+For a cell $P$ with volume $V_P$ and face $f$ shared with neighbour $N$, the notation comprises
 the face area vector $\Sf$ (pointing out of the owner), $|\Sf|$, the
 interpolation weight $w_f$ of the owner, the face flux $\phi_f$
 ($\mathrm{m^3\,s^{-1}}$), the non-orthogonal delta coefficient
@@ -493,7 +508,7 @@ turbulence-model interface (e.g.\ $k$-$\omega$ SST~\cite{Menter1994}, GEKO
 iteration after the coupled update, with the native solvers and relaxation
 factors for $k$ and $\omega$. Afterwards $k\ge k_{\min}$ and
 $\omega\ge\omega_{\min}$ are enforced and $\nu_t$ is capped at
-$10^5\,\nu$ (the number of capped cells is logged).
+$10^8\,\nu$ (D-040; the number of capped cells is logged).
 
 % =============================================================================
 \section{Solution algorithm}\label{sec:algo}
@@ -671,19 +686,41 @@ phase is skipped.
 
 \subsection{Remediation cell sets}\label{sec:remediation}
 
-\paragraph{Static set.} Built once from OpenFOAM's per-face mesh-quality
-measures: a cell is marked if any of its faces has non-orthogonality
-above $70^\circ$ or skewness above 4, if its volume ratio to any neighbour
-exceeds 20, or its aspect ratio exceeds 1000. Static cells receive
-$\beta_P=\min(\beta_P,\beta_{\mathrm{static}})$ with $\beta_{\mathrm{static}}=0$
-(upwind) by default, the stronger non-orthogonal limiter $0.2$ on their
-faces, a limited (\code{cellLimited Gauss linear 1}) pressure gradient in the
-Rhie--Chow term, and a CFL factor $0.5$. The gradient inside the user's
-high-order convection scheme cannot be overridden per cell; with the default
-$\beta_{\mathrm{static}}=0$ it does not enter (D-018).
+\paragraph{Static set.} Built once before the first iteration and split
+into four categories, each with its own switch, criteria and treatment in
+the case dictionary (D-066; D-063 asked for every such setting to be a
+run-time keyword):
+\begin{itemize}
+\item \emph{meshQuality}: a face with non-orthogonality above $85^\circ$ or
+  skewness above 6, a volume ratio above 30 to a neighbour, or an aspect
+  ratio above 2000 (OpenFOAM's per-face quality measures; thresholds of
+  D-047);
+\item \emph{badMesh}: severe defects: a volume ratio above 50 to a neighbour
+  (volume jump), open cells whose face area vectors do not close, and
+  optionally faces beyond severe non-orthogonality or skewness limits;
+\item \emph{processor}: cells with both a processor and a cyclicAMI face,
+  optionally a number of cell layers next to every processor boundary;
+\item \emph{wall}: optionally ``starved'' wall cells with at most two
+  internal neighbours (off by default) and cell layers next to named
+  patches.
+\end{itemize}
+The first two categories hold defective cells and receive the \emph{full}
+treatment: $\beta_P=\min(\beta_P,\beta_{\mathrm{cat}})$ with
+$\beta_{\mathrm{cat}}=0$ (upwind), the stronger non-orthogonal limiter $0.2$
+on their faces, a limited (\code{cellLimited Gauss linear 1}) pressure
+gradient in the Rhie--Chow term, and a CFL factor $0.5$. Processor and wall
+cells are selected by position, not by quality, and receive a \emph{mild}
+treatment by default: the CFL factor only, with the full convection scheme
+and no limiters. First-order convection on a dozen well-shaped wall cells of
+the motorbike body changed $C_l$ by $-18\,\%$ (D-061), which is why the
+position-based categories keep the scheme. A cell in several categories
+receives the most restrictive value of each parameter. The gradient inside
+the user's high-order convection scheme cannot be overridden per cell; with
+$\beta_{\mathrm{cat}}=0$ it does not enter (D-018). Table~\ref{tab:remcat}
+lists the cells per category of every test run.
 
 \paragraph{Dynamic set.} Updated every iteration. A cell is marked if
-$|\Uv_P|>2U_{\mathrm{ref}}$, $|p_P|>5p_{\mathrm{ref}}$,
+$|\Uv_P|>4U_{\mathrm{ref}}$, $|p_P|>15p_{\mathrm{ref}}$ (D-044),
 $|\Uv_P-\bar{\Uv}_{N(P)}|>0.5\,U_{\mathrm{ref}}$ (face-neighbour mean), any of
 $\Uv,p,k,\omega$ is non-finite, or it is passed in by the line search or the
 sentinel. Marked cells plus one layer of face neighbours (across processor
@@ -1137,7 +1174,7 @@ iteration count and 1-vs-4-rank identity, and the comparison of the V-, F-,
 W- and K-cycles, Figure~\ref{fig:cycles}) and \code{Test-blockFGMRES}
 (convergence with a deliberately variable preconditioner, where standard
 GMRES may stall);
-(ii) case tests T0--T5, T-restart, T-fpe and the informational T-mrf, each
+(ii) case tests T0--T5 (T5 deferred, D-063), T-restart, T-fpe and the informational T-mrf, each
 against \code{simpleFoam} on the identical mesh and schemes;
 (iii) the benchmark harness of Section~\ref{sec:perf}. Test runs enable
 floating-point traps and record the machine load, since the development
@@ -1174,8 +1211,7 @@ relative on integral quantities. Native references are produced with
   dynamic set at convergence.
 \item[T4, motorBike.] \code{snappyHexMesh} meshes of about 350\,k cells (a)
   and 1--2\,M cells (b; retargeted from the specified 3--5\,M cells,
-  D-031), 10 ranks (the development machine is capped at 10 cores for this
-  work, D-031). Each mesh is built once and reused by all tests and
+  D-031), 10 ranks (D-031). Each mesh is built once and reused by all tests and
   benchmarks. Pass: both solvers reach a stationary window mean of $C_d$
   and $C_l$ (averaged force criterion for oscillating wakes, D-042,
   Section~\ref{sec:perf}); window means within $\max(2\,\%,0.002)$ ($C_d$)
@@ -1186,6 +1222,9 @@ relative on integral quantities. Native references are produced with
   5--8\,M cells, $U_\infty=\SI{40}{m/s}$, SST with wall functions. Pass:
   as T4 (averaged force criterion, D-042); comparison with the experimental
   $C_d=0.285$~\cite{Ahmed1984} ($\pm10$\,\%) is informational.
+  \emph{Deferred:} T5 is not run in the present test campaign (decision of
+  the project owner, D-063); the case template and its mesh generation are
+  kept, and no T5 results are reported in this document.
 \item[T-restart.] T1 and T3-SST, split at iteration 150: iteration count
   $\pm2$, final quantities within $10^{-5}$, flux consistency below
   $10^{-6}$.
@@ -1234,18 +1273,19 @@ and line-search factor $\omega$ (right).}{fig:t0history}
 \cffigure{T0_Re1000_profiles}{T0, lid-driven cavity at $Re=1000$: centreline
 profiles, coupledFoam against simpleFoam.}{fig:t0profilesRe1000}
 
-\paragraph{T1--T5.} Integral quantities and their differences to the native
+\paragraph{T1--T4.} Integral quantities and their differences to the native
 solver are collected in Table~\ref{tab:validation}; remediation activity on
-the snappyHexMesh cases is shown in Figure~\ref{fig:remediation}.
+the snappyHexMesh cases is shown in Figure~\ref{fig:remediation} and
+Table~\ref{tab:remcat}. T5 is deferred (D-063).
 
-\cftable{validation}{Validation, T1--T5: integral quantities (pressure drop,
+\cftable{validation}{Validation, T1--T4: integral quantities (pressure drop,
 reattachment length, $C_l$, $C_d$, torque) of coupledFoam and simpleFoam and
 their relative differences.}{tab:validation}
 
-\paragraph{Force histories.} Figures~\ref{fig:ovWing}--\ref{fig:ovAhmed}
-overlay the drag and lift coefficients of both solvers over the wall-clock
-time for the wing (T3), the motorbike (T4a, T4b) and the Ahmed body (T5),
-with the running mean over the averaging window of the D-042 rule and the
+\paragraph{Force histories.} Figures~\ref{fig:ovWing}
+and~\ref{fig:ovMotorbike} overlay the drag and lift coefficients of both
+solvers over the wall-clock time for the wing (T3) and the motorbike (T4a,
+T4b), with the running mean over the averaging window of the D-042 rule and the
 final window mean; the complete per-iteration histories of every run,
 including residuals, cost per iteration and the linear-solver controls, are
 in Appendix~\ref{app:histories}. Histories of runs that are still being
@@ -1254,14 +1294,19 @@ computed end early and are completed when the report is regenerated.
 \cffigure{loads_overview_wing}{Wing (T3 airFoil2D, SST and GEKO): $C_d$
 (left) and $C_l$ (right) over wall-clock time, simpleFoam (orange) and
 coupledFoam (blue); dashed: running mean over the D-042 window, dotted:
-final window mean.}{fig:ovWing}
+final window mean; light band: per-iteration minimum-maximum per group of
+iterations; a second row per case zooms on the shorter run where the wall
+times differ by more than 5x.}{fig:ovWing}
 \cffigure{loads_overview_motorbike}{motorBike (T4a, T4b): $C_d$ and $C_l$
-over wall-clock time, both solvers.}{fig:ovMotorbike}
-\cffigure{loads_overview_ahmed}{Ahmed body (T5): $C_d$ and $C_l$ over
-wall-clock time, both solvers.}{fig:ovAhmed}
+over wall-clock time, both solvers; light band: per-iteration
+minimum-maximum per group of iterations; a second row per case zooms on the
+shorter run where the wall times differ by more than 5x.}{fig:ovMotorbike}
 
-\cffigure{remediation_history}{Remediation set sizes and rollbacks over the
-iterations for T4 and T5.}{fig:remediation}
+\cffigure{remediation_history}{Size of the dynamic remediation set over the
+iterations, one panel per run.}{fig:remediation}
+
+\cftable{remediation_categories}{Remediation cells per category and test
+run.}{tab:remcat}
 
 
 \clearpage
@@ -1366,57 +1411,93 @@ and the difference.}{fig:fldTthreesstP}
 coefficient.}{fig:prTthreesst}
 
 \clearpage
-\paragraph{T4 and T5 (3D).} The 3D cases are rendered with ParaView
+\paragraph{T4 (3D).} The motorbike cases are rendered with ParaView
 (\code{bench/render\_fields.py}, \code{pvbatch}, decomposed cases read in
 place): the body surface mesh, $|\Uv|/U_\infty$ and $C_p$ on the vertical
 mid-plane $y=y_c$ and on a horizontal plane at 20\,\% of the body height,
 and $C_p$ on the body, each for \code{simpleFoam} and coupledFoam with
 fixed colour ranges ($|\Uv|/U_\infty\in[0,1.3]$, $C_p\in[-1.5,1]$,
-identical for both solvers). Because the wake does not settle
-(D-042), the decisive comparison is between the window-mean fields
-\code{UMean}, \code{pMean} and their differences written by
-\code{coupledFieldCompare} ($|\Delta\Uv_{mean}|/U_\infty\in[0,0.2]$,
-$\Delta C_{p,mean}\in[-0.2,0.2]$). Panels whose run has not finished are
-drawn as ``results pending''.
+identical for both solvers). Panels whose run has not finished are drawn
+as ``results pending''. The Ahmed body (T5) is not part of the present test
+campaign by decision of the project owner (D-063); no T5 results are
+reported.
+
+\paragraph{Mean-field differences.} Side-by-side absolute fields hide
+differences of a few per cent of $U_\infty$, and the instantaneous wake does
+not settle (D-042). The decisive field comparison is therefore between the
+window-mean fields $\overline{\Uv}$, $\overline{p}$ of both solvers
+(coupledFoam: the last $W$ iterations of the run; the cached
+\code{simpleFoam} reference: its continuation, Section~\ref{sec:perf}),
+and it is shown as a signed
+difference, coupledFoam minus \code{simpleFoam}, computed cell by cell on
+the identical decomposed mesh by \code{coupledFieldCompare}:
+\begin{equation}
+  \frac{\Delta\overline{u}_x}{U_\infty}
+    =\frac{\overline{u}_{x,\mathrm{cf}}-\overline{u}_{x,\mathrm{sf}}}{U_\infty},
+  \qquad
+  \Delta\overline{C}_p
+    =\frac{\overline{p}_{\mathrm{cf}}-\overline{p}_{\mathrm{sf}}}{\tfrac12U_\infty^2},
+  \label{eq:meandelta}
+\end{equation}
+on the two planes and, with the boundary values, on the body surface. Both
+use a diverging colour map with fixed symmetric limits $\pm0.2$, white at
+zero, so that equal colours mean equal differences in every figure and in
+every run. Red marks regions where coupledFoam has the higher mean
+streamwise velocity or pressure, blue where it has the lower. A wake that is
+shorter or longer in one solver appears as a pair of opposite-signed bands
+behind the body; a shifted separation line on the body appears as a
+red--blue dipole of $\Delta\overline{C}_p$ across that line. Differences
+confined to the shear layers of the wake are expected, because the window
+means of two oscillating solutions converge slowly there; differences on
+the body surface of the size of the $C_d$ difference in
+Table~\ref{tab:validation} identify where that difference originates. The
+volume RMS of both quantities is the field criterion of the validation
+table (proposed limit 0.02).
 
 \cffigure{render_T4a_geometry}{T4a motorBike, 354\,k cells: body surface
 mesh.}{fig:rTfouraGeo}
 \cffigure{render_T4a_slice_U}{T4a: $|\Uv|/U_\infty$ on the mid-plane (top)
 and the horizontal plane (bottom), simpleFoam (left) and coupledFoam
-(right).}{fig:rTfouraU}
+(right).\cfrenderflag{TFoura}}{fig:rTfouraU}
 \cffigure{render_T4a_slice_p}{T4a: $C_p$ on the mid-plane and the horizontal
-plane.}{fig:rTfouraP}
+plane.\cfrenderflag{TFoura}}{fig:rTfouraP}
 \cffigure{render_T4a_surface_Cp}{T4a: surface $C_p$ on the
-body.}{fig:rTfouraCp}
+body.\cfrenderflag{TFoura}}{fig:rTfouraCp}
 \cffigure{render_T4a_mean_U}{T4a: window-mean velocity magnitude on the
-mid-plane, both solvers.}{fig:rTfouraMean}
-\cffigure{render_T4a_delta}{T4a: mean-field differences: $|\Delta
-\Uv_{mean}|/U_\infty$ on both planes (top) and $\Delta C_{p,mean}$ on the
-body (bottom).}{fig:rTfouraDelta}
+mid-plane, both solvers.\cfrenderflag{TFoura}}{fig:rTfouraMean}
+\cffigure{render_T4a_delta_slices}{T4a: mean-field differences
+coupledFoam$-$\code{simpleFoam}, Eq.~\eqref{eq:meandelta}: streamwise
+velocity $\Delta\overline{u}_x/U_\infty$ (top) and $\Delta\overline{C}_p$
+(bottom) on the mid-plane (left) and the horizontal plane (right); limits
+$\pm0.2$, white: no difference.\cfrenderflag{TFoura}}{fig:rTfouraDelta}
+\cffigure{render_T4a_delta_surface}{T4a: mean surface-pressure difference
+$\Delta\overline{C}_p$ (coupledFoam$-$\code{simpleFoam}) on the body,
+oblique and top view; limits $\pm0.2$.\cfrenderflag{TFoura}}{fig:rTfouraDeltaS}
 \clearpage
+\IfFileExists{figures/render_T4b_delta_slices.png}{%
 \cffigure{render_T4b_geometry}{T4b motorBike, 1.70\,M cells: body surface
 mesh.}{fig:rTfourbGeo}
 \cffigure{render_T4b_slice_U}{T4b: $|\Uv|/U_\infty$ on the mid-plane (top)
 and the horizontal plane (bottom), simpleFoam (left) and coupledFoam
-(right).}{fig:rTfourbU}
+(right).\cfrenderflag{TFourb}}{fig:rTfourbU}
 \cffigure{render_T4b_slice_p}{T4b: $C_p$ on the mid-plane and the horizontal
-plane.}{fig:rTfourbP}
+plane.\cfrenderflag{TFourb}}{fig:rTfourbP}
 \cffigure{render_T4b_surface_Cp}{T4b: surface $C_p$ on the
-body.}{fig:rTfourbCp}
+body.\cfrenderflag{TFourb}}{fig:rTfourbCp}
 \cffigure{render_T4b_mean_U}{T4b: window-mean velocity magnitude on the
-mid-plane, both solvers.}{fig:rTfourbMean}
-\cffigure{render_T4b_delta}{T4b: mean-field differences: $|\Delta
-\Uv_{mean}|/U_\infty$ on both planes (top) and $\Delta C_{p,mean}$ on the
-body (bottom).}{fig:rTfourbDelta}
-\clearpage
-\cffigure{render_T5_geometry}{T5 Ahmed body: body surface
-mesh.}{fig:rTfiveGeo}
-\cffigure{render_T5_slice_U}{T5: $|\Uv|/U_\infty$ on the mid-plane and the
-horizontal plane, both solvers.}{fig:rTfiveU}
-\cffigure{render_T5_surface_Cp}{T5: surface $C_p$ on the
-body.}{fig:rTfiveCp}
-\cffigure{render_T5_delta}{T5: mean-field differences on both planes and
-on the body.}{fig:rTfiveDelta}
+mid-plane, both solvers.\cfrenderflag{TFourb}}{fig:rTfourbMean}
+\cffigure{render_T4b_delta_slices}{T4b: mean-field differences
+coupledFoam$-$\code{simpleFoam}, Eq.~\eqref{eq:meandelta}:
+$\Delta\overline{u}_x/U_\infty$ (top) and $\Delta\overline{C}_p$ (bottom) on
+both planes; limits $\pm0.2$.\cfrenderflag{TFourb}}{fig:rTfourbDelta}
+\cffigure{render_T4b_delta_surface}{T4b: mean surface-pressure difference
+$\Delta\overline{C}_p$ on the body, oblique and top view; limits
+$\pm0.2$.\cfrenderflag{TFourb}}{fig:rTfourbDeltaS}
+\clearpage}{%
+\paragraph{T4b.} No mean-field comparison of the fine motorbike mesh is
+available for this document: T4b is run only after T4a has been accepted
+(D-063), and its figures are added when the report is regenerated after
+that run.}
 \clearpage
 
 % =============================================================================
@@ -1431,7 +1512,7 @@ wall-clock time and the CPU time (CPU-hours summed over all ranks) to
 convergence, measured for all solvers with the same criterion.
 
 \paragraph{Configurations.} For each case in \{T1, T2, T3-SST, T3-GEKO, T4a,
-T4b, T5\}, with identical mesh, decomposition, schemes, turbulence model and
+T4b\}, with identical mesh, decomposition, schemes, turbulence model and
 boundary conditions, the configurations of Table~\ref{tab:configs} are run
 (D-025, amendment B10). Configuration~A is the tutorial as shipped with
 OpenFOAM: pitzDaily, backwardFacingStep2D and motorBike use SIMPLEC
@@ -1441,40 +1522,62 @@ turbulence equations by 0.7, so A on T3 overrides the case setting
 \code{consistent yes} (which serves the reference run of
 Section~\ref{sec:vv}) with \code{consistent no}. The Ahmed body (T5) has no
 tutorial; A there means the motorBike tutorial settings, the closest
-external-aerodynamics tutorial. The native configurations start from the
-initial fields of the case: unlike the motorBike tutorial script, the
-benchmark does not run \code{potentialFoam} before \code{simpleFoam}.
-Configurations E--H isolate single components of coupledFoam; they run
-only on the cases named in B10 (E and H on T2, T4b, T5; F and G on T1 and
-T3-SST). E fixes the V-cycle by also switching the cycle-efficiency
-controller off, since the controller would otherwise promote V to F and W
-(Section~\ref{sec:gamg}); because C differs from E in the cycle \emph{and}
-in the controller, configuration H (K-cycle, controller off) is added as the
-clean reference for the cycle comparison. The harness records the final
-cycle type and post-smoothing count of every coupledFoam run.
+external-aerodynamics tutorial. As in the motorBike tutorial script,
+configuration~A on the motorbike runs \code{potentialFoam} before
+\code{simpleFoam}, and its cost is counted as pre-processing of~A; on all
+other cases, and for B everywhere, the native configurations start from the
+initial fields of the case. Configurations D--H isolate single components of
+coupledFoam; their case scope is given in Table~\ref{tab:configs}.
+Since D-043 the coupledFoam defaults (C) are a V-cycle with the damped block
+ILU(0) smoother and the cycle-efficiency controller off. The configuration
+of amendment B10 that fixed the V-cycle (E: \code{cycleType V},
+\code{autoTune no}) is therefore identical to C and is no longer run;
+configuration H sets \code{cycleType K} explicitly (with the controller
+off) and is the cycle comparison, and H-tune adds the controller to the
+K-cycle, which isolates the controller (D-068). The E-* variants of
+amendment C7 keep their names and change one setting of C each. The
+harness records the final cycle type and post-smoothing count of every
+coupledFoam run, so that a comparison is only reported between runs that
+actually differ.
+
+\paragraph{Scope of the present campaign (D-063).} Not every case receives
+every configuration. The light cases T1--T3 carry most of the benchmark;
+T4a runs the full matrix; T4b is run with few configurations and only after
+T4a has been accepted; the single-precision variants
+(Section~\ref{sec:sp}) run on a few cases only. The Ahmed body T5 is
+deferred by decision of the project owner: the configurations listed for
+T5 in Table~\ref{tab:configs} and in the specification are not run, and
+no T5 entry appears in the results. Strong scaling is measured on T4a
+(D-059).
 
 \begin{table}[tbp]
 \centering\small
 \caption{Benchmark configurations (D-025, amendment B10).}
 \label{tab:configs}
-\begin{tabular}{llp{6.4cm}l}
+\begin{tabular}{llp{6.2cm}p{2.6cm}}
 \toprule
- & solver & settings & cases\\
+ & solver & settings & cases (D-063)\\
 \midrule
 A & \code{simpleFoam} & tutorial settings (see text; T3: SIMPLE, $p$ 0.3,
-  $\Uv$, $k$, $\omega$ 0.7) & all\\
+  $\Uv$, $k$, $\omega$ 0.7; motorbike: \code{potentialFoam} start) &
+  T1--T3, T4a\\
 B & \code{simpleFoam} & SIMPLEC, relaxation $p$ 1.0, $\Uv$ 0.9, $k,\omega$ 0.9
-  (tuned native baseline) & all\\
-C & coupledFoam & defaults (K-cycle, controller on, Eisenstat--Walker) & all\\
-D & coupledFoam & block-diagonal preconditioner (isolates the AMG) & all\\
-E & coupledFoam & fixed V-cycle: \code{cycleType V}, \code{autoTune no} &
-  T2, T4b, T5\\
+  (tuned native baseline; identical to A on T1) & T2, T3, T4a\\
+C & coupledFoam & defaults (V-cycle, damped block ILU(0), controller off,
+  Eisenstat--Walker; D-043) & T1--T3, T4a, T4b\\
+D & coupledFoam & block-diagonal preconditioner (isolates the AMG) & T1--T3\\
 F & coupledFoam & fixed relative tolerance, \code{adaptiveRelTol no} &
   T1, T3-SST\\
 G & coupledFoam & Anderson acceleration, \code{anderson.enabled yes} &
   T1, T3-SST\\
-H & coupledFoam & fixed K-cycle, \code{autoTune no} (reference for E) &
-  T2, T4b, T5\\
+H & coupledFoam & fixed K-cycle, \code{cycleType K}, \code{autoTune no} &
+  T1--T3, T4a\\
+H-tune & coupledFoam & K-cycle with the controller, \code{cycleType K},
+  \code{autoTune yes} (the default before D-043) & T1, T2\\
+E-* & coupledFoam & C with one change each (amendment C7): scalar
+  Rhie--Chow coefficient, static non-orthogonality threshold 60 or
+  $65^\circ$, algebraic pair agglomeration, SFD off, $\eta_{\max}=0.7$ &
+  T2 or T3 (one case each)\\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1489,34 +1592,46 @@ pressure drop for T1 and T2).
 oscillating wakes: the T4b \code{simpleFoam} reference oscillates by about
 $\pm1\,\%$ in $C_d$ and $\pm8\,\%$ in $C_l$ indefinitely, so the window
 criterion above cannot be met by any steady solver on these cases. For them
-(user decisions, D-042 and its addendum) a run of $n$ iterations is converged
-when its window mean is stationary: over the last $W=\max(1000,n/2)$
-iterations ($W\le n$) the means of the two half-windows differ by at most
-$\max(0.01\,|\overline{C}|,0.005)$, for $C_d$ and $C_l$ separately. The
-first version of the rule ($W=\max(500,n/4)$, $\max(0.005\,|\overline{C}|,
-0.002)$) was too tight. Over $W=1000$ the half-window means of the 4000-iteration T4b
-reference still drift by 5.5\,\% in $C_l$; over $W=2000$ they drift by 0.9\,\%
-($C_d$) and 1.1\,\% ($C_l$). The convergence iteration is the first iteration
-(scanned in steps of 50) at which this holds, and the coefficients compared
-are the window means, within $\max(2\,\%,0.002)$ for $C_d$ and
-$\max(2\,\%,0.01)$ for $C_l$. Numbers alone can agree for the wrong reason,
-so the flow fields are compared as well. A \code{fieldAverage} function
-object averages $\Uv$ and $p$ over the same window $W$. The utility
-\code{coupledFieldCompare} writes the differences of the mean fields between
-the two solvers, including the boundary values (the surface $\Delta C_p$ on
-the body), and reports their volume-weighted RMS. The proposed pass
-thresholds are an RMS of $|\Delta\overline{\Uv}|/U_\infty$ and of
-$|\Delta\overline{p}|/(\tfrac12U_\infty^2)$ of at most 0.02 each. The cached
-references, which were run before the averaging existed, are continued once
-by $W$ iterations with the averaging active. The criteria of T0--T3 are
-unchanged.
+(user decisions, D-042 and its addenda) a run is converged when its window
+mean is stationary: over a window of the last $W$ iterations the means of
+the two half-windows differ by at most $\max(0.01\,|\overline{C}|,0.005)$,
+for $C_d$ and $C_l$ separately. The convergence iteration is the first
+iteration (scanned in steps of 50) at which this holds, and the coefficients
+compared are the window means, within $\max(2\,\%,0.002)$ for $C_d$ and
+$\max(2\,\%,0.01)$ for $C_l$. The window is \emph{common to both solvers of
+a case} (D-068; $W=400$ on T4a and T4b). The earlier rule derived the window
+from each run's own iteration budget $n$ ($W=\max(300,n/2)$, D-042 addenda);
+because the scan cannot start before iteration $W$, the longer native
+budgets alone then delayed the earliest possible convergence of
+\code{simpleFoam} (e.g.\ $W=1500$ for a 3000-iteration reference against
+$W=400$ for an 800-iteration coupledFoam run), and the resulting time to
+convergence was set by the budgets rather than by the flow. The per-run
+window is kept as a sensitivity value only. With either window the window
+means of the references agree to within a few tenths of a per cent. Note
+that the absolute floor 0.005 of the stationarity tolerance is 6--8\,\% of
+$C_l$ on the motorbike, so that the stationarity test is weak for $C_l$.
+Numbers alone can agree for the wrong reason, so the flow fields are
+compared as well. A \code{fieldAverage} function object averages $\Uv$ and
+$p$; for coupledFoam it covers the last $W$ iterations of the run. The
+cached \code{simpleFoam} references were run before the averaging existed
+and were continued once, with the averaging active from the first continued
+iteration; their mean fields therefore cover the continuation (1500
+iterations on T4a, 2000 on T4b), a longer window at a later stage of the
+same stationary oscillation. The utility \code{coupledFieldCompare} writes
+the differences of the mean fields between the two solvers, including the
+boundary values (the surface $\Delta C_p$ on the body), and reports their
+volume-weighted RMS. The proposed pass thresholds are an RMS of
+$|\Delta\overline{\Uv}|/U_\infty$ and of
+$|\Delta\overline{p}|/(\tfrac12U_\infty^2)$ of at most 0.02 each. The
+criteria of T0--T3 are unchanged.
 
 \paragraph{Timing.} Every rank of every application that the case script
 starts runs under \code{/usr/bin/time -v}. The total cost of a solution is
 the wall time (maximum over ranks) and the CPU time (user plus system,
 summed over ranks, in CPU-hours) of the solver \emph{plus} that of its
-pre-processing: for coupledFoam this is the \code{potentialFoam}
-initialisation, which the case script runs for coupledFoam only. The
+pre-processing: the \code{potentialFoam} initialisation, which the case
+script runs for every coupledFoam run and for configuration~A on the
+motorbike (tutorial start). The
 pre-processing runs before the solver, so its wall and CPU times are added;
 both parts are also recorded separately in every result. The time to
 convergence is
@@ -1531,8 +1646,9 @@ iteration, \code{simpleFoam}'s \code{ClockTime}) divided by its total
 wall-clock fraction $f$ also for the CPU time assumes a constant CPU-to-wall
 ratio during the run. The time per iteration (Figure~\ref{fig:breakdown}) is
 that of the solver alone. Peak memory is the per-rank maximum RSS, reported
-as sum and maximum over ranks. Each configuration is run three times and the
-median (with minimum and maximum) is reported. Speed-up is reported both as
+as sum and maximum over ranks. On T1--T3 each configuration is run three
+times and the median (with minimum and maximum) is reported; the motorbike
+configurations are run once (12-hour budget, D-059). Speed-up is reported both as
 a wall-time and as a CPU-hour ratio against the better of A and B. Results
 are tagged with a hash of their configuration; results of an outdated
 configuration are excluded from all tables and figures.
@@ -1541,14 +1657,15 @@ configuration are excluded from all tables and figures.
 C must not be more than 5\,\% slower than the fixed tolerance, in wall time
 and in CPU-hours, and the monitored quantity ($C_d$, or $\Delta p$ for T1)
 at the end of the fixed iteration budget must agree to $10^{-4}$ (relative).
-E, G and H have no threshold; their differences to C are reported in wall
+G and H have no threshold; their differences to C are reported in wall
 time and CPU-hours.
 
-\paragraph{Hardware.} 16 physical cores (32 logical with SMT), 94\,GB RAM
-visible to WSL, of which at most 10 cores are used (D-031); MPI ranks are
-bound to physical cores (\code{--bind-to core --map-by core}); benchmarks run
-only when no other solver runs, and the load average before each run is
-recorded (D-007).
+\paragraph{Hardware.} 16 physical cores (32 logical with SMT, one socket),
+94\,GB RAM visible to WSL. The test and benchmark runs of the motorbike use
+10 ranks (D-031), the strong-scaling test up to 16 (D-059); all timing runs
+use physical cores only, with MPI ranks bound to cores. The benchmarks are
+run when no other solver runs on the machine, and the load average before
+each run is recorded (D-007).
 
 \subsection{Results}
 
@@ -1560,14 +1677,14 @@ Figure~\ref{fig:benchiters}. Figure~\ref{fig:breakdown} splits the time per
 coupledFoam iteration, and Figure~\ref{fig:memory} compares the measured
 peak memory with the budget of Table~\ref{tab:memory}. The acceptance of the
 B10 variants is evaluated in Table~\ref{tab:btenacc}, with the cycle
-comparison (E and H against C) in Figure~\ref{fig:benchcycles} and Anderson
+comparison (H and H-tune against C) in Figure~\ref{fig:benchcycles} and Anderson
 acceleration (G) in Figure~\ref{fig:anderson}. The block-GAMG hierarchies
 are listed in Table~\ref{tab:gamglevels}, the Eisenstat--Walker forcing terms
 and preconditioner efficiencies are shown in Figure~\ref{fig:etarho}, and the
 strong scaling in Figure~\ref{fig:scaling}.
 
 \paragraph{Convergence point chosen by the user.} The automatic criteria
-decide whether a test passes. For the force cases (T3, T4, T5) the user may in
+decide whether a test passes. For the force cases (T3, T4) the user may in
 addition name an earlier iteration from which they consider a run converged,
 after looking at the load histories of Appendix~\ref{app:histories}
 (\texttt{report/user\_convergence.json}, D-060). Times, CPU-hours, speed-ups and
@@ -1583,11 +1700,18 @@ window criterion, coupledFoam including its potentialFoam initialisation),
 best native configuration against coupledFoam, as wall-clock time and
 CPU-hours.}{tab:summary}
 
-\cffigure{bench_wall}{Wall-clock time to convergence (median of three runs)
-per case and configuration.}{fig:benchwall}
+The fine motorbike T4b is benchmarked with configuration C only (D-059,
+D-063); its comparison with \code{simpleFoam} is the test run against the
+cached reference in Table~\ref{tab:wakespeed}
+(Section~\ref{sec:speedtests}), together with the conditions of that
+reference.
+
+\cffigure{bench_wall}{Wall-clock time to convergence (median of the repeats:
+three on T1--T3, one on the motorbike) per case and
+configuration.}{fig:benchwall}
 
 \cffigure{bench_cpu}{CPU time to convergence (CPU-hours summed over ranks,
-median of three runs).}{fig:benchcpu}
+median of the repeats).}{fig:benchcpu}
 
 \cffigure{bench_iters}{Outer iterations to convergence. Shown for
 completeness; the decisive metrics are those of Figures~\ref{fig:benchwall}
@@ -1604,12 +1728,12 @@ to the cell count of each case (grey band). On small meshes the fixed
 per-process overhead of OpenFOAM dominates, so the comparison is meaningful
 only for the larger cases.}{fig:memory}
 
-\cftable{b10_acceptance}{Amendment B10: configurations E, F, G and H against
+\cftable{b10_acceptance}{Amendment B10: configurations F, G and H against
 C in wall time and CPU-hours; pass/fail for F.}{tab:btenacc}
 
-\cffigure{bench_cycles}{Benchmark cycle comparison on T2, T4b and T5: default
-K-cycle with controller (C), fixed K-cycle (H) and fixed V-cycle (E), wall
-time and CPU-hours to convergence.}{fig:benchcycles}
+\cffigure{bench_cycles}{Benchmark cycle comparison: default V-cycle (C),
+fixed K-cycle (H) and K-cycle with autoTune (H-tune), wall time and
+CPU-hours to convergence.}{fig:benchcycles}
 
 \cffigure{anderson}{Anderson acceleration on and off (T1, T3-SST): outer
 iterations, wall time and CPU-hours to convergence.}{fig:anderson}
@@ -1631,20 +1755,26 @@ V-, F-, W- and K-cycles on the block-Poisson system of the $128\times128$
 cavity mesh, serial, solved to $10^{-9}$ (D-023).}{fig:cycles}
 
 \cffigure{eta_rho_history}{Eisenstat--Walker forcing term $\eta_n$ and
-preconditioner efficiency $\rho$ with the controller events.}{fig:etarho}
+preconditioner efficiency $\rho$ with the controller events, one row per
+run.}{fig:etarho}
 
 \clearpage
 \subsection{Speed-up measured on the test runs}\label{sec:speedtests}
 
 Until the benchmark matrix has run, the test records give a first
-measurement of the speed-up (single serial runs on the shared machine, not
-benchmark quality; D-007). Each solver is stopped by its own test criterion:
-coupledFoam at the residual target of the test ($R<10^{-8}$ for T0,
-$10^{-5}$ for T1 and T2), \code{simpleFoam} at its \code{residualControl}.
-The residual normalisations differ (Section~\ref{sec:norms}), so the time
+measurement of the speed-up (single runs on the shared machine, not
+benchmark quality; D-007): serial on T0--T3, 10 ranks on the motorbike.
+Both solvers are evaluated at the same criterion: the residual target of
+the test ($10^{-8}$ for T0, $10^{-5}$ for T1 and T2), reached by the
+combined residual $R$ of coupledFoam and by all initial residuals of
+\code{simpleFoam} (on T2 the native iteration count of D-024); the
+stationary window mean with the common window on the motorbike (D-068);
+on T3 the force window of criterion 12.3(ii) on both force histories.
+Wall-clock time and CPU-hours are taken at that iteration from each
+solver's time log (D-068, harness review M1). The residual normalisations differ (Section~\ref{sec:norms}), so the time
 axis, not the residual level, is the comparable quantity; the field
 comparisons of Section~\ref{sec:flowfields} show that both runs end at the
-same solution. Serial runs make CPU-hours and wall-clock time nearly
+same solution. On the serial runs CPU-hours and wall-clock time are nearly
 proportional; both are reported.
 
 Figure~\ref{fig:speedres} plots the residuals against wall-clock time.
@@ -1658,8 +1788,7 @@ at $Re=100$, \cfnum{SpeedWallTZeroReOneZeroZeroZero}
 \code{simpleFoam} did not reach the target within
 \cfnum{SpeedItersSfTTwo} iterations, so the factor
 \cfnum{SpeedWallTTwo} (\cfnum{SpeedCpuTTwo} in CPU-hours) is a lower
-bound. On T3 neither solver reached its residual criterion within its
-iteration limit; there the bars compare the run lengths only.
+bound. \cfnum{SpeedNotConvNote}
 Figure~\ref{fig:speediter} shows why the iteration count alone is
 misleading: one coupled iteration costs \cfnum{SpeedIterCostRatioTTwo}
 times a \code{simpleFoam} iteration on T2 and
@@ -1675,9 +1804,36 @@ comparable quantity. Cases whose coupledFoam run is not finished show the
 reference only.}{fig:speedres}
 
 \cffigure{speed_time_to_conv}{Wall-clock time (left) and CPU-hours (right)
-to convergence, simpleFoam and coupledFoam, test records, serial. Numbers:
-speed-up simpleFoam/coupledFoam. Hatched bars: the criterion was not
-reached, the bar is the whole run; $\geq$: lower bound.}{fig:speedconv}
+to convergence, simpleFoam (orange) and coupledFoam (blue), both timed to
+the same criterion: T0--T2 the test's residual target (coupledFoam $R$;
+simpleFoam every initial residual below the same value), T3 the 12.3(ii)
+force window, T4 the first stationary D-042 window mean with one
+400-iteration window for both solvers (D-068). T0--T3 serial, solver time
+only; T4 on 10 MPI ranks, coupledFoam including potentialFoam, against the
+cached simpleFoam reference (run without the tutorial's potentialFoam
+start, timing conditions not recorded). Numbers: speed-up
+simpleFoam/coupledFoam. Hatched: criterion not reached, bar = whole run
+(simpleFoam: lower bound, marked $\geq$).}{fig:speedconv}
+
+\paragraph{Motorbike: coupledFoam against the cached references.} On the
+motorbike the benchmark runs few configurations (D-059, D-063), and the
+speed-up is taken from the test records instead: the coupledFoam test run
+against the cached \code{simpleFoam} reference of the same mesh and
+decomposition, both to the stationary window mean with the common window
+(D-068). Table~\ref{tab:wakespeed} gives the result together with the
+conditions that limit its fairness: the reference is a single native
+configuration (the tutorial relaxation, not the better of A and B), it may
+have been started without the tutorial's \code{potentialFoam}
+initialisation, and the machine load during the cached reference runs was
+not recorded. The speed-up with each run's own window (the earlier rule) is
+given as a sensitivity value only; it is not a result, because that rule
+made the earliest possible convergence point of the longer reference run
+depend on its iteration budget. The mean fields of the references, used by
+the field comparison, cover their continuation of 1500 (T4a) or 2000 (T4b)
+iterations. Result: \cfnum{WakeSpeedNote}
+
+\cftable{wake_speedup}{Motorbike speed-up from the test records against
+the cached simpleFoam references.}{tab:wakespeed}
 
 \cffigure{speed_iteration_cost}{Time per outer iteration. Left: share of
 assembly, linear solve and turbulence in a coupledFoam iteration. Right:
@@ -1689,6 +1845,107 @@ leads from simpleFoam to coupledFoam for one case; diagonals are lines of
 constant time per iteration. coupledFoam trades far fewer iterations for
 more expensive ones; it is faster where the arrow points
 down.}{fig:speedtrade}
+
+\clearpage
+\subsection{Metrics for comparison with other solvers}\label{sec:metrics}
+
+Validation and performance reports of commercial and research coupled
+solvers~\cite{cmp-Fluent12TG,cmp-StarEffortless2020,cmp-HelyxCoupled,Uroic2021}
+typically quantify cost per unit of mesh, memory per million cells,
+residual reduction against iterations and time, parallel efficiency, and
+the growth of the iteration count with the mesh size. The same quantities
+are computed here from the existing test records and logs, so that the
+results of this paper can be placed next to such reports; they are no
+substitute for a comparison on identical cases and hardware.
+Table~\ref{tab:metcost} normalises the cost per outer iteration and the peak
+memory by the cell count, Table~\ref{tab:metres} gives the iterations and
+wall-clock time to reduce the residual by two to four orders of magnitude,
+Table~\ref{tab:metscal} the parallel efficiency of the strong-scaling test,
+and Table~\ref{tab:metgrid} the dependence on the mesh of the motorbike.
+Robustness on a deliberately degraded mesh, weak scaling, energy to
+solution and a memory breakdown by data structure are not reported: they
+require a degraded-mesh variant of a test case, a mesh series at constant
+cells per rank, a power measurement, and allocation counters in the solver,
+none of which is part of the present campaign.
+
+\cftable{metrics_cost}{Cost and memory per million cells.}{tab:metcost}
+\cftable{metrics_residual}{Residual reduction: iterations and wall-clock
+time.}{tab:metres}
+\cftable{metrics_scaling}{Strong scaling: time per iteration and parallel
+efficiency.}{tab:metscal}
+\cftable{metrics_grid}{Mesh dependence on the motorbike (T4a against
+T4b).}{tab:metgrid}
+
+\clearpage
+\subsection{Single precision}\label{sec:sp}
+
+Amendment D adds full single precision (SP) as a build option: a second
+OpenFOAM v2606 build with \code{WM\_PRECISION\_OPTION=SP}, in which fields,
+geometry, all matrices and all solves are 4-byte floats. The reference is
+the double-precision build (DP) used for every other result of this paper;
+the amendment names the mixed build \code{SPDP} as the reference, but no
+such build is made (D-062). Both builds use identical compiler flags (the
+unmodified \code{linux64Gcc} rules, \code{-O3}), so that the timings compare
+precision and not compilers. The meshes are generated in DP and copied to
+the SP case in ASCII with 12 significant digits; SP is a solve-only mode.
+
+\paragraph{Where the gain comes from.} coupledFoam already stores its block
+matrix and all Krylov and multigrid vectors in float
+(Section~\ref{sec:storage}). SP halves in addition the fields, the mesh
+geometry, the scalar matrices of the turbulence equations and the files
+written, so its expected gain is confined to assembly, turbulence and I/O,
+about 15--20\,\% of the wall-clock time according to the amendment (D12).
+\code{simpleFoam}, whose linear solvers work in double in the DP build, is
+run in SP as well. In the benchmark the SP configurations are F1
+(\code{simpleFoam}, settings of B) and F2 (coupledFoam, settings of C);
+each solver is compared with itself in the other precision, never across
+precisions.
+
+\paragraph{Safeguards.} Everything accumulated over many cells stays in
+double in both builds: norms, dot products, sums, the Galerkin coarse
+operators, the small dense systems of the Krylov and Anderson methods, and
+the force and moment integration (a dedicated double-accumulated force
+evaluation, used identically for both solvers). The stabilising constants
+\code{SMALL} and \code{VSMALL}, whose values change with the precision, are
+replaced by explicit guard constants. Two geometric risks are specific to SP.
+A float resolves about seven significant digits, so a coordinate of 10\,m
+is represented to about 1\,$\mu$m; the difference of two nearby cell
+centres, from which face weights, gradients and wall distances are formed,
+loses the digits that the absolute coordinates carry. Before every SP run
+the mesh is therefore translated so that the centre of its bounding box is
+the origin; the centre of rotation of the moments, probes and sampling
+lines are shifted with it, which is where an omission would produce silently
+wrong moments. The shifted mesh must then pass a checkMesh gate: no check
+may fail in SP that passes in DP, and no cell may have a negative volume or
+a wrong orientation; otherwise the case is marked \code{SP-geometry-fail}
+and its SP benchmark is skipped. The static remediation cells are
+recomputed in SP, and the difference in their number is reported. Finally,
+the precision profile raises the attainable targets in SP (outer residual
+target $10^{-5}$ instead of $10^{-6}$, absolute linear tolerance $10^{-6}$,
+$\eta_{\min}=10^{-2}$), because a field increment below about $10^{-6}$ of
+the field value is lost to rounding; the force window remains the decisive
+convergence test.
+
+\paragraph{Evaluation.} SP is compared with DP on a few cases only
+(D-063). Table~\ref{tab:spperf} gives the wall-clock time, CPU-hours and
+peak memory of both solvers in both precisions,
+Table~\ref{tab:spbreak} the time per coupledFoam iteration by component,
+Figure~\ref{fig:spfloor} the residual histories (the convergence floor),
+and Table~\ref{tab:spverdict} the verdict per case: SP is \emph{usable} on a
+case if the monitored quantity of coupledFoam ($C_d$; $\Delta p$ for T1,
+$x_r/h$ for T2) lies within 0.5\,\% of DP and the checkMesh gate passed,
+otherwise \emph{not usable}, with the reason. \cfnum{SpStatus}
+
+\cftable{sp_performance}{Single against double precision: wall-clock time,
+CPU-hours and peak memory of both solvers.}{tab:spperf}
+\cftable{sp_breakdown}{coupledFoam time per iteration by component, DP and
+SP.}{tab:spbreak}
+\cffigure{sp_convergence_floor}{Convergence floor: combined residual $R_n$
+of coupledFoam in DP (solid) and SP (dashed) on the same case; dotted: the
+SP residual target of the precision profile.}{fig:spfloor}
+\cftable{sp_verdict}{Single-precision verdict per case: monitored quantity
+in DP and SP, checkMesh gate, change of the static remediation set, origin
+shift, verdict.}{tab:spverdict}
 
 % =============================================================================
 \section{Discussion and limitations}\label{sec:discussion}
@@ -1742,7 +1999,7 @@ smooth modes. As CFL$\to\infty$, $\mathsf T\to0$ and
 $\mathsf G\to-\mathsf A_{\mathrm{UD}}^{-1}\mathsf C$, so the damping by the
 pseudo-time term disappears exactly when the CFL control removes it.
 
-For a first estimate we evaluated the symbol of~\eqref{eq:dcG} for constant
+For a first estimate, the symbol of~\eqref{eq:dcG} was evaluated for constant
 convection at angle $\theta$ on a uniform Cartesian grid, with OpenFOAM's
 \code{linearUpwind} (face value from the upwind cell plus its central
 gradient, which in 1D is Fromm's scheme), first-order upwind in
@@ -1756,7 +2013,7 @@ $\mathsf A_{\mathrm{UD}}^{-1}\mathsf C$ is $\tfrac{\mathrm i}{2}\sin\xi$, so
 $\rho\le\tfrac12$ even at infinite CFL. In 2D, cross-stream modes whose
 upwind operator consists almost entirely of numerical diffusion, which the
 correction removes, bring $\rho$ close to one. In the limit CFL$\to\infty$ at
-$\theta=45^\circ$ we find $\rho(\mathsf G)=\cfnum{ExpSymRhoInfPeLow}$ for
+$\theta=45^\circ$ the result is $\rho(\mathsf G)=\cfnum{ExpSymRhoInfPeLow}$ for
 $Pe_h=\cfnum{ExpSymPeLow}$ (the $Re=1000$ cavity on $128^2$ cells, based on
 the lid velocity) and $\rho(\mathsf G)=\cfnum{ExpSymRhoInfPeHigh}$ for
 $Pe_h=\cfnum{ExpSymPeHigh}$. At CFL~500 and $Pe_h=\cfnum{ExpSymPeLow}$ the
@@ -1769,7 +2026,7 @@ boundaries and the singular corners of the cavity, the Picard lag of the
 convecting flux, and above all an inexact linear solve, which replaces
 $\mathsf M^{-1}$ by a different approximate inverse.
 
-This is consistent with what we observed on the $Re=1000$ cavity in
+This is consistent with the observations on the $Re=1000$ cavity in
 exploratory runs (logs in \code{run/exp\_re1000}, outside the test protocol).
 With the solver default of that time (BiCGStab preconditioned by block GAMG
 with a Gauss--Seidel smoother, relative tolerance
@@ -1800,7 +2057,7 @@ iteration converges), the stronger smoothers and cycles of
 Section~\ref{sec:gamg}, the treatment of failed solves, and remediation,
 which sets $\beta_P=0$ where the correction is locally destabilising. A
 rigorous statement for the actual discretisation would require the spectrum
-of~\eqref{eq:dcG} for the assembled operators, which we have not computed.
+of~\eqref{eq:dcG} for the assembled operators, which has not been computed.
 
 On the $Re=100$ cavity an exploratory comparison of linear solvers (logs in
 \code{run/exp\_linsolver}) showed the practical weight of the inner solve:
@@ -1843,7 +2100,7 @@ Section~\ref{sec:perf} is authoritative.
   (D-017).
 \item \emph{Scope and hardware.} The 45\,M-cell production case and its
   memory budget cannot be verified on the development machine (94\,GB, D-007);
-  the largest meshes of the test suite are T4b and T5.
+  the largest mesh of the present campaign is T4b (T5 is deferred, D-063).
 \item \emph{Residual definitions} of coupledFoam and \code{simpleFoam} differ;
   the iteration criterion of T2 is defined in D-024, and all timing
   comparisons use the solver-independent force window (for the wake cases
@@ -1902,7 +2159,8 @@ each iteration can be traced (generated by \code{bench/plot\_histories.py}
 from the solver logs, the \code{forceCoeffs} and \code{surfaceFieldValue}
 outputs and the run summaries). Each run has four figures: the monitored
 quantities (loads) of both solvers with the running mean and $\pm$RMS band
-over the averaging window $W=\max(300,n/2)$ of the D-042 rule, the shaded
+over the averaging window $W$ of the D-042 rule (common to both solvers of a
+case, D-068), the shaded
 final window and the first iteration with a stationary window (dash-dot);
 the residuals of both solvers on the same y range; the wall-clock time per
 iteration, cumulative with a linear fit, and the coupledFoam split into
@@ -1914,6 +2172,33 @@ Runs that are still being computed are skipped and appear as ``results
 pending''; they are filled in when the report is regenerated. The simpleFoam
 reference of the 4-rank runs is the serial reference run.
 
+% \cfhistfigure (used by the generated figures/histories.tex, which only
+% \providecommand's it): [H] placement, but the first figure after the
+% bullet list is shrunk to the space left on the page if at least 40 % of
+% the text height is left, so that no page holds only the bullets
+\makeatletter
+\newlength\cf@hh
+\newcommand{\cfhistfigure}[3]{%
+  \par
+  \ifdim\pagegoal=\maxdimen
+    \setlength\cf@hh{0.8\textheight}%
+  \else
+    % reserve the typeset caption plus the float and caption skips
+    \setbox\@tempboxa\vbox{\hsize=\linewidth\normalsize Figure 999: #2}%
+    \setlength\cf@hh{\dimexpr\pagegoal-\pagetotal-\ht\@tempboxa
+      -\dp\@tempboxa-4\baselineskip\relax}%
+    \ifdim\cf@hh>0.8\textheight\setlength\cf@hh{0.8\textheight}\fi
+    \ifdim\cf@hh<0.4\textheight\setlength\cf@hh{0.8\textheight}\fi
+  \fi
+  \begin{figure}[H]
+    \centering
+    \IfFileExists{figures/#1.pdf}%
+      {\includegraphics[width=0.95\linewidth,height=\cf@hh,keepaspectratio]{figures/#1.pdf}}%
+      {\pending{Figure \texttt{figures/\detokenize{#1}} is written by
+        \texttt{bench/make\_report.py} once its data exist.}}
+    \caption{#2}\label{#3}
+  \end{figure}}
+\makeatother
 \IfFileExists{figures/histories.tex}{\input{figures/histories.tex}}{%
   \pending{The appendix text \texttt{figures/histories.tex} is written by
   \texttt{bench/make\_report.py}.}}

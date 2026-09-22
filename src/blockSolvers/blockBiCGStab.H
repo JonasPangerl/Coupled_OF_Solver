@@ -9,7 +9,7 @@ Description
     Right-preconditioned BiCGStab (Saad 2003, Alg. 7.7; same arrangement as
     native PBiCGStab) on the 4*nCells block vector (spec 6.2).
 
-    Breakdown guards: |rho| < VSMALL*||r0||^2 or |omega| < VSMALL restarts
+    Breakdown guards: |rho| < cfVSmall*||r0||^2 or |omega| < cfVSmall restarts
     from the current x with a fresh shadow residual, at most maxRestarts
     times, then returns with converged = false and breakdown = true.
 

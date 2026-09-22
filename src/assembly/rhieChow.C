@@ -4,6 +4,8 @@
 \*---------------------------------------------------------------------------*/
 
 #include "rhieChow.H"
+#include "coupledConstants.H"
+#include "doubleReduce.H"
 #include "nonOrthCorrection.H"
 #include "fvcGrad.H"
 #include "calculatedFvPatchFields.H"
@@ -12,6 +14,7 @@
 #include "IStringStream.H"
 #include "PstreamReduceOps.H"
 #include "coupledDefaults.H"
+#include "staticCriteria.H"
 #include "block4Ops.H"
 
 using namespace Foam::boundaryCoupling;
@@ -85,6 +88,7 @@ Foam::rhieChow::rhieChow(const fvMesh& mesh, const dictionary& coupledDict)
     valid_(false),
     isStatic_(mesh.nCells(), false),
     anyStatic_(false),
+    limitedGradScheme_(staticCriteria::limitedGradScheme(coupledDict)),
     tensorial_
     (
         coupledDict.subOrEmptyDict("rhieChow").getOrDefault<bool>
@@ -109,16 +113,29 @@ Foam::rhieChow::rhieChow(const fvMesh& mesh, const dictionary& coupledDict)
             coupledDefaults::rhieChowPinvRelTol
         )
     ),
+    pinvMaxSweeps_
+    (
+        coupledDict.subOrEmptyDict("rhieChow").getOrDefault<label>
+        (
+            "pinvMaxSweeps",
+            coupledDefaults::rhieChowPinvMaxSweeps
+        )
+    ),
     DTPtr_(nullptr),
     nPinvLast_(0),
     nPinvWindow_(0),
     nPinvTotal_(0)
 {
-    if (!(detRelTol_ >= 0) || !(pinvRelTol_ > 0 && pinvRelTol_ < 1))
+    if
+    (
+        !(detRelTol_ >= 0) || !(pinvRelTol_ > 0 && pinvRelTol_ < 1)
+     || pinvMaxSweeps_ < 1
+    )
     {
         FatalIOErrorInFunction(coupledDict)
             << "rhieChow.detRelTol " << detRelTol_ << " must be >= 0 and"
-            << " rhieChow.pinvRelTol " << pinvRelTol_ << " in (0, 1)"
+            << " rhieChow.pinvRelTol " << pinvRelTol_ << " in (0, 1),"
+            << " rhieChow.pinvMaxSweeps " << pinvMaxSweeps_ << " >= 1"
             << exit(FatalIOError);
     }
 
@@ -171,7 +188,7 @@ void Foam::rhieChow::updateD
     forAll(Di, celli)
     {
         // GUARD: abar > 0 for a PTC-augmented momentum diagonal; guard anyway
-        Di[celli] = V[celli]/max(abar[celli], VSMALL);
+        Di[celli] = V[celli]/max(abar[celli], cfVSmall<scalar>());
     }
     D_.correctBoundaryConditions();
 
@@ -250,7 +267,7 @@ void Foam::rhieChow::updateD
     forAll(Di, celli)
     {
         // GUARD: abar > 0 for a PTC-augmented momentum diagonal
-        Di[celli] = V[celli]/max(abar[celli], VSMALL);
+        Di[celli] = V[celli]/max(abar[celli], cfVSmall<scalar>());
     }
     D_.correctBoundaryConditions();
 
@@ -271,16 +288,17 @@ void Foam::rhieChow::updateD
         {
             block4Ops::pseudoInverse3
             (
-                Ad, Ai, pinvRelTol_, coupledDefaults::rhieChowPinvMaxSweeps
+                Ad, Ai, pinvRelTol_, pinvMaxSweeps_
             );
             ++nPinv;
         }
         const reduceScalar v = V[celli];
+        // Computed in double, stored as scalar (D2.2 f)
         DTi[celli] = tensor
         (
-            v*Ai[0], v*Ai[1], v*Ai[2],
-            v*Ai[3], v*Ai[4], v*Ai[5],
-            v*Ai[6], v*Ai[7], v*Ai[8]
+            scalar(v*Ai[0]), scalar(v*Ai[1]), scalar(v*Ai[2]),
+            scalar(v*Ai[3]), scalar(v*Ai[4]), scalar(v*Ai[5]),
+            scalar(v*Ai[6]), scalar(v*Ai[7]), scalar(v*Ai[8])
         );
     }
     nPinvLast_ = returnReduce(nPinv, sumOp<label>());
@@ -384,7 +402,7 @@ void Foam::rhieChow::buildDfTensor(const volScalarField& p)
 }
 
 
-void Foam::rhieChow::setStaticCells(const boolList& isStatic)
+void Foam::rhieChow::setGradLimitedCells(const boolList& isStatic)
 {
     isStatic_ = isStatic;
     bool any = false;
@@ -396,9 +414,10 @@ void Foam::rhieChow::setStaticCells(const boolList& isStatic)
 }
 
 
-Foam::scalar Foam::rhieChow::Dref() const
+Foam::doubleScalar Foam::rhieChow::Dref() const
 {
-    return gAverage(D_.primitiveField());
+    // D4: double-accumulated mean over all ranks (was gAverage)
+    return doubleReduce::average(D_.primitiveField());
 }
 
 
@@ -429,8 +448,9 @@ void Foam::rhieChow::updateExplicit
 
     if (anyStatic_)
     {
-        // Static remediation cells: limited gradient (spec 8.1, D-018)
-        IStringStream schemeData("cellLimited Gauss linear 1");
+        // Remediation cells with gradLimiter: limited gradient (spec 8.1,
+        // D-018; scheme remediation.limitedGradScheme, D-066)
+        IStringStream schemeData(limitedGradScheme_);
         tmp<fv::gradScheme<scalar>> tscheme =
             fv::gradScheme<scalar>::New(mesh_, schemeData);
         const tmp<volVectorField> tgl = tscheme().grad(p, "grad(p)Limited");

@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "lineSearch.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "PstreamReduceOps.H"
 #include "DynamicList.H"
@@ -14,8 +15,8 @@
 
 Foam::lineSearch::lineSearch(const dictionary& coupledDict)
 :
-    fU_(coupledDefaults::fU),
-    fp_(coupledDefaults::fp),
+    fU_(scalar(coupledDefaults::fU)),
+    fp_(scalar(coupledDefaults::fp)),
     omegaMin_(coupledDefaults::omegaMin),
     kappa_(coupledDefaults::kappa),
     maxCflCuts_(coupledDefaults::maxCflCuts),
@@ -28,6 +29,7 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
     UrefSource_(),
     stepMode_(coupledDefaults::UrefStepMode),
     stepCap_(coupledDefaults::UrefStepCap),
+    UrefFallbackFactor_(scalar(coupledDefaults::UrefFallbackFactor)),
     UstepExplicit_(0),
     Ufield0_(0),
     Ustep_(0),
@@ -108,6 +110,17 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
                 << " or a value > 0, got " << tok << exit(FatalIOError);
         }
     }
+    UrefFallbackFactor_ = coupledDict.getOrDefault<scalar>
+    (
+        "UrefFallbackFactor",
+        UrefFallbackFactor_
+    );
+    if (!(UrefFallbackFactor_ >= 0 && UrefFallbackFactor_ <= 1))
+    {
+        FatalIOErrorInFunction(coupledDict)
+            << "coupled.UrefFallbackFactor must be in [0, 1], got "
+            << UrefFallbackFactor_ << exit(FatalIOError);
+    }
     stepCap_ = coupledDict.getOrDefault<scalar>
     (
         "UrefStepCap",
@@ -136,13 +149,13 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
     }
 
     const dictionary& d = coupledDict.subOrEmptyDict("lineSearch");
-    fU_ = d.getOrDefault<scalar>("fU", coupledDefaults::fU);
-    fp_ = d.getOrDefault<scalar>("fp", coupledDefaults::fp);
-    omegaMin_ = d.getOrDefault<scalar>("omegaMin", coupledDefaults::omegaMin);
-    kappa_ = d.getOrDefault<scalar>("kappa", coupledDefaults::kappa);
+    fU_ = d.getOrDefault<scalar>("fU", scalar(coupledDefaults::fU));
+    fp_ = d.getOrDefault<scalar>("fp", scalar(coupledDefaults::fp));
+    omegaMin_ = d.getOrDefault<doubleScalar>("omegaMin", coupledDefaults::omegaMin);
+    kappa_ = d.getOrDefault<doubleScalar>("kappa", coupledDefaults::kappa);
     maxCflCuts_ =
         d.getOrDefault<label>("maxCflCuts", coupledDefaults::maxCflCuts);
-    beta_ = d.getOrDefault<scalar>("beta", coupledDefaults::lineSearchBeta);
+    beta_ = d.getOrDefault<doubleScalar>("beta", coupledDefaults::lineSearchBeta);
 
     // Negated comparison also rejects non-finite input
     if (!(beta_ >= 1) || !std::isfinite(beta_))
@@ -183,7 +196,7 @@ void Foam::lineSearch::setReference(const volVectorField& U)
         Umax = max(Ufield, Ubnd);
         UrefSource_ = "field";
     }
-    else if (Ubnd > coupledDefaults::UrefFallbackFactor*Ufield)
+    else if (Ubnd > UrefFallbackFactor_*Ufield)
     {
         Umax = Ubnd;
         UrefSource_ = "boundary";
@@ -196,8 +209,8 @@ void Foam::lineSearch::setReference(const volVectorField& U)
     }
 
     // GUARD: a zero reference would make every omega zero
-    Uref_ = max(Umax, VSMALL);
-    pref_ = 0.5*sqr(Uref_);
+    Uref_ = max(Umax, cfVSmall<scalar>());
+    pref_ = scalar(0.5*sqr(Uref_));
     Ufield0_ = max(Ufield, Ubnd);
     refSet_ = true;
     updateStep();
@@ -263,7 +276,7 @@ void Foam::lineSearch::updateStep()
     // reference mode: pstep is pref itself (bitwise D-050 behaviour, also
     // for a restored pref)
     UstepEff_ = Ustep_;
-    pstepEff_ = (stepMode_ == "reference" ? pref_ : 0.5*sqr(Ustep_));
+    pstepEff_ = (stepMode_ == "reference" ? pref_ : scalar(0.5*sqr(Ustep_)));
     excludeDynamic_ = false;
 }
 
@@ -286,25 +299,25 @@ void Foam::lineSearch::setStartup
         // w = 1 at beta 0 (field scale), 0 at beta 1 (frozen values)
         const scalar w = min(max(1 - betaStartup, scalar(0)), scalar(1));
         UrefEff_ = Uref_ + w*max(Ufield0_ - Uref_, scalar(0));
-        prefEff_ = 0.5*sqr(UrefEff_);
+        prefEff_ = scalar(0.5*sqr(UrefEff_));
         UstepEff_ = max(Ustep_, UrefEff_);
-        pstepEff_ = max(pstepEff_, 0.5*sqr(UstepEff_));
+        pstepEff_ = max(pstepEff_, scalar(0.5*sqr(UstepEff_)));
     }
     else if (startupRef_ == "exclude" && Ufield0_ > Ustep_)
     {
         // Only a start whose initial field exceeds the step scale (the
         // singular potential-flow peaks) is affected; otherwise a no-op
         UstepEff_ = Ufield0_;
-        pstepEff_ = max(pstepEff_, 0.5*sqr(UstepEff_));
+        pstepEff_ = max(pstepEff_, scalar(0.5*sqr(UstepEff_)));
         excludeDynamic_ = true;
     }
 }
 
 
-Foam::scalar Foam::lineSearch::omega(const blockScalarUList& dx) const
+Foam::doubleScalar Foam::lineSearch::omega(const blockScalarUList& dx) const
 {
     const label nCells = dx.size()/blockDim;
-    scalar om = 1;
+    doubleScalar om = 1;
 
     const scalar limU = fU_*UstepEff_;
     const scalar limp = fp_*pstepEff_;
@@ -319,12 +332,12 @@ Foam::scalar Foam::lineSearch::omega(const blockScalarUList& dx) const
         const scalar dp = std::abs(scalar(d[blockP]));
 
         // GUARD: line-search denominators (9.2)
-        om = min(om, limU/max(dU, VSMALL));
-        om = min(om, limp/max(dp, VSMALL));
+        om = min(om, doubleScalar(limU/max(dU, cfVSmall<scalar>())));
+        om = min(om, doubleScalar(limp/max(dp, cfVSmall<scalar>())));
     }
 
-    reduce(om, minOp<scalar>());
-    return min(om, scalar(1));
+    reduce(om, minOp<doubleScalar>());
+    return min(om, doubleScalar(1));
 }
 
 
@@ -335,8 +348,8 @@ Foam::labelList Foam::lineSearch::offendingCells
 {
     const label nCells = dx.size()/blockDim;
     // GUARD: omegaMin > 0 by construction of the dictionary checks
-    const scalar limU = fU_*UstepEff_/max(omegaMin_, VSMALL);
-    const scalar limp = fp_*pstepEff_/max(omegaMin_, VSMALL);
+    const scalar limU = scalar(fU_*UstepEff_/max(omegaMin_, cfVSmall<doubleScalar>()));
+    const scalar limp = scalar(fp_*pstepEff_/max(omegaMin_, cfVSmall<doubleScalar>()));
 
     DynamicList<label> cells;
     for (label celli = 0; celli < nCells; ++celli)
@@ -359,7 +372,7 @@ Foam::labelList Foam::lineSearch::offendingCells
 void Foam::lineSearch::countViolations
 (
     const blockScalarUList& dx,
-    const scalar omega,
+    const doubleScalar omega,
     label& nU,
     label& np
 ) const
@@ -372,11 +385,14 @@ void Foam::lineSearch::countViolations
     for (label celli = 0; celli < nCells; ++celli)
     {
         const blockScalar* d = dx.cdata() + celli*blockDim;
-        const scalar dU = omega*std::sqrt
+        const scalar dU = scalar
         (
-            sqr(scalar(d[0])) + sqr(scalar(d[1])) + sqr(scalar(d[2]))
+            omega*std::sqrt
+            (
+                sqr(scalar(d[0])) + sqr(scalar(d[1])) + sqr(scalar(d[2]))
+            )
         );
-        const scalar dp = omega*std::abs(scalar(d[blockP]));
+        const scalar dp = scalar(omega*std::abs(scalar(d[blockP])));
         if (dU > limU)
         {
             ++nU;
@@ -416,6 +432,7 @@ void Foam::lineSearch::writeSettings(dictionary& dict) const
         dict.add("UrefStep", stepMode_);
     }
     dict.add("UrefStepCap", stepCap_);
+    dict.add("UrefFallbackFactor", UrefFallbackFactor_);
     dict.add("startupReference", startupRef_);
 }
 

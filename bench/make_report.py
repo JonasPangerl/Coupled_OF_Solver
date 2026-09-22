@@ -76,17 +76,30 @@ C_NATIVE = "#D55E00"
 C_NATIVE2 = "#E69F00"
 C_COUPLED = "#0072B2"
 C_COUPLED2 = "#56B4E9"
+# benchmark configurations (run_bench.CONFIGS, D-068); E is now an alias of
+# C. Colour-blind safe (Okabe-Ito for the main ones, Tol muted for the
+# Amendment C7 variants E-*)
 CONFIG_COLOR = {"A": C_NATIVE2, "B": C_NATIVE, "C": C_COUPLED, "D": C_COUPLED2,
-                "E": "#6baed6", "F": "#08306b", "G": "#d95f02", "H": "#9467bd"}
+                "F": "#08306b", "G": "#009E73", "H": "#CC79A7",
+                "H-tune": "#882255",
+                "E-rcScalar": "#44AA99", "E-nonOrth60": "#999933",
+                "E-nonOrth65": "#DDCC77", "E-algPair": "#AA4499",
+                "E-noSFD": "#117733", "E-eta07": "#888888"}
 CONFIG_LABEL = {
     "A": "simpleFoam (tutorial)",
     "B": "simpleFoam SIMPLEC",
-    "C": "coupledFoam",
+    "C": "coupledFoam (V-cycle, default)",
     "D": "coupledFoam, blockDiagonal",
-    "E": "coupledFoam, fixed V-cycle",
     "F": "coupledFoam, fixed relTol",
     "G": "coupledFoam, Anderson",
     "H": "coupledFoam, fixed K-cycle",
+    "H-tune": "coupledFoam, K-cycle + autoTune",
+    "E-rcScalar": "coupledFoam, scalar Rhie-Chow",
+    "E-nonOrth60": "coupledFoam, nonOrth limit 60",
+    "E-nonOrth65": "coupledFoam, nonOrth limit 65",
+    "E-algPair": "coupledFoam, algebraic pair agglomeration",
+    "E-noSFD": "coupledFoam, SFD off",
+    "E-eta07": "coupledFoam, etaMax 0.7",
 }
 
 # Amendment B7 memory budget (spec constants, not measurements): total
@@ -95,11 +108,11 @@ B7_CELLS = 45e6
 B7_TOTAL_GB = (105.0, 120.0)
 B7_BYTES_PER_CELL = tuple(g * 1e9 / B7_CELLS for g in B7_TOTAL_GB)
 
-plt.rcParams.update({
-    "figure.dpi": 150, "savefig.dpi": 150, "font.size": 9,
-    "axes.grid": True, "grid.alpha": 0.3, "legend.frameon": False,
-    "pdf.fonttype": 42, "ps.fonttype": 42,
-})
+# figure style shared with the other figure modules (print width, fonts,
+# colours, envelope/zoom helpers)
+import plotstyle as ps  # noqa: E402
+
+ps.apply()
 
 notes: list[str] = []
 numbers: dict[str, str] = {}
@@ -116,14 +129,23 @@ ALLOW_HISTORICAL = False
 # Result records the final re-run produces (TASK 6 step 3; fnmatch
 # patterns over results/tests/*.json stems). A pattern without any record
 # is listed as missing in the appendix.
+# Campaign scope D-063: T5 (Ahmed body) is not run by user decision and is
+# not expected (the papers state it as deferred); T4b is run only after T4a
+# has been accepted, so a missing T4b record is listed with that reason.
 EXPECTED_TESTS = [
     "T0_Re100_np1", "T0_Re100_np4", "T0_Re1000_np1", "T0_Re1000_np4",
     "T1_np1", "T1_np4", "T2_np1", "T2_np4",
     "T3_kOmegaSST_np1", "T3_kOmegaSST_np4", "T3_GEKO_np1", "T3_GEKO_np4",
-    "T4a_np*", "T4b_np*", "T5*_np*",
+    "T4a_np*", "T4b_np*",
     "T-restart_T1", "T-restart_T3-SST", "T-fpe_*", "T_scaling_T4a",
     "diagnostics_*", "Test-*", "test_env",
 ]
+# reason shown in the appendix for an expected record that is missing
+EXPECTED_REASON = {
+    "T4b_np*": "not run yet (D-063: T4b only after T4a is accepted)",
+}
+# cases deferred by user decision (D-063): never listed as missing
+DEFERRED_CASES = ("T5",)
 # results/exploratory records the report quotes
 EXPLORATORY_USED = ("re1000", "linsolver", "symbol", "decisions")
 
@@ -136,7 +158,8 @@ def guard_tests(tests: dict) -> dict:
     for pat in EXPECTED_TESTS:
         if not any(fnmatch.fnmatch(n, pat) for n in tests):
             GUARD.missing(pat.replace("*", "<n>") if pat.endswith("_np*")
-                          else pat, "result record")
+                          else pat, "result record",
+                          EXPECTED_REASON.get(pat, "no result"))
     return ok
 
 
@@ -192,11 +215,15 @@ def prune_renders() -> None:
         prov = json.loads(pf.read_text()) if pf.exists() else {}
     except json.JSONDecodeError:
         prov = {}
+    flagged: dict[str, str] = {}
     for f in sorted(FIG_PDF.glob("render_*.png")):
         p = prov.get(f.name)
+        stale = False
         if p is None:
             ok = GUARD.check_record(f.stem, {}, "ParaView render "
                                     "(no render provenance)")
+            stale = True
+            why = "render without provenance record"
         elif not p.get("cfUsed"):
             ok = True       # simpleFoam reference and geometry only
         else:
@@ -204,9 +231,21 @@ def prune_renders() -> None:
                 f.stem, {"gitCommit": p.get("cfCommit"),
                          "timestamp": p.get("date")},
                 f"ParaView render of run/{p.get('cfRun')}")
+            stale = not GUARD.matches(p.get("cfCommit"))
+            why = (f"coupledFoam run run/{p.get('cfRun')} of commit "
+                   f"{str(p.get('cfCommit') or 'unknown')[:15]}")
         if not ok:
             f.unlink()
             notes.append(f"render {f.name}: stale, removed (pending)")
+        elif stale:
+            # kept with --allow-stale: flag it in the caption
+            # (\cfrenderflag{<case>} in both papers)
+            case = f.stem.split("_")[1] if f.stem.count("_") >= 2 else f.stem
+            flagged.setdefault(case, why)
+    for case, why in flagged.items():
+        num(f"render flag {case}",
+            r"\textbf{Stale render:} " + tex_escape(why)
+            + r", not the target commit (Appendix~\ref{app:missing}).")
 
 
 def write_missing_table() -> None:
@@ -287,16 +326,23 @@ def load_bench() -> list[dict]:
     for s in stale:
         notes.append(f"benchmark record {s} is stale (configHash mismatch), "
                      "excluded")
+    # failed runs (M3): never a timing; listed as missing in the appendix
+    for r in run_bench.load_failed():
+        why = "; ".join(map(str, r.get("failure") or [f"rc {r.get('rc')}"]))
+        tag = f"bench {r.get('case')} {r.get('config')} run {r.get('run', '?')}"
+        notes.append(f"benchmark run {tag} FAILED ({why}), excluded")
+        GUARD.missing(tag, "benchmark run", f"run failed: {why}"[:120])
     return recs
 
 
-def save(fig, name: str, caption: str) -> None:
+def save(fig, name: str, caption: str, layout: bool = True) -> None:
+    """Fixed-size PDF (printed at 1:1 by \\cffigure) and PNG; layout=False
+    when the figure function already laid it out (ps.legend_below)."""
     FIG_PNG.mkdir(parents=True, exist_ok=True)
     FIG_PDF.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(FIG_PNG / f"{name}.png")
-    fig.savefig(FIG_PDF / f"{name}.pdf")
-    plt.close(fig)
+    if layout:
+        ps.tight(fig)
+    ps.save(fig, FIG_PDF / f"{name}.pdf", FIG_PNG / f"{name}.png")
     figures.append((name, caption))
 
 
@@ -474,7 +520,7 @@ def fig_T0_profiles() -> None:
         except (FileNotFoundError, OSError, StopIteration):
             notes.append(f"T0 Re{re_} profiles: data missing")
             continue
-        fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.8))
+        fig, ax = plt.subplots(1, 2, figsize=(ps.WIDTH, 2.8))
         ax[0].plot(rv[:, 2], rv[:, 0] / 0.1, color=C_NATIVE, lw=2.5,
                    label="simpleFoam")
         ax[0].plot(cv[:, 2], cv[:, 0] / 0.1, color=C_COUPLED, lw=1, ls="--",
@@ -497,27 +543,45 @@ def fig_histories(tests: dict) -> None:
         if not h or not h.get("R"):
             continue
         it = np.arange(1, len(h["R"]) + 1)
-        fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.6))
-        ax[0].semilogy(it, h["R"], color=C_COUPLED, label="coupledFoam $R$")
+        fig, ax = plt.subplots(1, 2, figsize=(ps.WIDTH, 2.7))
+        ax[0].semilogy(it, h["R"], color=C_COUPLED, lw=1.4, zorder=4,
+                       label="coupledFoam $R$")
         case = RUN / name.replace("T0_", "ref_T0_").split("_np")[0] \
             if name.startswith("T0_") else None
+        nat_res = {}
         if case is not None and (case / "log.simpleFoam").exists():
             nat = logs.parse_native(case / "log.simpleFoam")
             for fld, ls in (("p", "-"), ("Ux", "--")):
                 if fld in nat["residuals"]:
                     r = nat["residuals"][fld]
+                    nat_res[fld] = (r, ls)
                     ax[0].semilogy(np.arange(1, len(r) + 1), r, color=C_NATIVE,
-                                   ls=ls, lw=0.8, label=f"simpleFoam {fld}")
+                                   ls=ls, lw=1.0, label=f"simpleFoam {fld}")
         ax[0].set_xlabel("iteration")
         ax[0].set_ylabel("residual")
-        ax[0].legend(fontsize=7)
-        ax[1].semilogy(it, h["CFL"], color=C_COUPLED, label="CFL")
+        ax[0].set_xlim(0, None)
+        ax[0].legend(loc="lower left", bbox_to_anchor=(0.06, 0.0))
+        # the short coupledFoam history on the common iteration axis: zoom
+        nmax = max([len(it)] + [len(r) for r, _ in nat_res.values()])
+        if nmax > 5 * len(it):
+            ins = ps.zoom_inset(ax[0], (0, 1.05 * len(it)),
+                                bounds=(0.50, 0.46, 0.47, 0.50),
+                                label=f"zoom: first {len(it)} it.", ylog=True)
+            ins.semilogy(it, h["R"], color=C_COUPLED, lw=1.2)
+            for fld, (r, ls) in nat_res.items():
+                k = min(len(r), int(1.05 * len(it)) + 1)
+                ins.semilogy(np.arange(1, k + 1), r[:k], color=C_NATIVE, ls=ls,
+                             lw=0.9)
+            ins.set_ylim(ax[0].get_ylim())
+        ax[1].semilogy(it, h["CFL"], color=C_COUPLED, lw=1.2, label="CFL")
         ax2 = ax[1].twinx()
-        ax2.plot(it, h["omega"], color="#d95f02", lw=0.8, label=r"$\omega$")
+        ax2.plot(it, h["omega"], color="#d95f02", lw=1.0, ls="--",
+                 label=r"$\omega$")
         ax2.set_ylim(0, 1.05)
-        ax2.set_ylabel(r"line-search $\omega$")
+        ax2.set_ylabel(r"line-search $\omega$ (dashed)", color="#d95f02")
+        ax2.grid(False)
         ax[1].set_xlabel("iteration")
-        ax[1].set_ylabel("CFL")
+        ax[1].set_ylabel("CFL (solid)", color=C_COUPLED)
         save(fig, f"{name}_history",
              f"{name}: residual, CFL and line-search $\\omega$ histories.")
 
@@ -533,7 +597,8 @@ def _bars(ax, rows, cases, cfgs, key, ylabel, log=True):
     for j, cfg in enumerate(cfgs):
         vals = [_med(rows, c, cfg, key) or 0 for c in cases]
         ax.bar(np.arange(len(cases)) + j * width, vals, width,
-               color=CONFIG_COLOR[cfg], label=CONFIG_LABEL[cfg])
+               color=CONFIG_COLOR.get(cfg, ps.GREY),
+               label=CONFIG_LABEL.get(cfg, f"coupledFoam, {cfg}"))
     ax.set_xticks(np.arange(len(cases)) + width * (len(cfgs) - 1) / 2)
     ax.set_xticklabels(cases)
     ax.set_ylabel(ylabel)
@@ -554,10 +619,11 @@ def fig_bench(rows: list[dict]) -> str:
         ("cpu_to_conv_h", "CPU time to convergence [CPU-h]", "bench_cpu"),
         ("iters_to_conv", "iterations to convergence", "bench_iters"),
     ):
-        fig, ax = plt.subplots(figsize=(6.5, 3.4))
+        fig, ax = plt.subplots(figsize=(ps.WIDTH, 3.4))
         _bars(ax, rows, cases, cfgs, key, ylabel)
-        ax.legend(fontsize=6, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.12))
-        save(fig, fname, f"Benchmark: {ylabel} (median of the repeats).")
+        ps.legend_below(fig, *ax.get_legend_handles_labels(), ncol=3)
+        save(fig, fname, f"Benchmark: {ylabel} (median of the repeats).",
+             layout=False)
 
     # Time per iteration breakdown of coupledFoam: wall and CPU
     br = [(c, _med(rows, c, "C", "t_assembly"), _med(rows, c, "C", "t_linsolve"),
@@ -566,7 +632,7 @@ def fig_bench(rows: list[dict]) -> str:
            _med(rows, c, "C", "cpu_per_iter_s")) for c in cases]
     br = [b for b in br if b[4] and None not in b[1:4]]
     if br:
-        fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.6))
+        fig, ax = plt.subplots(1, 2, figsize=(ps.WIDTH, 2.6))
         x = np.arange(len(br))
         a = np.array([b[1] / b[4] for b in br])
         s = np.array([b[2] / b[4] for b in br])
@@ -585,7 +651,7 @@ def fig_bench(rows: list[dict]) -> str:
             ax[k].set_xticklabels([b[0] for b in br])
         ax[0].set_ylabel("wall time per iteration [s]")
         ax[1].set_ylabel("CPU time per iteration [CPU-s]")
-        ax[0].legend(fontsize=7)
+        ax[0].legend(fontsize=ps.FS_LEGEND)
         save(fig, "bench_breakdown",
              "coupledFoam time per iteration: assembly, linear solve, "
              "turbulence; wall (left) and CPU summed over ranks (right, "
@@ -629,7 +695,7 @@ def fig_bench(rows: list[dict]) -> str:
 def fig_memory(rows: list[dict], cases: list[str], cfgs: list[str]) -> None:
     """Peak RSS per case and configuration with the B7 budget scaled to the
     case's cell count (coupledFoam)."""
-    fig, ax = plt.subplots(figsize=(6.5, 3.4))
+    fig, ax = plt.subplots(figsize=(ps.WIDTH, 3.4))
     _bars(ax, rows, cases, cfgs, "peakRSS_GB_sum",
           "peak RSS, sum over ranks [GiB]", log=True)
     width = 0.8 / max(1, len(cfgs))
@@ -645,10 +711,11 @@ def fig_memory(rows: list[dict], cases: list[str], cfgs: list[str]) -> None:
         first = False
         mc = _med(rows, c, "C", "peakRSS_GB_sum")
         num(f"memory budget ratio {c}", mc / hi if mc else None, "{:.2f}")
-    ax.legend(fontsize=6, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.12))
+    ps.legend_below(fig, *ax.get_legend_handles_labels(), ncol=3)
     save(fig, "bench_memory",
          "Peak memory (sum of the per-rank maximum RSS) against the B7 "
-         "budget (105-120 GB at 45 M cells) scaled per cell (grey band).")
+         "budget (105-120 GB at 45 M cells) scaled per cell (grey band).",
+         layout=False)
 
 
 def tests_table(tests: dict) -> str:
@@ -681,29 +748,40 @@ def tests_table(tests: dict) -> str:
 # --------------------------------------------------------------------------- #
 
 def fig_eta_rho(tests: dict) -> None:
-    """Eisenstat-Walker eta and preconditioner rho histories (15.7)."""
+    """Eisenstat-Walker eta and preconditioner rho histories (15.7): one row
+    per run (small multiples; overlaid oscillating histories were
+    unreadable), eta left, rho right."""
     cand = [(n, d) for n, d in tests.items()
             if (d.get("history") or {}).get("eta")]
     if not cand:
         notes.append("eta/rho history: no data")
         return
-    fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.6))
-    for name, d in sorted(cand)[:4]:
+    cand = sorted(cand)[:4]
+    fig, ax = plt.subplots(len(cand), 2, figsize=(ps.WIDTH, 1.25 * len(cand) + 0.45),
+                           squeeze=False, sharex="row")
+    for r, (name, d) in enumerate(cand):
         h = d["history"]
-        eta = [e if e is not None else np.nan for e in h["eta"]]
+        eta = np.array([e if e is not None else np.nan for e in h["eta"]], float)
         it = np.arange(1, len(eta) + 1)
-        ax[0].semilogy(it, eta, lw=0.9, label=name)
-        rho = [r if (r is not None and r >= 0) else np.nan
-               for r in h.get("rho") or []]
-        if rho:
-            ax[1].plot(np.arange(1, len(rho) + 1), rho, lw=0.9, label=name)
+        ps.trace(ax[r, 0], it, eta, C_COUPLED, log=True, lw=0.9)
+        ax[r, 0].set_yscale("log")
+        rho = np.array([x if (x is not None and x >= 0) else np.nan
+                        for x in h.get("rho") or []], float)
+        if rho.size:
+            ps.trace(ax[r, 1], np.arange(1, len(rho) + 1), rho, C_NATIVE, lw=0.9)
+            ps.robust_ylim(ax[r, 1], [(np.arange(1, len(rho) + 1), rho, C_NATIVE)],
+                           skip_frac=0.1, pct=(0.5, 99.5), margin=0.15)
         for ev in d.get("gamgTuneEvents") or []:
-            ax[1].axvline(ev.get("iter", 0), color="k", lw=0.5, ls=":")
-    ax[0].set_xlabel("iteration")
-    ax[0].set_ylabel(r"$\eta_n$")
-    ax[1].set_xlabel("iteration")
-    ax[1].set_ylabel(r"$\rho$ (first preconditioner application)")
-    ax[0].legend(fontsize=6)
+            for a in ax[r]:
+                a.axvline(ev.get("iter", 0), color="k", lw=0.6, ls=":")
+        ax[r, 0].set_ylabel(r"$\eta_n$")
+        ax[r, 1].set_ylabel(r"$\rho$")
+        ax[r, 0].set_title(name.replace("_", " "), loc="left", fontsize=ps.FS)
+        ax[r, 0].set_xlim(0, len(eta) * 1.02)
+    ax[-1, 0].set_xlabel("iteration")
+    ax[-1, 1].set_xlabel("iteration")
+    ax[0, 1].set_title(r"$\rho$: first preconditioner application; dotted: "
+                       "autoTune events", loc="right", fontsize=ps.FS_NOTE)
     save(fig, "eta_rho_history",
          "Eisenstat-Walker forcing term and preconditioner efficiency; "
          "dotted lines: autoTune events.")
@@ -733,7 +811,7 @@ def fig_cycles(tests: dict) -> None:
             notes.append(f"cycle comparison: {tname} has no iteration counts")
             continue
         npan = 3 if any(cpu.get(c) for c in names) else 2
-        fig, ax = plt.subplots(1, npan, figsize=(6.5, 2.4))
+        fig, ax = plt.subplots(1, npan, figsize=(ps.WIDTH, 2.4))
         ax[0].bar(names, [its[c] or 0 for c in names], color=C_COUPLED)
         ax[0].set_ylabel("Krylov iterations")
         ax[1].bar(names, [wall.get(c) or 0 for c in names], color=C_COUPLED2)
@@ -755,23 +833,27 @@ def fig_cycles(tests: dict) -> None:
 
 
 def fig_bench_cycles(rows: list[dict]) -> None:
-    """Benchmark C (K, autoTune) vs H (fixed K) vs E (fixed V): wall and
-    CPU-hours to convergence on the B10 cycle cases."""
-    sel = [d for d in rows if d["config"] in ("C", "E", "H")]
-    cases = sorted({d["case"] for d in sel if d["config"] == "E"})
+    """Benchmark cycle comparison (D-068): C (default V-cycle) vs H (fixed
+    K-cycle) vs H-tune (K-cycle with autoTune): wall time and CPU-hours to
+    convergence on the cases that ran H or H-tune."""
+    cyc = ("C", "H", "H-tune")
+    sel = [d for d in rows if d["config"] in cyc]
+    cases = sorted({d["case"] for d in sel if d["config"] in ("H", "H-tune")})
     if not cases:
-        notes.append("benchmark cycle comparison: no configuration E results")
+        notes.append("benchmark cycle comparison: no configuration H / "
+                     "H-tune results")
         return
-    cfgs = [c for c in ("C", "H", "E") if any(d["config"] == c for d in sel)]
-    fig, ax = plt.subplots(1, 2, figsize=(6.5, 2.6))
+    cfgs = [c for c in cyc if any(d["config"] == c for d in sel)]
+    fig, ax = plt.subplots(1, 2, figsize=(ps.WIDTH, 2.8))
     _bars(ax[0], sel, cases, cfgs, "wall_to_conv_s",
           "wall time to convergence [s]", log=False)
     _bars(ax[1], sel, cases, cfgs, "cpu_to_conv_h",
           "CPU time to convergence [CPU-h]", log=False)
-    ax[0].legend(fontsize=7)
+    ps.legend_below(fig, *ax[0].get_legend_handles_labels(), ncol=3)
     save(fig, "bench_cycles",
-         "Benchmark: default K-cycle with autoTune (C), fixed K-cycle (H) "
-         "and fixed V-cycle (E): wall time and CPU-hours to convergence.")
+         "Benchmark: default V-cycle (C), fixed K-cycle (H) and K-cycle "
+         "with autoTune (H-tune): wall time and CPU-hours to convergence.",
+         layout=False)
 
 
 def fig_anderson(rows: list[dict]) -> None:
@@ -780,7 +862,7 @@ def fig_anderson(rows: list[dict]) -> None:
     if not cases:
         notes.append("Anderson comparison: no configuration G results")
         return
-    fig, ax = plt.subplots(1, 3, figsize=(6.5, 2.4))
+    fig, ax = plt.subplots(1, 3, figsize=(ps.WIDTH, 2.4))
     x = np.arange(len(cases))
     for j, (cfg, col, lab) in enumerate((("C", C_COUPLED, "Anderson off"),
                                          ("G", "#d95f02", "Anderson on"))):
@@ -794,7 +876,7 @@ def fig_anderson(rows: list[dict]) -> None:
     ax[0].set_ylabel("iterations to convergence")
     ax[1].set_ylabel("wall time to conv. [s]")
     ax[2].set_ylabel("CPU time to conv. [CPU-h]")
-    ax[0].legend(fontsize=7)
+    ax[0].legend(fontsize=ps.FS_LEGEND)
     save(fig, "anderson", "Anderson acceleration on and off (15.7).")
 
 
@@ -808,7 +890,7 @@ def fig_scaling(tests: dict) -> None:
                         ("coupledFoam", "simpleFoam")):
         notes.append("strong scaling: no T-scaling result")
         return
-    fig, ax = plt.subplots(1, 3, figsize=(6.5, 2.4))
+    fig, ax = plt.subplots(1, 3, figsize=(ps.WIDTH, 2.4))
     for solver, col in (("simpleFoam", C_NATIVE), ("coupledFoam", C_COUPLED)):
         s = d.get(solver) or {}
         tpi = {int(k): v for k, v in (s.get("timePerIter_s") or {}).items()
@@ -830,26 +912,42 @@ def fig_scaling(tests: dict) -> None:
     ax[1].set_ylabel("parallel efficiency")
     ax[2].set_xlabel("ranks")
     ax[2].set_ylabel(f"CPU-h per run ({d.get('iterations', '?')} it.)")
-    ax[0].legend(fontsize=7)
+    ax[0].legend(fontsize=ps.FS_LEGEND)
     save(fig, "scaling", f"Strong scaling (T-scaling on {d.get('mesh', 'T4b')}).")
     num("scaling ranks max", d.get("efficiencyRanks"), "{}")
     num("scaling rel efficiency", d.get("relativeEfficiency"), "{:.2f}")
 
 
 def fig_remediation(tests: dict) -> None:
+    """Dynamic remediation set size per run: one panel per run on its own
+    iteration axis (small multiples; overlaid step lines were unreadable)."""
     cand = [(n, d) for n, d in tests.items()
             if (d.get("history") or {}).get("nDyn")
             and n.startswith(("T4", "T5", "T-fpe", "T1", "T3"))]
     if not cand:
         notes.append("remediation history: no data")
         return
-    fig, ax = plt.subplots(figsize=(6.5, 2.4))
-    for name, d in sorted(cand)[:5]:
-        nd = d["history"]["nDyn"]
-        ax.plot(np.arange(1, len(nd) + 1), nd, lw=0.9, label=name)
-    ax.set_xlabel("iteration")
-    ax.set_ylabel("cells in the dynamic set")
-    ax.legend(fontsize=6)
+    cand = sorted(cand)[:6]
+    ncol = 2 if len(cand) > 2 else 1
+    nrow = int(np.ceil(len(cand) / ncol))
+    fig, axs = plt.subplots(nrow, ncol, figsize=(ps.WIDTH, 1.35 * nrow + 0.35),
+                            squeeze=False, sharey=True)
+    for k, (name, d) in enumerate(cand):
+        ax = axs[k // ncol, k % ncol]
+        nd = np.asarray(d["history"]["nDyn"], float)
+        it = np.arange(1, len(nd) + 1)
+        if len(nd) > ps.RAW_MAX:
+            ps.envelope(ax, it, nd, C_COUPLED, nbins=150, lw=1.0)
+        else:
+            ax.step(it, nd, where="mid", color=C_COUPLED, lw=0.9)
+        ax.set_xlim(0, len(nd) * 1.02)
+        ax.set_title(name.replace("_", " "), loc="left", fontsize=ps.FS)
+        if k % ncol == 0:
+            ax.set_ylabel("cells in the\ndynamic set")
+        if k // ncol == nrow - 1 or k + ncol >= len(cand):
+            ax.set_xlabel("iteration")
+    for k in range(len(cand), nrow * ncol):
+        axs[k // ncol, k % ncol].axis("off")
     save(fig, "remediation_history", "Dynamic remediation set size.")
 
 
@@ -902,17 +1000,20 @@ def table_validation(tests: dict) -> str:
     note = None
     if osc_rows:
         ft = run_bench.FIELD_TOL
-        note = ("† Oscillating wake: stationary window mean over the "
-                f"last W = max({run_bench.STAT_WINDOW_MIN}, "
-                f"n/{run_bench.STAT_WINDOW_DIV}) iterations (capped at n), "
+        note = ("† Oscillating wake: stationary window mean over "
+                f"the last W = {run_bench.case_window('T4a')} iterations "
+                "(T4a, T4b), the same window for both "
+                "solvers of the case (D-068), capped at n, "
                 "mean ± standard deviation; tolerance max(relative, "
                 "absolute) of the simpleFoam mean (averaged force "
                 "criterion, D-042 addendum). Field RMS dU / dp: "
                 "volume-weighted RMS of the mean-velocity difference "
                 "(magnitude, over U_inf) and of the mean-pressure "
                 "difference (over the free-stream dynamic pressure) "
-                "between the solvers, fields averaged over the same "
-                "window (coupledFieldCompare); proposed limits "
+                "between the solvers (coupledFieldCompare; coupledFoam "
+                "averaged over its last W iterations, the cached simpleFoam "
+                "references over their continuation of 1500 (T4a) or 2000 "
+                "(T4b) iterations); proposed limits "
                 f"{ft['volRmsMagUDeltaRel']:.0%} / "
                 f"{ft['volRmsPDeltaRel']:.0%}; n/a: not evaluated.")
     return write_table("validation", header, rows,
@@ -1016,9 +1117,11 @@ def table_b10(rows: list[dict]) -> str:
         num(f"{k} dcpu", pct(r.get("dCpu_X_vs_C")).replace("%", r"\%"))
         num(f"{k} status", r.get("status"))
     return write_table("b10_acceptance", header, tab,
-                       "Amendment B10: configurations E (fixed V-cycle), "
-                       "F (fixed relTol), G (Anderson) and H (fixed K-cycle) "
-                       "against C; d = X/C$-$1 (positive: X slower). Pass "
+                       "Amendment B10: configurations D, F, G, H (fixed "
+                       "K-cycle), H-tune (K-cycle with autoTune) and the E-* "
+                       "variants of the defaults against C (V-cycle, "
+                       "autoTune off; D-068); d = X/C$-$1 (positive: "
+                       "X slower). Pass "
                        "criterion only for F: C at most 5\\,\\% slower than F "
                        "in wall time and CPU-hours and $C_d$ or $\\Delta p$ "
                        "identical to $10^{-4}$.", "tab:btenacc", resize=True)
@@ -1027,6 +1130,20 @@ def table_b10(rows: list[dict]) -> str:
 # --------------------------------------------------------------------------- #
 # speed-up figures from the test records and the run logs
 # --------------------------------------------------------------------------- #
+
+def _t5_run() -> str:
+    """T5 test-run name the report shows (m7): CF_T5_MESH if set, else the
+    variant (fine, then coarse) that has a test record, else the fine one."""
+    import os  # noqa: PLC0415
+    env = os.environ.get("CF_T5_MESH")
+    for v in ([env] if env else []) + ["fine", "coarse"]:
+        n = run_bench.t5_run_name(run_bench.HEAVY_NP, v)
+        if (RESULTS / "tests" / f"{n}.json").exists():
+            return n
+    return run_bench.t5_run_name(run_bench.HEAVY_NP, env or "fine")
+
+
+T5_RUN = _t5_run()
 
 # (label, test record, coupledFoam run dir, simpleFoam reference dir)
 SPEED_CASES = [
@@ -1038,7 +1155,7 @@ SPEED_CASES = [
     ("T3 GEKO", "T3_GEKO_np1", "T3_GEKO_np1", "ref_T3_GEKO"),
     ("T4a", "T4a_np10", "T4a_np10", "ref_T4a_np10"),
     ("T4b", "T4b_np10", "T4b_np10", "ref_T4b_np10"),
-    ("T5", "T5_np10", "T5_np10", "ref_T5_np10"),
+    ("T5", T5_RUN, T5_RUN, "ref_" + T5_RUN),
 ]
 BUSY_MINUTES = 10.0   # a log written less than this ago belongs to a live run
 _RES_LINE = logs._RES
@@ -1118,50 +1235,189 @@ def sf_timeline(case: Path) -> dict | None:
             "n": n}
 
 
+# Residual target of the speed-up on the residual cases when the record does
+# not carry one (T2: tests/test_T2 R_TARGET)
+SPEED_R_DEFAULT = 1e-5
+
+
+def speed_criterion(rec_name: str, d: dict) -> tuple[str, float | None]:
+    """Criterion both solvers are timed to in the speed-up (M1, D-068):
+    ("residual", R) on T0-T2 - the test's R target of coupledFoam's combined
+    residual, applied to simpleFoam as "every initial residual of the log
+    below R" (the D-024 definition of T2); ("forceWindow", None) on T3 -
+    spec 12.3(ii), the 100-iteration Cd/Cl window; ("stationary", None) on
+    the wake cases - the D-042 point under the case's common window
+    (D-068)."""
+    if str(d.get("criterion", "")).startswith("stationaryMean") or \
+            run_bench.is_oscillatory(run_bench.case_of_run(rec_name) or ""):
+        return "stationary", None
+    if rec_name.startswith("T3"):
+        return "forceWindow", None
+    return "residual", float(d.get("Rtarget") or SPEED_R_DEFAULT)
+
+
+def _sf_residual_iteration(sft: dict | None, target: float) -> int | None:
+    """First simpleFoam iteration at which EVERY initial residual of the log
+    (first solve of each field per iteration: p, Ux, Uy, [Uz], k, omega, ...)
+    is below `target`."""
+    if not sft or not sft["res"]:
+        return None
+    hist = list(sft["res"].values())
+    n = min(len(h) for h in hist)
+    for i in range(n):
+        if all(h[i] < target for h in hist):
+            return i + 1
+    return None
+
+
+def _frac(tl: dict | None, it: int | None, n: int | None) -> float | None:
+    """Wall-clock fraction of a run spent up to iteration `it` (timeline of
+    cf_timeline / sf_timeline; iteration share without one)."""
+    if it is None:
+        return None
+    if tl is not None and len(tl["t"]) and it <= len(tl["t"]) \
+            and tl["t"][-1] > 0:
+        return float(tl["t"][it - 1] / tl["t"][-1])
+    return it / n if n else None
+
+
 def _speed_record(tests: dict, rec: str, cfd: str, sfd: str) -> dict | None:
     """Wall time and CPU-hours to convergence of both solvers for one case,
-    with flags for 'did not reach the criterion' (then: whole run, a lower
-    bound for the time to convergence)."""
+    both timed to the SAME criterion (speed_criterion; review M1, D-068):
+
+    residual (T0-T2)  coupledFoam: first R < R_target (iterationsToR);
+                      simpleFoam: first iteration with every initial
+                      residual < R_target (its log). Times: solver only
+                      (coupledFoam solver loop, simpleFoam ClockTime), the
+                      wall-clock fraction of the run up to that iteration.
+    forceWindow (T3)  12.3(ii) on both force histories (a D-060 user point
+                      from the record takes precedence); times as above.
+    stationary (T4/T5) the D-042 point under the case's common window
+                      (D-068) from the test record (wallToConv_s,
+                      cpuHoursToConv: rank timing incl. potentialFoam), or
+                      recomputed from the run directories for records
+                      written before D-068; the per-run-window values are
+                      added as *_perRun. Flags of review M2
+                      (run_bench.reference_timing_flags).
+
+    A solver that never reaches the criterion is shown with its whole run
+    (conv_* False; for simpleFoam the speed-up is then a lower bound).
+    it_*_conv are the convergence iterations (None if not reached)."""
     d = tests.get(rec)
     if not d:
         return None
+    # M9: the run directory read below must still be this record's run
+    if (RUN / cfd).is_dir() and not GUARD.check_record_run(rec, d, RUN / cfd):
+        return None
     ref = d.get("reference") or {}
+    kind, target = speed_criterion(rec, d)
+    out: dict = {"criterion": kind, "Rtarget": target,
+                 "np_cf": d.get("nProcs") or 1,
+                 "np_sf": ref.get("nProcs") or 1}
+    if kind == "stationary":
+        return _speed_record_stationary(d, ref, cfd, sfd, out)
+
+    # ---- coupledFoam
     n_cf = d.get("iterations")
-    it_cf = d.get("iterationsToR") or d.get("iterationsToR_coupled")
     wall_cf_run = d.get("wallSecondsSolver") or d.get("wallSeconds")
     cpu_cf_run = d.get("cpuHoursSolver") or d.get("cpuHours")
     if not (n_cf and wall_cf_run and cpu_cf_run):
         return None
-    # records without an iteration count to the residual target (T3: the
-    # residual target was not reached in the 3000 iterations) count as not
-    # converged; the bar is then the whole run
-    conv_cf = bool(it_cf)
     cft = cf_timeline(RUN / cfd)
-    if conv_cf and cft is not None and it_cf <= len(cft["t"]):
-        frac = cft["t"][it_cf - 1] / cft["t"][-1]
-    elif conv_cf:
-        frac = it_cf / n_cf
+    if kind == "residual":
+        it_cf = d.get("iterationsToR") or d.get("iterationsToR_coupled")
+        if it_cf is None and cft is not None:
+            hit = np.nonzero(cft["R"] < target)[0]
+            it_cf = int(hit[0]) + 1 if hit.size else None
     else:
-        frac = 1.0
-    it_sf = ref.get("convergedAt")
-    n_sf = ref.get("iterations")
-    conv_sf = it_sf is not None
+        it_cf = d.get("itersToConv")
+        if it_cf is None and run_ok(RUN / cfd):
+            it_cf = run_bench.iters_to_conv(run_bench.force_history(RUN / cfd))
+        if it_cf is None and cft is not None and \
+                cft["summary"].get("converged"):
+            it_cf = n_cf        # the solver's own stop (R below its tolerance)
+    f_cf = _frac(cft, it_cf, n_cf)
+
+    # ---- simpleFoam reference
+    sft = sf_timeline(RUN / sfd)
+    n_sf = ref.get("iterations") or (sft["n"] if sft else None)
     ta = ref.get("timingAllrun") or {}
-    wall_sf = ref.get("wallSecondsSolver") or ref.get("wallSeconds") \
+    wall_sf_run = (float(sft["t"][-1]) if sft else None) \
+        or ref.get("wallSecondsSolver") or ref.get("wallSeconds") \
         or ta.get("wallSeconds")
-    cpu_sf = ta.get("cpuHours") or ref.get("cpuHours")
-    nproc_sf = ref.get("nProcs") or 1
-    if cpu_sf is None and wall_sf:
-        cpu_sf = wall_sf * nproc_sf / 3600.0   # serial reference: CPU = wall
-    if not wall_sf:
+    cpu_sf_run = ref.get("cpuHours") or ta.get("cpuHours")
+    if cpu_sf_run is None and wall_sf_run:
+        cpu_sf_run = wall_sf_run * out["np_sf"] / 3600.0  # serial: CPU = wall
+    if not wall_sf_run:
         return None
-    return {
-        "wall_cf": wall_cf_run * frac, "cpu_cf": cpu_cf_run * frac,
+    if kind == "residual":
+        it_sf = _sf_residual_iteration(sft, target)
+    else:
+        u = ref.get("user") or {}
+        if u and not u.get("ignored"):
+            it_sf = ref.get("itersToConv")       # D-060 user point
+        elif (RUN / sfd).is_dir():
+            it_sf = run_bench.iters_to_conv(run_bench.force_history(RUN / sfd))
+        else:
+            it_sf = ref.get("itersToConv")
+    f_sf = _frac(sft, it_sf, n_sf)
+    conv_cf, conv_sf = f_cf is not None, f_sf is not None
+    out.update({
+        "wall_cf": wall_cf_run * (f_cf if conv_cf else 1.0),
+        "cpu_cf": cpu_cf_run * (f_cf if conv_cf else 1.0),
         "it_cf": it_cf if conv_cf else n_cf, "conv_cf": conv_cf,
-        "wall_sf": wall_sf, "cpu_sf": cpu_sf,
+        "it_cf_conv": it_cf if conv_cf else None, "n_cf": n_cf,
+        "wall_sf": wall_sf_run * (f_sf if conv_sf else 1.0),
+        "cpu_sf": cpu_sf_run * (f_sf if conv_sf else 1.0),
         "it_sf": it_sf if conv_sf else n_sf, "conv_sf": conv_sf,
-        "np_cf": d.get("nProcs") or 1, "np_sf": nproc_sf,
-    }
+        "it_sf_conv": it_sf if conv_sf else None, "n_sf": n_sf,
+    })
+    return out
+
+
+def _speed_record_stationary(d: dict, ref: dict, cfd: str, sfd: str,
+                             out: dict) -> dict | None:
+    """Wake cases (T4, T5): see _speed_record."""
+    case = run_bench.case_of_run(cfd)
+    user = d.get("convergenceSource") == "user"
+    common = str(d.get("windowRule", "")).startswith("common")
+    pts = {}
+    for side, r, rdir, solver in (("cf", d, RUN / cfd, "coupledFoam"),
+                                  ("sf", ref, RUN / sfd, "simpleFoam")):
+        p: dict = {}
+        if (user or common) and r.get("wallToConv_s") is not None:
+            p = {"iters": r.get("itersToConv"), "wall": r.get("wallToConv_s"),
+                 "cpuh": r.get("cpuHoursToConv"),
+                 "iters_perRun": r.get("iters_to_stationary_perRun"),
+                 "wall_perRun": r.get("wallToConv_s_perRun"),
+                 "cpuh_perRun": r.get("cpuHoursToConv_perRun"),
+                 "n": r.get("iterationsRun") or r.get("iterations"),
+                 "wallTotal": r.get("wallSeconds"),
+                 "cpuhTotal": r.get("cpuHours")}
+        elif rdir.is_dir() and (side == "sf" or run_ok(rdir)):
+            # record from before D-068: recompute from the run directory
+            p = run_bench.stationary_point(rdir, solver, case)
+        if not p or not p.get("wallTotal"):
+            return None
+        pts[side] = p
+    for s, p in pts.items():
+        conv = p.get("wall") is not None and p.get("iters") is not None
+        out.update({
+            f"wall_{s}": p["wall"] if conv else p["wallTotal"],
+            f"cpu_{s}": p["cpuh"] if conv else p["cpuhTotal"],
+            f"it_{s}": p["iters"] if conv else p.get("n"),
+            f"conv_{s}": conv, f"it_{s}_conv": p["iters"] if conv else None,
+            f"n_{s}": p.get("n"),
+            f"wall_{s}_perRun": p.get("wall_perRun"),
+            f"cpu_{s}_perRun": p.get("cpuh_perRun"),
+            f"it_{s}_perRun": p.get("iters_perRun"),
+        })
+    for k in ("wall", "cpu"):
+        a, b = out.get(f"{k}_sf_perRun"), out.get(f"{k}_cf_perRun")
+        out[f"speedup_{k}_perRun"] = a / b if a and b else None
+    out["W"] = case and run_bench.case_window(case)
+    out.update(run_bench.reference_timing_flags(RUN / sfd, ref))
+    return out
 
 
 def fig_speed(tests: dict) -> None:
@@ -1179,45 +1435,50 @@ def fig_speed(tests: dict) -> None:
     if avail:
         ncol = 3
         nrow = int(np.ceil(len(avail) / ncol))
-        fig, axs = plt.subplots(nrow, ncol, figsize=(6.5, 2.1 * nrow),
+        fig, axs = plt.subplots(nrow, ncol, figsize=(ps.WIDTH, 1.95 * nrow + 0.5),
                                 squeeze=False)
         for ax, (lab, rec, cft, sft) in zip(axs.flat, avail):
+            # long noisy histories: min-max band + median over bins that are
+            # uniform on the log time axis
             if sft is not None:
                 for f, ls in (("p", "-"), ("Ux", "--")):
                     r = sft["res"].get(f)
                     if r is not None and len(r):
-                        ax.semilogy(sft["t"][:len(r)], r, color=C_NATIVE,
-                                    ls=ls, lw=1.2, zorder=3,
-                                    label=f"simpleFoam {f}")
+                        ps.trace(ax, sft["t"][:len(r)], r, C_NATIVE, ls=ls,
+                                 log=True, xlog=True, lw=1.1, median_lw=1.1,
+                                 band_alpha=0.15, nbins=120, z=3,
+                                 label=f"simpleFoam {f}")
             if cft is not None:
-                ax.semilogy(cft["t"], cft["R"], color=C_COUPLED, lw=1.4,
-                            zorder=4, label="coupledFoam $R$")
+                ps.trace(ax, cft["t"], cft["R"], C_COUPLED, log=True, xlog=True,
+                         lw=1.3, median_lw=1.3, band_alpha=0.18, nbins=120,
+                         z=4, label="coupledFoam $R$")
             else:
-                ax.text(0.5, 0.5, "coupledFoam\npending", ha="center",
-                        va="center", transform=ax.transAxes, fontsize=7,
-                        color=C_COUPLED)
+                ps.note(ax, "coupledFoam\npending", loc="center", color=C_COUPLED)
+            ax.set_yscale("log")
             ax.set_xscale("symlog", linthresh=1.0)
-            ax.set_title(lab, fontsize=8)
-            ax.set_xlabel("wall-clock time [s]", fontsize=7)
-            ax.tick_params(labelsize=6)
+            ax.set_xlim(0, None)
+            ax.set_title(lab)
         for ax in list(axs.flat)[len(avail):]:
             ax.axis("off")
+        for k, ax in enumerate(list(axs.flat)[:len(avail)]):
+            if k + ncol >= len(avail):
+                ax.set_xlabel("wall-clock time [s]")
         for r in range(nrow):
-            axs[r, 0].set_ylabel("residual", fontsize=7)
-        axs.flat[0].legend(fontsize=6, loc="lower left")
+            axs[r, 0].set_ylabel("residual")
+        ps.legend_below(fig, ncol=3, h_pad=0.8)
         save(fig, "speed_residual_wall",
              "Residual against wall-clock time on the same axes: "
              "coupledFoam combined residual $R$ (blue) and simpleFoam "
              "initial residuals of $p$ and $U_x$ (orange). The two residual "
              "normalisations differ (Section 3.2); the time axis is the "
-             "comparable quantity.")
+             "comparable quantity.", layout=False)
 
     # ---- (b) wall time and CPU-hours to convergence with speed-ups
     recs = [(lab, _speed_record(tests, rec, cfd, sfd))
             for lab, rec, cfd, sfd in SPEED_CASES]
     recs = [(lab, r) for lab, r in recs if r]
     if recs:
-        fig, axs = plt.subplots(1, 2, figsize=(6.5, 3.0))
+        fig, axs = plt.subplots(1, 2, figsize=(ps.WIDTH, 3.0))
         x = np.arange(len(recs))
         w = 0.38
         for ax, key, ylab in ((axs[0], "wall", "wall-clock time [s]"),
@@ -1233,20 +1494,20 @@ def fig_speed(tests: dict) -> None:
             for i, (_, r) in enumerate(recs):
                 a, b = r[f"{key}_sf"], r[f"{key}_cf"]
                 if not r["conv_cf"]:
-                    txt = "not conv."
+                    txt = "not\nconv."
                 else:
                     txt = f"{'≥' if not r['conv_sf'] else ''}{a / b:.1f}×"
                 ax.text(i, max(a, b) * 1.25, txt, ha="center", va="bottom",
-                        fontsize=6)
+                        fontsize=ps.FS_NOTE)
             ax.set_yscale("log")
             ax.set_xticks(x)
-            ax.set_xticklabels([lab for lab, _ in recs], fontsize=6,
-                               rotation=30)
-            ax.set_ylabel(ylab, fontsize=7)
-            ax.tick_params(labelsize=6)
+            ax.set_xticklabels([lab for lab, _ in recs], fontsize=ps.FS_NOTE,
+                               rotation=30, ha="right", rotation_mode="anchor")
+            ax.set_ylabel(ylab, fontsize=ps.FS_LEGEND)
+            ax.tick_params(labelsize=ps.FS_TICK)
             lo, hi = ax.get_ylim()
             ax.set_ylim(lo, hi * 3)
-        axs[0].legend(fontsize=6, loc="upper left")
+        axs[0].legend(fontsize=ps.FS_NOTE, loc="upper left")
         save(fig, "speed_time_to_conv",
              "Wall-clock time (left) and CPU-hours (right) to convergence, "
              "simpleFoam (orange) and coupledFoam (blue), serial runs; "
@@ -1277,7 +1538,7 @@ def fig_speed(tests: dict) -> None:
         br.append((lab, np.nanmean(cft["tAsm"]), np.nanmean(cft["tSolve"]),
                    np.nanmean(cft["tTurb"]), np.nanmean(cft["tIter"]), per_sf))
     if br:
-        fig, axs = plt.subplots(1, 2, figsize=(6.5, 2.7))
+        fig, axs = plt.subplots(1, 2, figsize=(ps.WIDTH, 2.7))
         x = np.arange(len(br))
         a = np.array([b[1] for b in br])
         s = np.array([b[2] for b in br])
@@ -1294,9 +1555,9 @@ def fig_speed(tests: dict) -> None:
                    linewidth=0.5)
         axs[0].bar(x, other / tot, bottom=(a + s + t) / tot, color="#d9d9d9",
                    label="other", edgecolor="white", linewidth=0.5)
-        axs[0].set_ylabel("share of the iteration time", fontsize=7)
+        axs[0].set_ylabel("share of the iteration time", fontsize=ps.FS_LEGEND)
         axs[0].set_ylim(0, 1.0)
-        axs[0].legend(fontsize=6, loc="upper center",
+        axs[0].legend(fontsize=ps.FS_NOTE, loc="upper center",
                       bbox_to_anchor=(0.5, -0.25), ncol=2)
         w = 0.38
         per_sf = np.array([b[5] if b[5] else np.nan for b in br])
@@ -1306,16 +1567,17 @@ def fig_speed(tests: dict) -> None:
             if np.isfinite(per_sf[i]) and per_sf[i] > 0:
                 axs[1].text(i, max(per_sf[i], tot[i]) * 1.3,
                             f"{tot[i] / per_sf[i]:.1f}×", ha="center",
-                            fontsize=6)
+                            fontsize=ps.FS_NOTE)
         axs[1].set_yscale("log")
         lo, hi = axs[1].get_ylim()
         axs[1].set_ylim(lo, hi * 3)
-        axs[1].set_ylabel("wall time per outer iteration [s]", fontsize=7)
-        axs[1].legend(fontsize=6, loc="upper left")
+        axs[1].set_ylabel("wall time per outer iteration [s]", fontsize=ps.FS_LEGEND)
+        axs[1].legend(fontsize=ps.FS_NOTE, loc="upper left")
         for ax in axs:
             ax.set_xticks(x)
-            ax.set_xticklabels([b[0] for b in br], fontsize=6, rotation=30)
-            ax.tick_params(labelsize=6)
+            ax.set_xticklabels([b[0] for b in br], fontsize=ps.FS_NOTE, rotation=30,
+                               ha="right", rotation_mode="anchor")
+            ax.tick_params(labelsize=ps.FS_TICK)
         save(fig, "speed_iteration_cost",
              "coupledFoam time per outer iteration: share of assembly, "
              "linear solve and turbulence (left, mean over the run); wall "
@@ -1329,7 +1591,7 @@ def fig_speed(tests: dict) -> None:
 
     # ---- (d) iterations vs wall time trade-off
     if recs:
-        fig, ax = plt.subplots(figsize=(6.5, 3.2))
+        fig, ax = plt.subplots(figsize=(ps.WIDTH, 3.6))
         xs = [r["it_sf"] for _, r in recs] + [r["it_cf"] for _, r in recs]
         ys = [r["wall_sf"] for _, r in recs] + [r["wall_cf"] for _, r in recs]
         lx = np.logspace(np.log10(min(xs) / 2), np.log10(max(xs) * 2), 10)
@@ -1339,18 +1601,24 @@ def fig_speed(tests: dict) -> None:
             # label where the diagonal leaves the plot (right or top edge)
             xm = min(lx[-1], ytop / per) / 1.15
             if lx[0] < xm and min(ys) / 2 < per * xm:
-                ax.text(xm, per * xm, f"{per:g} s/it", fontsize=5,
+                ax.text(xm, per * xm, f"{per:g} s/it", fontsize=ps.FS_NOTE,
                         alpha=0.6, ha="right", va="bottom")
-        for lab, r in recs:
+        placed = []      # label positions (log10 x, log10 y), no overlaps
+        for lab, r in sorted(recs, key=lambda lr: -lr[1]["wall_cf"]):
             ax.annotate("", xy=(r["it_cf"], r["wall_cf"]),
                         xytext=(r["it_sf"], r["wall_sf"]),
                         arrowprops=dict(arrowstyle="->", color="#9e9e9e",
-                                        lw=0.7))
+                                        lw=0.8))
             ax.plot(r["it_sf"], r["wall_sf"], "o", color=C_NATIVE, ms=5,
                     mfc="white" if not r["conv_sf"] else C_NATIVE)
             ax.plot(r["it_cf"], r["wall_cf"], "s", color=C_COUPLED, ms=5,
                     mfc="white" if not r["conv_cf"] else C_COUPLED)
-            ax.text(r["it_cf"] * 0.8, r["wall_cf"], lab, fontsize=6,
+            lx_, ly_ = np.log10(r["it_cf"] * 0.8), np.log10(r["wall_cf"])
+            while any(abs(lx_ - px) < 0.45 and abs(ly_ - py) < 0.09
+                      for px, py in placed):
+                ly_ -= 0.09
+            placed.append((lx_, ly_))
+            ax.text(10 ** lx_, 10 ** ly_, lab, fontsize=ps.FS_NOTE,
                     ha="right", va="center")
         ax.plot([], [], "o", color=C_NATIVE, label="simpleFoam")
         ax.plot([], [], "s", color=C_COUPLED, label="coupledFoam")
@@ -1359,12 +1627,12 @@ def fig_speed(tests: dict) -> None:
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_ylim(min(ys) / 2, max(ys) * 2)
-        ax.set_xlim(min(xs) / 2, max(xs) * 2)
+        ax.set_xlim(min(xs) / 5, max(xs) * 2)
         ax.set_xlabel("outer iterations (to convergence or run length)",
-                      fontsize=7)
-        ax.set_ylabel("wall-clock time [s]", fontsize=7)
-        ax.tick_params(labelsize=6)
-        ax.legend(fontsize=6, loc="upper left")
+                      fontsize=ps.FS_LEGEND)
+        ax.set_ylabel("wall-clock time [s]", fontsize=ps.FS_LEGEND)
+        ax.tick_params(labelsize=ps.FS_TICK)
+        ax.legend(fontsize=ps.FS_NOTE, loc="upper left")
         save(fig, "speed_tradeoff",
              "Iterations against wall-clock time: each arrow goes from "
              "simpleFoam to coupledFoam for one case. Diagonal lines are "
@@ -1520,6 +1788,704 @@ def exploratory_numbers() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# single precision (amendment D11; D-062: the reference precision is DP)
+# --------------------------------------------------------------------------- #
+#
+# Records (schema of branch amend-d-forces, bench/SCHEMA_precision.md): an SP
+# test record is named like its DP counterpart with the suffix "_sp"
+# (results/tests/T1_np1_sp.json) or carries "precision": "SP" and names its
+# DP record in "dpRecord". Fields used when present: precision, meshShift
+# (vector or {"vector": ...}), checkMeshDiff (list of checks that differ
+# from DP; empty = gate passed), staticSetSizeDiff, Cd_rel_to_DP, and the
+# usual timing/memory fields. Benchmark configurations F1 (simpleFoam SP)
+# and F2 (coupledFoam SP) are compared with their DP counterparts
+# (record field "dpConfig", default A for F1 and C for F2).
+
+SP_SUFFIX = "_sp"
+SP_TOL = 0.005          # D11 verdict: monitored quantity within 0.5 % of DP
+# DP counterpart of the SP benchmark configurations (amend-d-forces:
+# run_bench.SP_BASE; the record's dpCounterpart.config wins)
+SP_BENCH_DP = {"F1": "B", "F2": "C"}
+# monitored integral quantity per case family: (label, record keys)
+SP_QUANTITY = (("C_d", ("Cd", "Cd_mean")), ("dp", ("dp",)),
+               ("x_r/h", ("xr_over_h",)))
+
+
+def _sp_pairs(tests: dict) -> list[tuple[str, dict, str, dict | None]]:
+    """(SP name, SP record, DP name, DP record or None), sorted."""
+    out = []
+    for n, d in sorted(tests.items()):
+        is_sp = n.endswith(SP_SUFFIX) or str(d.get("precision", "")).upper() == "SP"
+        if not is_sp:
+            continue
+        dpn = (d.get("dpRecord") or (d.get("dpCounterpart") or {}).get("record")
+               or (n[:-len(SP_SUFFIX)] if n.endswith(SP_SUFFIX) else None))
+        out.append((n, d, dpn or "?", tests.get(dpn) if dpn else None))
+    return out
+
+
+def _sp_quantity(sp: dict, dp: dict | None) -> tuple[str, float | None,
+                                                      float | None, float | None]:
+    """(label, DP value, SP value, relative deviation SP vs DP)."""
+    for lab, keys in SP_QUANTITY:
+        vs = next((sp[k] for k in keys if sp.get(k) is not None), None)
+        if vs is None:
+            continue
+        vd = next((dp[k] for k in keys if dp and dp.get(k) is not None), None)
+        rel = next((sp[f"{k}_rel_to_DP"] for k in keys
+                    if sp.get(f"{k}_rel_to_DP") is not None), None)
+        if vd is None:
+            vd = next((sp[f"{k}_DP"] for k in keys
+                       if sp.get(f"{k}_DP") is not None), None)
+        if rel is None and vd:
+            rel = (vs - vd) / abs(vd)
+        return lab, vd, vs, rel
+    return "-", None, None, sp.get("Cd_rel_to_DP")
+
+
+def _sp_gate(sp: dict) -> tuple[bool | None, str]:
+    """checkMesh gate of D5.3: (passed, text). None: not recorded."""
+    if any(str(sp.get(k, "")).lower() == "sp-geometry-fail"
+           for k in ("spGeometry", "status")):
+        return False, "SP-geometry-fail"
+    diff = sp.get("checkMeshDiff")
+    if diff is None:
+        return None, "not recorded"
+    if isinstance(diff, dict):
+        diff = [k for k, v in diff.items() if v]
+    if diff:
+        # amend-d-forces: [{"check": ..., "only": "sp"|"dp"}]
+        txt = [f"{x.get('check')} (only {x.get('only')})"
+               if isinstance(x, dict) else str(x) for x in diff]
+        sp_only = [x for x in diff if not isinstance(x, dict)
+                   or str(x.get("only", "sp")).lower() == "sp"]
+        if not sp_only:
+            return True, "passed (DP-only: " + ", ".join(txt)[:40] + ")"
+        return False, "differs: " + ", ".join(txt)[:60]
+    return True, "passed"
+
+
+def _shift_norm(v) -> str:
+    if isinstance(v, dict):
+        v = v.get("vector") or v.get("translate")
+    if v is None:
+        return "n/a"
+    try:
+        return f"{float(np.linalg.norm(np.asarray(v, dtype=float))):.3g} m"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _per_iter(d: dict, run_dir: Path | None) -> dict:
+    """coupledFoam time per iteration split (s): assembly, linear solve,
+    turbulence, other (incl. I/O; or t_io if recorded), total. From the
+    run log if readable, else from the record totals."""
+    cft = cf_timeline(run_dir) if run_dir is not None and run_dir.is_dir() \
+        else None
+    if cft is not None:
+        a, s, t = (float(np.nanmean(cft[k])) for k in ("tAsm", "tSolve", "tTurb"))
+        tot = float(np.nanmean(cft["tIter"]))
+    else:
+        n = d.get("iterations") or d.get("iterationsRun")
+        if not n or d.get("t_assembly") is None:
+            return {}
+        a, s, t = (d.get(k, 0.0) / n for k in ("t_assembly", "t_linsolve",
+                                                "t_turb"))
+        w = d.get("wallSecondsSolver") or d.get("wallSeconds")
+        tot = w / n if w else a + s + t
+    io = d.get("t_io")
+    n = d.get("iterations") or d.get("iterationsRun") or 1
+    other = io / n if io is not None else max(tot - a - s - t, 0.0)
+    return {"asm": a, "solve": s, "turb": t, "other": other, "total": tot,
+            "ioRecorded": io is not None}
+
+
+def sp_section(tests: dict, bench: list[dict]) -> None:
+    """Section 'Single precision' (D11): performance table SP vs DP for both
+    solvers, per-iteration breakdown, verdict table, convergence-floor
+    figure. Nothing is written without SP records (the papers show their
+    pending lines)."""
+    pairs = _sp_pairs(tests)
+    brows = [d for d in bench if d.get("config") in SP_BENCH_DP]
+    num("sp n cases", len(pairs), "{}")
+    if not pairs and not brows:
+        notes.append("single precision: no SP records (*_sp, F1/F2) yet")
+        num("sp status", "No single-precision runs are available for this "
+            "document yet; the tables and the figure of this section are "
+            "added when the report is regenerated after the SP runs.")
+        return
+    # ---- performance: wall, CPU-h, peak RSS, both solvers
+    perf = []
+
+    def ratio(a, b):
+        return fmt(a / b, "{:.2f}") if a and b else "n/a"
+
+    for n, sp, dpn, dp in pairs:
+        dp = dp or {}
+        for solver, s, d in (("coupledFoam", sp, dp),
+                             ("simpleFoam", sp.get("reference") or {},
+                              dp.get("reference") or {})):
+            ws = s.get("wallSecondsSolver") or s.get("wallSeconds")
+            wd = d.get("wallSecondsSolver") or d.get("wallSeconds")
+            cs = s.get("cpuHoursSolver") or s.get("cpuHours")
+            cd = d.get("cpuHoursSolver") or d.get("cpuHours")
+            ms, md = s.get("peakRSS_GB_sum"), d.get("peakRSS_GB_sum")
+            if not any((ws, cs, ms)):
+                continue
+            perf.append([dpn, solver, fmt(wd), fmt(ws), ratio(wd, ws),
+                         fmt(cd, "{:.3g}"), fmt(cs, "{:.3g}"), ratio(cd, cs),
+                         fmt(md, "{:.3g}"), fmt(ms, "{:.3g}"), ratio(md, ms)])
+            if solver == "coupledFoam":
+                num(f"sp speedup wall {dpn}", wd / ws if wd and ws else None,
+                    "{:.2f}")
+    for cfg, dpcfg0 in SP_BENCH_DP.items():
+        for c in sorted({d["case"] for d in brows if d["config"] == cfg}):
+            dpcfg = next(((d.get("dpConfig")
+                           or (d.get("dpCounterpart") or {}).get("config"))
+                          for d in brows if d["config"] == cfg
+                          and (d.get("dpConfig") or (d.get("dpCounterpart")
+                                                     or {}).get("config"))),
+                         dpcfg0)
+            ws, wd = _med(bench, c, cfg, "wall_to_conv_s"), \
+                _med(bench, c, dpcfg, "wall_to_conv_s")
+            cs, cd = _med(bench, c, cfg, "cpu_to_conv_h"), \
+                _med(bench, c, dpcfg, "cpu_to_conv_h")
+            ms, md = _med(bench, c, cfg, "peakRSS_GB_sum"), \
+                _med(bench, c, dpcfg, "peakRSS_GB_sum")
+            perf.append([f"bench {c} ({cfg} vs {dpcfg})",
+                         "simpleFoam" if cfg == "F1" else "coupledFoam",
+                         fmt(wd), fmt(ws), ratio(wd, ws), fmt(cd, "{:.3g}"),
+                         fmt(cs, "{:.3g}"), ratio(cd, cs), fmt(md, "{:.3g}"),
+                         fmt(ms, "{:.3g}"), ratio(md, ms)])
+    if perf:
+        write_table(
+            "sp_performance",
+            ["case", "solver", "wall DP [s]", "wall SP [s]", "DP/SP",
+             "CPU-h DP", "CPU-h SP", "DP/SP", "RSS DP [GB]", "RSS SP [GB]",
+             "DP/SP"], perf,
+            "Single precision (SP) against double precision (DP, the "
+            "reference build, D-062): solver wall-clock time, CPU-hours and "
+            "peak memory (sum over ranks) of the same test for both solvers. "
+            "Ratios DP/SP above one: SP faster or smaller. Test rows: whole "
+            "run of the test; benchmark rows: time to convergence (median).",
+            "tab:spperf", resize=True)
+    # ---- per-iteration breakdown (coupledFoam)
+    brk = []
+    for n, sp, dpn, dp in pairs:
+        for prec, d, rd in (("DP", dp, RUN / dpn), ("SP", sp, RUN / n)):
+            if not d:
+                continue
+            b = _per_iter(d, rd if run_ok(rd) else None)
+            if not b:
+                continue
+            brk.append([dpn, prec] + [fmt(1e3 * b[k], "{:.3g}") for k in
+                                      ("asm", "solve", "turb", "other", "total")])
+    if brk:
+        write_table(
+            "sp_breakdown",
+            ["case", "precision", "assembly [ms/it]", "linear solve [ms/it]",
+             "turbulence [ms/it]", "other incl. I/O [ms/it]", "total [ms/it]"],
+            brk,
+            "coupledFoam wall time per outer iteration by component, DP and "
+            "SP. ``Other'' is the remainder of the iteration (residual "
+            "evaluation, line search, bookkeeping and field output); it is "
+            "the recorded I/O time where the record carries one (t_io).",
+            "tab:spbreak", resize=True)
+    # ---- verdict (D11)
+    ver = []
+    n_ok = 0
+    items = [(dpn, sp, dp) for _, sp, dpn, dp in pairs]
+    n_tests = len(items)
+    # benchmark F2 (coupledFoam SP): one record per case (D-063: 1 repeat),
+    # compared by its own <m>_rel_to_DP fields
+    for c in sorted({d["case"] for d in brows if d["config"] == "F2"}):
+        r = next(d for d in sorted(brows, key=lambda x: x.get("run", 0))
+                 if d["case"] == c and d["config"] == "F2")
+        items.append((f"bench {c} (F2)", r, None))
+    for dpn, sp, dp in items:
+        lab, vd, vs, rel = _sp_quantity(sp, dp)
+        gate, gtxt = _sp_gate(sp)
+        reasons = []
+        if gate is False:
+            reasons.append(f"checkMesh gate {gtxt}")
+        if rel is None:
+            reasons.append("no DP value to compare")
+        elif abs(rel) > SP_TOL:
+            reasons.append(f"{lab} deviates {100 * rel:+.2f}% from DP")
+        if sp.get("rc") not in (None, 0) or sp.get("fpeTrap"):
+            reasons.append("run failed")
+        if reasons and (gate is False or (rel is not None and abs(rel) > SP_TOL)
+                        or "run failed" in reasons):
+            verdict = "SP not usable: " + "; ".join(reasons)
+        elif gate is None or rel is None:
+            verdict = "undetermined: " + ("; ".join(reasons) if reasons
+                                          else "checkMesh gate not recorded")
+        else:
+            verdict = "SP usable"
+            n_ok += 1
+        ver.append([dpn, lab, fmt(vd, "{:.5g}"), fmt(vs, "{:.5g}"),
+                    fmt(100 * rel if rel is not None else None, "{:+.3f}") +
+                    ("%" if rel is not None else ""),
+                    gtxt, fmt(sp.get("staticSetSizeDiff"), "{}"),
+                    _shift_norm(sp.get("meshShift")), verdict])
+    if ver:
+        write_table(
+            "sp_verdict",
+            ["case", "quantity", "DP", "SP", "SP vs DP", "checkMesh gate",
+             "static set diff. [cells]", "origin shift", "verdict"], ver,
+            "Single-precision verdict per case (amendment D11 with DP as the "
+            "reference, D-062): ``SP usable'' if the monitored quantity "
+            "($C_d$; $\\Delta p$ for T1, $x_r/h$ for T2) of coupledFoam in SP "
+            "is within 0.5\\,\\% of DP and the checkMesh gate of the shifted SP "
+            "mesh passed (no check failing in SP that passes in DP, no "
+            "negative volumes), else ``SP not usable'' with the reason.",
+            "tab:spverdict", resize=True)
+        num("sp n usable", n_ok, "{}")
+    nb = len(ver) - n_tests
+    num("sp status",
+        f"Single-precision results exist for {n_tests} test record(s) and "
+        f"{nb} benchmark case(s) (F2); {n_ok} of these {len(ver)} "
+        f"{'is' if n_ok == 1 else 'are'} usable by this rule.")
+    # ---- convergence floor: R_n in SP against DP
+    hist = [(dpn, (dp or {}).get("history", {}).get("R"),
+             sp.get("history", {}).get("R")) for _, sp, dpn, dp in pairs]
+    hist = [h for h in hist if h[1] or h[2]]
+    if hist:
+        ncol = min(3, len(hist))
+        nrow = int(np.ceil(len(hist) / ncol))
+        fig, axs = plt.subplots(nrow, ncol, figsize=(6.5, 2.3 * nrow),
+                                squeeze=False)
+        for ax, (lab, rd, rs) in zip(axs.flat, hist):
+            for r, col, ls, name in ((rd, C_COUPLED, "-", "DP"),
+                                     (rs, "#E69F00", "--", "SP")):
+                if r:
+                    ax.semilogy(np.arange(1, len(r) + 1), r, color=col, ls=ls,
+                                lw=1.3, label=f"coupledFoam {name}")
+            ax.axhline(1e-5, color="k", lw=0.6, ls=":",
+                       label="SP residual target (D7)")
+            ax.set_title(lab, fontsize=8)
+            ax.set_xlabel("outer iteration", fontsize=8)
+            ax.tick_params(labelsize=7.5)
+        for ax in list(axs.flat)[len(hist):]:
+            ax.axis("off")
+        for r in range(nrow):
+            axs[r, 0].set_ylabel("combined residual $R_n$", fontsize=8)
+        axs.flat[0].legend(fontsize=7.5, loc="upper right")
+        save(fig, "sp_convergence_floor",
+             "Convergence floor: combined residual $R_n$ of coupledFoam in "
+             "double (solid) and single precision (dashed) on the same case; "
+             "dotted: the SP residual target of the precision profile (D7).")
+
+
+# --------------------------------------------------------------------------- #
+# metrics used by other solvers' publications (cost per cell, memory per
+# cell, residual reduction, scaling, grid) - computed from existing records
+# --------------------------------------------------------------------------- #
+
+def _cells_of(d: dict, run_dir: Path | None) -> int | None:
+    """Cell count: record field, else the owner-file headers of the run
+    (serial or the sum over processor*/)."""
+    for k in ("meshCells", "nCells", "cells"):
+        if isinstance(d.get(k), (int, float)) and d.get(k):
+            return int(d[k])
+    fc = d.get("fieldCompare") or {}
+    if fc.get("nCells"):
+        return int(fc["nCells"])
+    if run_dir is None or not run_dir.is_dir():
+        return None
+    import gzip  # noqa: PLC0415
+    import re  # noqa: PLC0415
+    owners = []
+    for pat in ("processor*/constant/polyMesh/owner",
+                "processor*/constant/polyMesh/owner.gz",
+                "constant/polyMesh/owner", "constant/polyMesh/owner.gz"):
+        owners = sorted(run_dir.glob(pat))
+        if owners:
+            break
+    tot = 0
+    for f in owners:
+        try:
+            opener = gzip.open if f.suffix == ".gz" else open
+            with opener(f, "rb") as fh:
+                head = fh.read(4096).decode("latin-1")
+        except OSError:
+            return None
+        m = re.search(r"nCells:\s*(\d+)", head)
+        if not m:
+            # older mesh files carry no note: the size of the ASCII
+            # cellList in polyMesh/cells[.gz] is the cell count
+            cf = f.parent / ("cells.gz" if f.suffix == ".gz" else "cells")
+            try:
+                with (gzip.open if cf.suffix == ".gz" else open)(cf, "rb") as fh:
+                    hc = fh.read(4096).decode("latin-1")
+            except OSError:
+                return None
+            body = hc.split("// * *", 1)[-1]
+            m = re.search(r"^\s*(\d+)\s*\n\s*\(", body.split("\n", 1)[-1], re.M)
+            if not m:
+                return None
+        tot += int(m.group(1))
+    return tot or None
+
+
+def metrics_section(tests: dict) -> None:
+    """Tables metrics_cost, metrics_residual, metrics_scaling,
+    metrics_grid (see the section 'Metrics for comparison with other
+    solvers' of the papers)."""
+    rows, rres = [], []
+    for lab, rec, cfd, sfd in SPEED_CASES:
+        if lab.split()[0] in DEFERRED_CASES:
+            continue
+        d = tests.get(rec)
+        if not d:
+            continue
+        ref = d.get("reference") or {}
+        cells = _cells_of(d, RUN / cfd) or _cells_of(ref, RUN / sfd)
+        for solver, r, conv_it, conv_cpu in (
+                ("coupledFoam", d,
+                 d.get("itersToConv") or d.get("iterationsToR"),
+                 d.get("cpuHoursToConv")),
+                ("simpleFoam", ref, ref.get("itersToConv") or ref.get("convergedAt"),
+                 ref.get("cpuHoursToConv"))):
+            n = r.get("iterations") or r.get("iterationsRun")
+            w = r.get("wallSecondsSolver") or r.get("wallSeconds")
+            c = r.get("cpuHoursSolver") or r.get("cpuHours")
+            m = r.get("peakRSS_GB_sum")
+            if m is None and r.get("peakRSS_MB_sum") is not None:
+                m = r["peakRSS_MB_sum"] / 1024.0
+            if solver == "simpleFoam" and c is None and w:
+                c = w * (r.get("nProcs") or 1) / 3600.0
+            if not (n and w):
+                continue
+            mc = cells / 1e6 if cells else None
+            npr = r.get("nProcs") or d.get("nProcs") or 1
+            rows.append([
+                lab, solver, fmt(cells, "{:,}").replace(",", r"\,") if cells else "n/a",
+                fmt(npr, "{}"), fmt(n, "{}"), fmt(w / n, "{:.3g}"),
+                fmt(c * 3600 / n / mc if c and mc else None, "{:.3g}"),
+                fmt(mc * 1e6 * n / (c * 3600) / 1e3 if c and mc else None,
+                    "{:.3g}"),
+                fmt(m / mc if m and mc else None, "{:.3g}"),
+                fmt(conv_it, "{}"),
+                fmt(conv_cpu / mc if conv_cpu and mc else None, "{:.3g}")])
+        # residual reduction (orders of magnitude below the first value)
+        cft, sft = cf_timeline(RUN / cfd), sf_timeline(RUN / sfd)
+        for solver, R, t in (
+                ("coupledFoam R", cft["R"] if cft else None,
+                 cft["t"] if cft else None),
+                ("simpleFoam p", sft["res"].get("p") if sft else None,
+                 sft["t"] if sft else None)):
+            if R is None or len(R) < 2 or not R[0]:
+                continue
+            cells_ = []
+            for k in (2, 3, 4):
+                hit = np.nonzero(np.asarray(R) <= R[0] * 10.0 ** (-k))[0]
+                cells_.append(f"{hit[0] + 1} / {t[hit[0]]:.3g}" if len(hit)
+                              else "not reached")
+            rres.append([lab, solver] + cells_)
+    if rows:
+        write_table(
+            "metrics_cost",
+            ["case", "solver", "cells", "ranks", "iterations", "wall/it [s]",
+             "CPU-s/it/Mcell", "k cell-it per CPU-s", "RSS [GB/Mcell]",
+             "it. to conv.", "CPU-h to conv./Mcell"], rows,
+            "Cost and memory normalised by the mesh size, as reported in "
+            "solver validation reports: CPU time per outer iteration and "
+            "million cells, throughput in thousand cell-iterations per "
+            "CPU-second, peak memory (sum over ranks) per million cells, "
+            "and CPU-hours to convergence per million cells. Test records "
+            "(whole run of the test, shared machine, D-007). On meshes below "
+            "about 10$^5$ cells the fixed per-process memory of OpenFOAM "
+            "dominates the memory per cell.", "tab:metcost", resize=True)
+    if rres:
+        write_table(
+            "metrics_residual",
+            ["case", "residual", "to 1e-2 x first",
+             "to 1e-3 x first", "to 1e-4 x first"], rres,
+            "Residual reduction: iteration / wall-clock time [s] at which the "
+            "residual first falls two, three and four orders of magnitude "
+            "below its first value (coupledFoam combined residual $R$, "
+            "simpleFoam initial residual of $p$). The two residuals are "
+            "normalised differently (see the definition of the residual "
+            "norms), so only the "
+            "reductions of each solver, not the levels, are comparable.",
+            "tab:metres", resize=True)
+    # ---- scaling table (T-scaling record)
+    d = next((v for k, v in tests.items()
+              if k.startswith(("T_scaling", "T-scaling"))), None)
+    if d:
+        srows = []
+        per = {s: {int(k): v for k, v in ((d.get(s) or {}).get("timePerIter_s")
+                                          or {}).items() if v}
+               for s in ("coupledFoam", "simpleFoam")}
+        ranks = sorted(set(per["coupledFoam"]) | set(per["simpleFoam"]))
+        for nr in ranks:
+            row = [f"{nr}"]
+            for s in ("coupledFoam", "simpleFoam"):
+                t = per[s].get(nr)
+                n0 = min(per[s]) if per[s] else None
+                eff = (per[s][n0] * n0 / (t * nr)) if t and n0 else None
+                row += [fmt(t, "{:.3g}"), fmt(eff, "{:.2f}")]
+            cf_e = row[2] if row[2] != "n/a" else None
+            sf_e = row[4] if row[4] != "n/a" else None
+            row.append(fmt(float(cf_e) / float(sf_e), "{:.2f}")
+                       if cf_e and sf_e and float(sf_e) else "n/a")
+            srows.append(row)
+        if srows:
+            write_table(
+                "metrics_scaling",
+                ["ranks", "cF wall/it [s]", "cF efficiency", "sF wall/it [s]",
+                 "sF efficiency", "efficiency ratio cF/sF"], srows,
+                "Strong scaling on "
+                f"{tex_escape(str(d.get('mesh', 'T4a')))}: wall time per "
+                "iteration and parallel efficiency $E(n)=t(n_0)n_0/(t(n)n)$ "
+                "of coupledFoam (cF) and simpleFoam (sF); pass criterion: "
+                "efficiency ratio at the largest rank count at least 0.8.",
+                "tab:metscal")
+    # ---- grid: T4a against T4b
+    a, b = tests.get("T4a_np10"), tests.get("T4b_np10")
+    if a and b and a.get("Cd") is not None and b.get("Cd") is not None:
+        grows = []
+        for lab, d in (("T4a", a), ("T4b", b)):
+            ref = d.get("reference") or {}
+            grows.append([lab, fmt(_cells_of(d, RUN / f"{lab}_np10"), "{}"),
+                          fmt(d.get("Cd"), "{:.4f}"), fmt(ref.get("Cd"), "{:.4f}"),
+                          fmt(d.get("itersToConv"), "{}"),
+                          fmt(ref.get("itersToConv"), "{}"),
+                          fmt(d.get("cpuHoursToConv"), "{:.3g}"),
+                          fmt(ref.get("cpuHoursToConv"), "{:.3g}")])
+        write_table(
+            "metrics_grid",
+            ["mesh", "cells", "Cd cF", "Cd sF", "it. to conv. cF",
+             "it. to conv. sF", "CPU-h to conv. cF", "CPU-h to conv. sF"],
+            grows,
+            "Mesh dependence on the two motorBike meshes: window-mean $C_d$ "
+            "and the cost to the stationary window mean (D-042) of "
+            "coupledFoam (cF) and simpleFoam (sF). A solver whose iteration "
+            "count to convergence grows little with the mesh size keeps its "
+            "advantage on production meshes.", "tab:metgrid", resize=True)
+
+
+# --------------------------------------------------------------------------- #
+# speed-up text and the motorbike speed-up against the cached references
+# --------------------------------------------------------------------------- #
+
+def speed_notes(tests: dict) -> None:
+    """\\cfSpeedNotConvNote: which test runs of the speed-up figure did not
+    reach their criterion (generated instead of a hand-written claim)."""
+    nc = []
+    for lab, rec, cfd, sfd in SPEED_CASES:
+        r = _speed_record(tests, rec, cfd, sfd)
+        if not r:
+            continue
+        who = [s for s, k in (("coupledFoam", "conv_cf"), ("simpleFoam", "conv_sf"))
+               if not r[k]]
+        if who:
+            nc.append(f"{lab} ({' and '.join(who)})")
+    if nc:
+        txt = ("The following runs did not reach their criterion within their "
+               "iteration limit, so their bars compare the run lengths: "
+               + ", ".join(nc) + ".")
+    else:
+        txt = "All runs of the figure reached their criterion."
+    num("speed not conv note", tex_escape(txt))
+
+
+def _flag(d: dict, key: str) -> str:
+    v = d.get(key)
+    if v is None:
+        v = (d.get("reference") or {}).get(key)
+    return "not recorded" if v is None else ("yes" if v else "no")
+
+
+def table_wake_speedup(tests: dict) -> None:
+    """tables/wake_speedup.tex: T4a/T4b coupledFoam test run against the
+    cached simpleFoam reference (D-059), with the window rule used and the
+    fairness flags of the reference (harness-fix: referenceNoPotentialStart,
+    referenceTimingConditionsUnknown)."""
+    rows = []
+    wake_notes: list[str] = []
+    flags: list[str] = []
+    for name in sorted(tests):
+        if not name.startswith(("T4a_np", "T4b_np")) or name.endswith(SP_SUFFIX):
+            continue
+        d = tests[name]
+        ref = d.get("reference") or {}
+        wc, ws = d.get("wallToConv_s"), ref.get("wallToConv_s")
+        cc, cs = d.get("cpuHoursToConv"), ref.get("cpuHoursToConv")
+        if wc is None and ws is None:
+            continue
+        spw = d.get("speedupWall") or (ws / wc if ws and wc else None)
+        spc = d.get("speedupCpu") or (cs / cc if cs and cc else None)
+        W, Wr = d.get("W"), ref.get("W")
+        # harness-fix (D-068 items 1, 5): speedupWall/Cpu use the common
+        # window, speedupWall_perRun/Cpu_perRun the earlier per-run window
+        sw, sc = d.get("speedupWall_perRun"), d.get("speedupCpu_perRun")
+        common = sw is not None or d.get("commonWindow") \
+            or (W is not None and W == Wr)
+        itc, its = d.get("itersToConv"), ref.get("itersToConv")
+        if not common:
+            # record from before D-068: the common-window point recomputed
+            # from the run directories (_speed_record, harness-fix)
+            r = _speed_record(tests, name, name, "ref_" + name)
+            if r and r.get("criterion") == "stationary" and r.get("W"):
+                d = dict(d, referenceSingleConfig=r.get("referenceSingleConfig"),
+                         referenceNoPotentialStart=r.get("referenceNoPotentialStart"),
+                         referenceTimingConditionsUnknown=r.get(
+                             "referenceTimingConditionsUnknown"))
+                wc, ws, cc, cs = r["wall_cf"], r["wall_sf"], r["cpu_cf"], r["cpu_sf"]
+                itc, its = r.get("it_cf_conv"), r.get("it_sf_conv")
+                spw = ws / wc if (r["conv_cf"] and wc and ws) else None
+                spc = cs / cc if (r["conv_cf"] and cc and cs) else None
+                sw, sc = r.get("speedup_wall_perRun"), r.get("speedup_cpu_perRun")
+                W = r["W"]
+                common = True
+        rule = (f"common W = {W}" if common else
+                f"per-run W = {W} / {Wr} (earlier rule)")
+        lab = f"{name} ({rule})"
+        rows.append([lab, "iterations to convergence", fmt(itc, "{}"),
+                     fmt(its, "{}"), "", ""])
+        rows.append(["", "wall-clock time [s]", fmt(wc), fmt(ws),
+                     fmt(spw, "{:.2f}"), fmt(sw, "{:.2f}")])
+        rows.append(["", "CPU-hours", fmt(cc, "{:.3g}"), fmt(cs, "{:.3g}"),
+                     fmt(spc, "{:.2f}"), fmt(sc, "{:.2f}")])
+        flags.append(
+            f"{name}: reference = single native configuration: "
+            f"{_flag(d, 'referenceSingleConfig')}; started without the "
+            f"tutorial's potentialFoam initialisation: "
+            f"{_flag(d, 'referenceNoPotentialStart')}; timing conditions "
+            f"unknown: {_flag(d, 'referenceTimingConditionsUnknown')}")
+        k = name.split("_")[0]
+        num(f"wake speedup wall {k}", spw, "{:.2f}")
+        num(f"wake speedup cpu {k}", spc, "{:.2f}")
+        if spw is not None and spc is not None:
+            verdict = ("faster" if min(spw, spc) > 1 else
+                       "slower" if max(spw, spc) < 1 else "mixed")
+            txt = (f"{k}: simpleFoam/coupledFoam time ratio {spw:.2f} "
+                   f"(wall-clock) and {spc:.2f} (CPU-hours), "
+                   + {"faster": "coupledFoam faster",
+                      "slower": "coupledFoam slower",
+                      "mixed": "no clear advantage"}[verdict]
+                   + (" with the common window" if common
+                      else " with the per-run window of the earlier rule"))
+            if sw and sc:
+                txt += (f"; with the per-run window (sensitivity only) "
+                        f"{sw:.2f} / {sc:.2f}")
+            wake_notes.append(txt)
+    if not rows:
+        notes.append("wake speed-up: no T4 records")
+        num("wake speed note", "No motorbike speed-up is available yet.")
+        return
+    num("wake speed note", tex_escape("; ".join(wake_notes) + "."))
+    write_table(
+        "wake_speedup",
+        ["run (window)", "quantity", "coupledFoam", "simpleFoam",
+         "sF/cF", "sF/cF per-run window"],
+        rows,
+        "Motorbike: coupledFoam test run against the cached simpleFoam "
+        "reference, iterations, wall-clock time and CPU-hours to the first "
+        "stationary window mean (D-042) with one window for both solvers "
+        "(D-068); sF/cF: speed-up of coupledFoam (below one: coupledFoam "
+        "slower). The last column uses each run's own window (the earlier "
+        "rule, which derived the window from the run's budget and thereby "
+        "delayed the earliest possible convergence of the longer reference "
+        "run); it is a sensitivity value, not a result.",
+        "tab:wakespeed", resize=True, note="Conditions of the reference runs: "
+        + "; ".join(flags) + ".")
+
+
+# --------------------------------------------------------------------------- #
+# remediation per category (rem-cat: meshQuality, badMesh, processor, wall)
+# --------------------------------------------------------------------------- #
+
+# per-category cell counts in a record: a dict under one of these keys,
+# values int or {"cells"|"nCells"|"size": int, ...}
+REM_CAT_KEYS = ("remediationCategories", "staticCategories", "remediation")
+REM_CAT_ORDER = ("meshQuality", "badMesh", "processor", "wall")
+
+
+def _rem_categories(d: dict) -> dict[str, int]:
+    for k in REM_CAT_KEYS:
+        v = d.get(k)
+        if isinstance(v, dict) and v:
+            out = {}
+            for cat, x in v.items():
+                if isinstance(x, dict):
+                    x = x.get("cells", x.get("nCells", x.get("size")))
+                if isinstance(x, (int, float)):
+                    out[cat] = int(x)
+            if out:
+                return out
+    # flat fields staticCells_<cat> / nCells_<cat>
+    out = {}
+    for k, x in d.items():
+        for pre in ("staticCells_", "remCells_"):
+            if k.startswith(pre) and isinstance(x, (int, float)):
+                out[k[len(pre):]] = int(x)
+    return out
+
+
+def table_remediation_categories(tests: dict) -> None:
+    """tables/remediation_categories.tex: cells in the remediation sets per
+    test run. Works with the old records (static set nStat/staticCells,
+    dynamic set nDyn) and with per-category records (rem-cat)."""
+    recs = []
+    cats: list[str] = []
+    for n, d in sorted(tests.items()):
+        h = d.get("history") or {}
+        c = _rem_categories(d)
+        if not c and (RUN / n).is_dir() and run_ok(RUN / n):
+            # D-066: summary.json of the run carries staticCategories
+            c = _rem_categories(logs.coupled_summary(RUN / n) or {})
+        if not (c or d.get("staticCells") is not None or h.get("nStat")
+                or h.get("nDyn")):
+            continue
+        for k in c:
+            if k not in cats:
+                cats.append(k)
+        recs.append((n, d, c, h))
+    if not recs:
+        notes.append("remediation categories: no data")
+        return
+    cats.sort(key=lambda k: (REM_CAT_ORDER.index(k) if k in REM_CAT_ORDER
+                             else len(REM_CAT_ORDER), k))
+
+    def last(v):
+        v = [x for x in (v or []) if x is not None]
+        return v[-1] if v else None
+
+    def vmax(v):
+        v = [x for x in (v or []) if x is not None]
+        return max(v) if v else None
+
+    rows = []
+    for n, d, c, h in recs:
+        stat = d.get("staticCells")
+        if stat is None:
+            stat = last(h.get("nStat"))
+        cells = _cells_of(d, RUN / n)
+        rows.append([n, fmt(cells, "{:,}").replace(",", r"\,")
+                     if cells else "n/a"]
+                    + [fmt(c.get(k), "{}") for k in cats]
+                    + [fmt(stat, "{}"),
+                       fmt(100 * stat / cells if stat is not None and cells
+                           else None, "{:.2f}"),
+                       fmt(vmax(h.get("nDyn")), "{}"),
+                       fmt(last(h.get("nDyn")), "{}")])
+    write_table(
+        "remediation_categories",
+        ["run", "cells"] + [f"{k}" for k in cats]
+        + ["static total", "static [%]", "dynamic max", "dynamic final"],
+        rows,
+        "Remediation cells per test run: the pre-selected cells per category"
+        + (" (" + ", ".join(cats) + ")" if cats else
+           " (records of this commit carry no per-category counts yet)")
+        + ", the pre-selected total and its share of the mesh, and the "
+        "largest and final size of the dynamic set.",
+        "tab:remcat", resize=True)
+
+
+# --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
 
@@ -1593,6 +2559,13 @@ def main(argv: list[str] | None = None) -> int:
     fig_speed(tests)
     fig_fields()
     fig_iteration_histories()
+    # report-d additions: single precision (D11), metrics of other solvers'
+    # validation reports, remediation per category
+    sp_section(tests, bench)
+    metrics_section(tests)
+    table_remediation_categories(tests)
+    speed_notes(tests)
+    table_wake_speedup(tests)
 
     t0 = tests.get("T0_Re100_np1")
     if t0 is not None:      # no record: the macros stay undefined (pending)

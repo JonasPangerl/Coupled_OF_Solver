@@ -151,7 +151,7 @@ int main(int argc, char *argv[])
     {
         for (label i = 0; i < blockSize; ++i)
         {
-            A[i] = narrow(2*rnd.sample01<doubleScalar>() - 1);
+            A[i] = narrow(2*doubleScalar(rnd.sample01<scalar>()) - 1);
         }
         for (label i = 0; i < blockDim; ++i)
         {
@@ -180,7 +180,7 @@ int main(int argc, char *argv[])
     //     from float sums would leave a pivot of O(1e-8) instead of 0.
     for (label i = 0; i < blockSize; ++i)
     {
-        A[i] = narrow(2*rnd.sample01<doubleScalar>() - 1);
+        A[i] = narrow(2*doubleScalar(rnd.sample01<scalar>()) - 1);
     }
     for (label i = 0; i < blockP; ++i)
     {
@@ -207,11 +207,11 @@ int main(int argc, char *argv[])
         blockScalar y[blockDim];
         for (label i = 0; i < blockSize; ++i)
         {
-            A[i] = narrow(2*rnd.sample01<doubleScalar>() - 1);
+            A[i] = narrow(2*doubleScalar(rnd.sample01<scalar>()) - 1);
         }
         for (label i = 0; i < blockDim; ++i)
         {
-            x[i] = narrow(2*rnd.sample01<doubleScalar>() - 1);
+            x[i] = narrow(2*doubleScalar(rnd.sample01<scalar>()) - 1);
         }
         block4Ops::matVec(A, x, y);
         for (label r = 0; r < blockDim; ++r)
@@ -239,7 +239,7 @@ int main(int argc, char *argv[])
         doubleScalar A3[9], I3[9], P3[9], AI[9];
         for (label i = 0; i < 9; ++i)
         {
-            A3[i] = 2*rnd.sample01<doubleScalar>() - 1;
+            A3[i] = 2*doubleScalar(rnd.sample01<scalar>()) - 1;
         }
         for (label i = 0; i < 3; ++i)
         {

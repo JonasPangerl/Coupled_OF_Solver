@@ -4,7 +4,9 @@
 \*---------------------------------------------------------------------------*/
 
 #include "anderson.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
+#include "precisionProfile.H"
 #include "PstreamReduceOps.H"
 #include <cmath>
 #include <limits>
@@ -28,6 +30,8 @@ Foam::anderson::anderson(const fvMesh& mesh, const dictionary& coupledDict)
     m_(coupledDefaults::andersonM),
     beta_(coupledDefaults::andersonBeta),
     maxAlpha_(coupledDefaults::andersonMaxAlpha),
+    maxCells_(coupledDefaults::andersonMaxCells),
+    rankTol_(coupledDefaults::andersonRankTol),
     n_(nCmpt*mesh.nCells()),
     nHist_(0),
     hasPrev_(false),
@@ -53,6 +57,15 @@ Foam::anderson::anderson(const fvMesh& mesh, const dictionary& coupledDict)
             coupledDefaults::andersonMaxAlpha
         );
 
+    maxCells_ = d.getOrDefault<label>("maxCells", maxCells_);
+    rankTol_ = d.getOrDefault<doubleScalar>("rankTol", rankTol_);
+    if (!(rankTol_ > 0 && rankTol_ < 1) || maxCells_ < 1)
+    {
+        FatalIOErrorInFunction(d)
+            << "anderson.rankTol must be in (0, 1) and anderson.maxCells >= 1,"
+            << " got " << rankTol_ << ", " << maxCells_ << exit(FatalIOError);
+    }
+
     if (m_ < 1 || !(beta_ > 0) || !(maxAlpha_ > 0))
     {
         FatalIOErrorInFunction(d)
@@ -62,18 +75,29 @@ Foam::anderson::anderson(const fvMesh& mesh, const dictionary& coupledDict)
     }
 
     // B7 memory table: "Anderson m=4 (optional) +11.5 GB -> not enabled
-    // above 35 M cells"
+    // above 35 M cells". D7 precision profile sp: allowed above the limit
+    // with m <= andersonLargeMaxM. anderson.maxCells overrides the limit.
     if (enabled_)
     {
+        const precisionProfile::values& prof = precisionProfile::current();
         const label nTotal = returnReduce(mesh.nCells(), sumOp<label>());
-        if (nTotal > coupledDefaults::andersonMaxCells)
+        if (nTotal > maxCells_ && !prof.andersonAboveMaxCells)
         {
             WarningInFunction
                 << "anderson.enabled ignored: " << nTotal << " cells > "
-                << coupledDefaults::andersonMaxCells
+                << maxCells_
                 << " (amendment B7 memory rule); Anderson acceleration is"
                 << " disabled" << endl;
             enabled_ = false;
+        }
+        else if (nTotal > maxCells_ && m_ > prof.andersonLargeMaxM)
+        {
+            WarningInFunction
+                << "anderson.m " << m_ << " reduced to "
+                << prof.andersonLargeMaxM << ": " << nTotal << " cells > "
+                << maxCells_ << " (precision profile " << prof.name
+                << ", amendment D7)" << endl;
+            m_ = prof.andersonLargeMaxM;
         }
     }
 }
@@ -242,7 +266,7 @@ bool Foam::anderson::orthogonalise(const label c)
 
     // Numerical rank: the orthogonal part must keep at least half of the
     // significant digits of the column (sqrt of the double epsilon)
-    const doubleScalar rankTol = coupledDefaults::andersonRankTol;
+    const doubleScalar rankTol = rankTol_;
 
     if (!(norm > rankTol*norm0) || !std::isfinite(norm))
     {
@@ -296,9 +320,9 @@ Foam::anderson::status Foam::anderson::apply
 
     allocate();
 
-    // GUARD: reference values floored at VSMALL before inversion
-    const doubleScalar sU = 1/static_cast<doubleScalar>(max(Uref, VSMALL));
-    const doubleScalar sP = 1/static_cast<doubleScalar>(max(pref, VSMALL));
+    // GUARD: reference values floored at cfVSmall before inversion
+    const doubleScalar sU = 1/static_cast<doubleScalar>(max(Uref, cfVSmall<scalar>()));
+    const doubleScalar sP = 1/static_cast<doubleScalar>(max(pref, cfVSmall<scalar>()));
 
     // The least-squares norm must be the same for the whole history
     if (hasPrev_ && (sU != sU_ || sP != sP_))
@@ -512,7 +536,7 @@ Foam::doubleScalar Foam::anderson::conditionEstimate() const
         return 0;
     }
     doubleScalar mx = 0;
-    doubleScalar mn = GREAT;
+    doubleScalar mn = cfGreat<doubleScalar>();
     for (label j = 0; j < nHist_; ++j)
     {
         const doubleScalar r = std::fabs(R(j, j));
@@ -520,7 +544,7 @@ Foam::doubleScalar Foam::anderson::conditionEstimate() const
         mn = std::fmin(mn, r);
     }
     // GUARD: accepted columns have R(j, j) > 0 (rank test)
-    return mx/std::fmax(mn, doubleScalarVSMALL);
+    return mx/std::fmax(mn, cfVSmall<doubleScalar>());
 }
 
 
@@ -531,6 +555,8 @@ void Foam::anderson::writeSettings(dictionary& dict) const
     d.add("m", m_);
     d.add("beta", beta_);
     d.add("maxAlpha", maxAlpha_);
+    d.add("maxCells", maxCells_);
+    d.add("rankTol", rankTol_);
     dict.add("anderson", d);
 }
 

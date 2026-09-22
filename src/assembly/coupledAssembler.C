@@ -4,7 +4,9 @@
 \*---------------------------------------------------------------------------*/
 
 #include "coupledAssembler.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
+#include "staticCriteria.H"
 #include "doubleReduce.H"
 #include "fvCFD.H"
 #include "laplacianScheme.H"
@@ -50,12 +52,12 @@ Foam::coupledAssembler::coupledAssembler
             "nonOrthLimiter",
             coupledDefaults::nonOrthLimiter
         ),
-        coupledDict.subOrEmptyDict("remediation").subOrEmptyDict("static")
-            .getOrDefault<scalar>
-            (
-                "nonOrthLimiter",
-                coupledDefaults::staticNonOrthLimiter
-            )
+        staticCriteria::limitedNonOrthCoeff(coupledDict),      // D-066
+        coupledDict.getOrDefault<scalar>
+        (
+            "orthogonalityTolerance",
+            scalar(coupledDefaults::orthogonalityTolerance)
+        )
     ),
     rc_(mesh, coupledDict),
     mrfPtr_(mrfPtr),
@@ -69,13 +71,21 @@ Foam::coupledAssembler::coupledAssembler
             coupledDefaults::clampValue
         )
     ),
+    refFluxBalanceTol_
+    (
+        coupledDict.subOrEmptyDict("guards").getOrDefault<doubleScalar>
+        (
+            "refFluxBalanceTol",
+            coupledDefaults::refFluxBalanceTol
+        )
+    ),
     needRef_(false),
     pRefCell_(-1),
     pRefValue_(0),
     refFluxChecked_(false),
     A_(mesh),
     rhs_(blockDim*mesh.nCells(), Zero),
-    Dd_(blockSize*mesh.nCells(), Zero),
+    DdStage_(zeroCopy ? 0 : blockSize*mesh.nCells(), Zero),
     Ax_(blockDim*mesh.nCells(), Zero),
     b_(blockDim*mesh.nCells(), Zero),
     rMom_(mesh.nCells(), Zero),
@@ -88,7 +98,8 @@ Foam::coupledAssembler::coupledAssembler
     residualL2_(0),
     rU_(0),
     rp_(0),
-    nClamped_(0)
+    nClamped_(0),
+    nNonFinite_(0)
 {
     // GUARD: the clamp must be representable in blockScalar, otherwise a
     // clamped value would still overflow on narrowing (9.2)
@@ -160,14 +171,14 @@ void Foam::coupledAssembler::checkReferenceFluxBalance
     if
     (
         std::abs(sums[0])
-      > coupledDefaults::refFluxBalanceTol*max(sums[1], VSMALL)
+      > refFluxBalanceTol_*max(sums[1], cfVSmall<reduceScalar>())
     )
     {
         WarningInFunction
             << "Closed domain (pressure reference, D-021) but the boundary"
             << " fluxes do not balance: sum U_b.S_f = " << sums[0]
             << ", sum |U_b.S_f| = " << sums[1] << " (relative tolerance "
-            << coupledDefaults::refFluxBalanceTol << "). The continuity"
+            << refFluxBalanceTol_ << "). The continuity"
             << " equation of the reference cell is dropped, so the"
             << " imbalance is silently absorbed there." << endl;
     }
@@ -176,10 +187,14 @@ void Foam::coupledAssembler::checkReferenceFluxBalance
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-void Foam::coupledAssembler::setStaticCells(const boolList& isStatic)
+void Foam::coupledAssembler::setLimitedCells
+(
+    const boolList& gradLimited,
+    const boolList& nonOrthLimited
+)
 {
-    noc_.setStaticCells(isStatic);
-    rc_.setStaticCells(isStatic);
+    noc_.setLimitedCells(nonOrthLimited);
+    rc_.setGradLimitedCells(gradLimited);
 }
 
 
@@ -198,10 +213,12 @@ void Foam::coupledAssembler::assembleMomentum
     pPtr_ = &p;
 
     A_.clear();
-    Dd_ = Zero;
+    DdStage_ = Zero;
+    diagScalar* __restrict__ Dd = diagAcc();
     Ax_ = Zero;
     b_ = Zero;
     nClamped_ = 0;
+    nNonFinite_ = 0;
 
     const scalarField& V = mesh_.V();
     const surfaceScalarField& w = mesh_.weights();
@@ -262,7 +279,7 @@ void Foam::coupledAssembler::assembleMomentum
     {
         for (label c = 0; c < blockP; ++c)
         {
-            Dd_[di(celli, c, c)] += diagU[celli];
+            Dd[di(celli, c, c)] += diagU[celli];
             b_[celli*blockDim + c] += srcU[celli][c] + Sexp[celli][c]*V[celli];
         }
     }
@@ -276,7 +293,7 @@ void Foam::coupledAssembler::assembleMomentum
             {
                 for (label c = 0; c < blockP; ++c)
                 {
-                    Dd_[di(celli, r, c)] += C[celli][r*blockP + c];
+                    Dd[di(celli, r, c)] += C[celli][r*blockP + c];
                 }
             }
         }
@@ -291,7 +308,7 @@ void Foam::coupledAssembler::assembleMomentum
             const doubleScalar cv = doubleScalar(sfdChi_)*V[celli];
             for (label c = 0; c < blockP; ++c)
             {
-                Dd_[di(celli, c, c)] += cv;
+                Dd[di(celli, c, c)] += diagScalar(cv);
                 b_[celli*blockDim + c] += cv*Ub[celli][c];
             }
         }
@@ -323,12 +340,12 @@ void Foam::coupledAssembler::assembleMomentum
             Ax_[N*blockDim + c] += lc*Ui[P][c];
 
             // Green-Gauss pressure gradient, p_f = w p_P + (1-w) p_N
-            Dd_[di(P, c, blockP)] += wf*S[c];
+            Dd[di(P, c, blockP)] += wf*S[c];
             const doubleScalar ug = (1 - wf)*S[c];
             Ub[c*blockDim + blockP] = store(ug);
             Ax_[P*blockDim + c] += ug*pi[N];
 
-            Dd_[di(N, c, blockP)] -= (1 - wf)*S[c];
+            Dd[di(N, c, blockP)] -= (1 - wf)*S[c];
             const doubleScalar lg = -wf*S[c];
             Lb[c*blockDim + blockP] = store(lg);
             Ax_[N*blockDim + c] += lg*pi[P];
@@ -369,13 +386,13 @@ void Foam::coupledAssembler::assembleMomentum
                     blockScalar* Cb = C.data() + pf*blockSize;
                     for (label c = 0; c < blockP; ++c)
                     {
-                        Dd_[di(P, c, c)] += ic[pf][c];
+                        Dd[di(P, c, c)] += ic[pf][c];
                         // Native sign: result -= bouCoeffs*psi_nbr
                         const doubleScalar cc = -bc[pf][c];
                         Cb[c*blockDim + c] = store(cc);
                         Ax_[P*blockDim + c] += cc*Un[pf][c];
 
-                        Dd_[di(P, c, blockP)] += wp[pf]*Sp[pf][c];
+                        Dd[di(P, c, blockP)] += wp[pf]*Sp[pf][c];
                         const doubleScalar gc = (1 - wp[pf])*Sp[pf][c];
                         Cb[c*blockDim + blockP] = store(gc);
                         Ax_[P*blockDim + c] += gc*pn[pf];
@@ -400,10 +417,10 @@ void Foam::coupledAssembler::assembleMomentum
                     const label P = fc[pf];
                     for (label c = 0; c < blockP; ++c)
                     {
-                        Dd_[di(P, c, c)] += ic[pf][c];
+                        Dd[di(P, c, c)] += ic[pf][c];
                         b_[P*blockDim + c] += bc[pf][c]*Un[pf][c];
 
-                        Dd_[di(P, c, blockP)] += wp[pf]*Sp[pf][c];
+                        Dd[di(P, c, blockP)] += wp[pf]*Sp[pf][c];
                         b_[P*blockDim + c] -= (1 - wp[pf])*Sp[pf][c]*pn[pf];
                     }
                 }
@@ -421,11 +438,11 @@ void Foam::coupledAssembler::assembleMomentum
                     const label P = fc[pf];
                     for (label c = 0; c < blockP; ++c)
                     {
-                        Dd_[di(P, c, c)] += ic[pf][c];
+                        Dd[di(P, c, c)] += ic[pf][c];
                         b_[P*blockDim + c] += bc[pf][c];
 
                         // p_f = viC p_P + vbC
-                        Dd_[di(P, c, blockP)] += Sp[pf][c]*viCp[pf];
+                        Dd[di(P, c, blockP)] += Sp[pf][c]*viCp[pf];
                         b_[P*blockDim + c] -= Sp[pf][c]*vbCp[pf];
                     }
                 }
@@ -449,11 +466,12 @@ void Foam::coupledAssembler::assembleMomentum
             doubleScalar s = 0;
             for (label c = 0; c < blockDim; ++c)
             {
-                s += Dd_[di(celli, r, c)]*x[c];
+                s += Dd[di(celli, r, c)]*x[c];
             }
             Ax_[celli*blockDim + r] += s;
-            rMom_[celli][r] = b_[celli*blockDim + r] - Ax_[celli*blockDim + r];
-            d += Dd_[di(celli, r, r)];
+            rMom_[celli][r] =
+                scalar(b_[celli*blockDim + r] - Ax_[celli*blockDim + r]);
+            d += Dd[di(celli, r, r)];
         }
         aMom_[celli] = scalar(d/blockP);
     }
@@ -487,6 +505,7 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
     const vectorField& Ui = U.primitiveField();
     const scalarField& pi = p.primitiveField();
     const label nCells = mesh_.nCells();
+    diagScalar* __restrict__ Dd = diagAcc();
 
     if (needRef_ && !refFluxChecked_)
     {
@@ -500,14 +519,16 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
         doubleScalar s = 0;
         for (label c = 0; c < blockP; ++c)
         {
-            Dd_[di(celli, c, c)] += rDeltaTV[celli];
-            s += Dd_[di(celli, c, c)];
+            Dd[di(celli, c, c)] += rDeltaTV[celli];
+            s += Dd[di(celli, c, c)];
         }
         // The SFD term is not part of abar: the Rhie-Chow D = V/abar of a
         // converged state must not depend on chi (D-052)
-        abar_[celli] =
+        abar_[celli] = scalar
+        (
             s/blockP
-          - (sfdUbarPtr_ ? doubleScalar(sfdChi_)*mesh_.V()[celli] : 0);
+          - (sfdUbarPtr_ ? doubleScalar(sfdChi_)*mesh_.V()[celli] : 0)
+        );
     }
 
     // --- Rhie-Chow D, D_f, explicit face term q
@@ -525,7 +546,7 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
             {
                 for (label c = 0; c < blockP; ++c)
                 {
-                    a[r*blockP + c] = Dd_[di(celli, r, c)];
+                    a[r*blockP + c] = Dd[di(celli, r, c)];
                 }
             }
             if (sfdUbarPtr_)
@@ -534,7 +555,7 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
                     doubleScalar(sfdChi_)*mesh_.V()[celli];
                 for (label r = 0; r < blockP; ++r)
                 {
-                    a[r*blockP + r] -= cv;
+                    a[r*blockP + r] -= scalar(cv);
                 }
             }
         }
@@ -547,10 +568,10 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
     rc_.updateExplicit(p, noc_);
     const doubleScalar tr1 = (timing_ ? diagnostics::clock() : 0);
 
-    // --- Continuity row scale s_p (5.3f); GUARD: s_p <= 1/VSMALL. Every
+    // --- Continuity row scale s_p (5.3f); GUARD: s_p <= 1/cfVSmall. Every
     //     row-3 coefficient is scaled in double before it is narrowed, so
     //     the clamp and the single rounding apply to the scaled value.
-    sp_ = 1.0/max(rc_.Dref(), VSMALL);
+    sp_ = 1.0/max(rc_.Dref(), cfVSmall<doubleScalar>());
     const doubleScalar sp = sp_;
     const surfaceScalarField& q = rc_.q();
 
@@ -572,23 +593,23 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
         for (label c = 0; c < blockP; ++c)
         {
             // Owner row (+)
-            Dd_[di(P, blockP, c)] += wf*S[c];
+            Dd[di(P, blockP, c)] += wf*S[c];
             const doubleScalar ud = (1 - wf)*S[c];
             Ub[blockP*blockDim + c] = store(sp*ud);
             Ax_[P*blockDim + blockP] += ud*Ui[N][c];
 
             // Neighbour row (-)
-            Dd_[di(N, blockP, c)] -= (1 - wf)*S[c];
+            Dd[di(N, blockP, c)] -= (1 - wf)*S[c];
             const doubleScalar ld = -wf*S[c];
             Lb[blockP*blockDim + c] = store(sp*ld);
             Ax_[N*blockDim + blockP] += ld*Ui[P][c];
         }
 
-        Dd_[di(P, blockP, blockP)] += g;
+        Dd[di(P, blockP, blockP)] += diagScalar(g);
         Ub[blockP*blockDim + blockP] = store(-sp*g);
         Ax_[P*blockDim + blockP] -= g*pi[N];
 
-        Dd_[di(N, blockP, blockP)] += g;
+        Dd[di(N, blockP, blockP)] += diagScalar(g);
         Lb[blockP*blockDim + blockP] = store(-sp*g);
         Ax_[N*blockDim + blockP] -= g*pi[P];
 
@@ -631,13 +652,13 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
 
                     for (label c = 0; c < blockP; ++c)
                     {
-                        Dd_[di(P, blockP, c)] += wp[pf]*Sp[pf][c];
+                        Dd[di(P, blockP, c)] += wp[pf]*Sp[pf][c];
                         const doubleScalar cd = (1 - wp[pf])*Sp[pf][c];
                         Cb[blockP*blockDim + c] = store(sp*cd);
                         Ax_[P*blockDim + blockP] += cd*Un[pf][c];
                     }
 
-                    Dd_[di(P, blockP, blockP)] += g;
+                    Dd[di(P, blockP, blockP)] += diagScalar(g);
                     Cb[blockP*blockDim + blockP] = store(-sp*g);
                     Ax_[P*blockDim + blockP] -= g*pn[pf];
 
@@ -664,12 +685,12 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
 
                     for (label c = 0; c < blockP; ++c)
                     {
-                        Dd_[di(P, blockP, c)] += wp[pf]*Sp[pf][c];
+                        Dd[di(P, blockP, c)] += wp[pf]*Sp[pf][c];
                     }
                     b_[P*blockDim + blockP] -=
                         (1 - wp[pf])*(Sp[pf] & Un[pf]);
 
-                    Dd_[di(P, blockP, blockP)] += g;
+                    Dd[di(P, blockP, blockP)] += diagScalar(g);
                     b_[P*blockDim + blockP] += g*pn[pf];
 
                     b_[P*blockDim + blockP] -= qp[pf];
@@ -699,14 +720,14 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
                     // U_f = viC . U_P + vbC
                     for (label c = 0; c < blockP; ++c)
                     {
-                        Dd_[di(P, blockP, c)] += Sp[pf][c]*viCU[pf][c];
+                        Dd[di(P, blockP, c)] += Sp[pf][c]*viCU[pf][c];
                     }
                     b_[P*blockDim + blockP] -= Sp[pf] & vbCU[pf];
 
                     // -g (p_b - p_P), p_b = viC p_P + vbC (g = 0 unless
                     // p is fixed on this patch, D-013)
                     const doubleScalar g = rc_.g(patchi, pf);
-                    Dd_[di(P, blockP, blockP)] += g*(1 - viCp[pf]);
+                    Dd[di(P, blockP, blockP)] += diagScalar(g*(1 - viCp[pf]));
                     b_[P*blockDim + blockP] += g*vbCp[pf];
 
                     b_[P*blockDim + blockP] -= qp[pf];
@@ -727,13 +748,13 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
     if (needRef_ && pRefCell_ >= 0)
     {
         const label c = pRefCell_;
-        const doubleScalar d = Dd_[di(c, blockP, blockP)];
+        const doubleScalar d = Dd[di(c, blockP, blockP)];
 
         for (label k = 0; k < blockDim; ++k)
         {
-            Dd_[di(c, blockP, k)] = 0;
+            Dd[di(c, blockP, k)] = 0;
         }
-        Dd_[di(c, blockP, blockP)] = d;
+        Dd[di(c, blockP, blockP)] = diagScalar(d);
 
         const label nInternal = mesh_.nInternalFaces();
         for (const label facei : mesh_.cells()[c])
@@ -773,24 +794,54 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
     }
 
     // --- Row 3 diagonal contribution to A x
-    for (label celli = 0; celli < nCells; ++celli)
+    if constexpr (zeroCopy)
     {
-        const doubleScalar x[blockDim] =
-            {Ui[celli][0], Ui[celli][1], Ui[celli][2], pi[celli]};
-        doubleScalar s = 0;
-        for (label c = 0; c < blockDim; ++c)
+        // Zero-copy (D2.3): the diagonal blocks are the matrix array. Same
+        // pass: row 3 scaled by s_p (in double, one rounding) and the clamp
+        // count of all 16 entries (9.2 item 10)
+        for (label celli = 0; celli < nCells; ++celli)
         {
-            s += Dd_[di(celli, blockP, c)]*x[c];
-        }
-        Ax_[celli*blockDim + blockP] += s;
-    }
+            const doubleScalar x[blockDim] =
+                {Ui[celli][0], Ui[celli][1], Ui[celli][2], pi[celli]};
+            doubleScalar s = 0;
+            for (label c = 0; c < blockDim; ++c)
+            {
+                s += Dd[di(celli, blockP, c)]*x[c];
+            }
+            Ax_[celli*blockDim + blockP] += s;
 
-    // --- Narrow the diagonal blocks (row 3 scaled by s_p in double)
-    blockScalarList& Ad = A_.diag();
-    forAll(Dd_, i)
+            diagScalar* __restrict__ blk = Dd + celli*blockSize;
+            for (label k = 0; k < blockP*blockDim; ++k)
+            {
+                blk[k] = diagScalar(store(blk[k]));
+            }
+            for (label k = blockP*blockDim; k < blockSize; ++k)
+            {
+                blk[k] = diagScalar(store(sp*blk[k]));
+            }
+        }
+    }
+    else
     {
-        const bool row3 = ((i % blockSize)/blockDim == blockP);
-        Ad[i] = store(row3 ? sp*Dd_[i] : Dd_[i]);
+        for (label celli = 0; celli < nCells; ++celli)
+        {
+            const doubleScalar x[blockDim] =
+                {Ui[celli][0], Ui[celli][1], Ui[celli][2], pi[celli]};
+            doubleScalar s = 0;
+            for (label c = 0; c < blockDim; ++c)
+            {
+                s += Dd[di(celli, blockP, c)]*x[c];
+            }
+            Ax_[celli*blockDim + blockP] += s;
+        }
+
+        // --- Narrow the diagonal blocks (row 3 scaled by s_p in double)
+        blockScalarList& Ad = A_.diag();
+        forAll(DdStage_, i)
+        {
+            const bool row3 = ((i % blockSize)/blockDim == blockP);
+            Ad[i] = store(row3 ? sp*DdStage_[i] : DdStage_[i]);
+        }
     }
 
     // --- Residual (right-hand side of the increment solve) and norms
@@ -833,11 +884,11 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
 
     doubleReduce::parSum(sums, 6, mesh_.comm());
 
-    // GUARD: normFactor >= SMALL (9.2)
-    normFactor_ = sums[1] + SMALL;
+    // GUARD: normFactor >= cfVSmall (9.2, D3)
+    normFactor_ = sums[1] + cfVSmall<reduceScalar>();
     residualL2_ = std::sqrt(max(sums[0], 0.0))/normFactor_;
-    rU_ = sums[2]/(sums[3] + SMALL);
-    rp_ = sums[4]/(sums[5] + SMALL);
+    rU_ = sums[2]/(sums[3] + cfVSmall<reduceScalar>());
+    rp_ = sums[4]/(sums[5] + cfVSmall<reduceScalar>());
 
     A_.markUpdated();
 

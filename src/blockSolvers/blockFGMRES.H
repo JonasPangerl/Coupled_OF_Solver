@@ -14,7 +14,7 @@ Description
     Arnoldi with modified Gram-Schmidt; every inner product through
     doubleReduce. The Hessenberg matrix, the Givens rotations and the
     least-squares solve are in double. Happy-breakdown guard: if
-    h_(j+1,j) < VSMALL*||r0|| the cycle stops and the small system is solved.
+    h_(j+1,j) < cfVSmall*||r0|| the cycle stops and the small system is solved.
 
     The first Arnoldi step of every solve also yields the preconditioner
     efficiency rho = ||v1 - A M^-1 v1|| (autoTune, 6.3.5) at the cost of one
@@ -49,6 +49,7 @@ SourceFiles
 #define coupledFoam_blockFGMRES_H
 
 #include "blockSolver.H"
+#include "alignedList.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -63,6 +64,15 @@ class blockFGMRES
 
         //- Krylov subspace size before restart
         const label restart_;
+
+        //- Work vectors, kept across solves: no allocation of 2m+1 vectors
+        //  per solve (D-069 F12). Sized on first use (and when the level
+        //  size changes); the contents are always written before read.
+        mutable alignedList<blockScalar> r_;
+        mutable alignedList<blockScalar> w_;
+        mutable List<alignedList<blockScalar>> V_;
+        mutable List<alignedList<blockScalar>> Z_;
+        mutable alignedList<reduceScalar> xd_;
 
 
 public:

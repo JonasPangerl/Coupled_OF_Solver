@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "diagnosticFields.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "extrapolatedCalculatedFvPatchFields.H"
 #include "fileOperation.H"
@@ -109,11 +110,11 @@ void Foam::diagnosticFields::write
 
     const scalarField& V = mesh_.V();
 
-    // dt_P = V_P/(V_P/dt_P); GUARD: rDeltaTV >= VSMALL by construction (5.4)
+    // dt_P = V_P/(V_P/dt_P); GUARD: rDeltaTV > 0 by construction (5.4)
     scalarField dt(mesh_.nCells());
     forAll(dt, celli)
     {
-        dt[celli] = V[celli]/max(rDeltaTV_[celli], VSMALL);
+        dt[celli] = V[celli]/max(rDeltaTV_[celli], cfVSmall<scalar>());
     }
 
     // 1/2 sum_f |phi_f| (as ptcControl::rDeltaTV)
@@ -141,7 +142,7 @@ void Foam::diagnosticFields::write
     forAll(cfl, celli)
     {
         // GUARD: V > 0 for a valid mesh
-        cfl[celli] = dt[celli]*halfSumPhi[celli]/max(V[celli], VSMALL);
+        cfl[celli] = dt[celli]*halfSumPhi[celli]/max(V[celli], cfVSmall<scalar>());
     }
 
     writeInstance(makeField("localDt", instance, dimTime, dt)());

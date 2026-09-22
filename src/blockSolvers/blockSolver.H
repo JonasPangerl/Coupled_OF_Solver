@@ -11,7 +11,7 @@ Description
 
     Residual norm (spec 6.1): ||r|| = sqrt(sum_rows r_i^2) over all four
     components, divided by normFactor. normFactor is normally supplied by the
-    caller once per outer iteration (sum_i |A x_i| + |b_i| + SMALL of the full
+    caller once per outer iteration (sum_i |A x_i| + |b_i| + cfVSmall of the full
     system, computed in double by the assembler). If the caller passes a
     negative value, the solver computes the analogue from its own x and b.
 
@@ -170,7 +170,7 @@ protected:
             void operator=(const diagSolveScope&) = delete;
         };
 
-        //- Compute normFactor from x, b (sum |A x| + |b| + SMALL)
+        //- Compute normFactor from x, b (sum |A x| + |b| + cfVSmall)
         reduceScalar normFactor
         (
             const blockScalarUList& x,

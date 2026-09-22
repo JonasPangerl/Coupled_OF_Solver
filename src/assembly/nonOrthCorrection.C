@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "nonOrthCorrection.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "PstreamReduceOps.H"
 #include "syncTools.H"
@@ -16,7 +17,8 @@ Foam::nonOrthCorrection::nonOrthCorrection
 (
     const fvMesh& mesh,
     const scalar limiter,
-    const scalar limiterStatic
+    const scalar limiterStatic,
+    const scalar orthogonalityTolerance
 )
 :
     mesh_(mesh),
@@ -54,17 +56,23 @@ Foam::nonOrthCorrection::nonOrthCorrection
     }
     reduce(kMax, maxOp<scalar>());
 
-    // Exact test kept deliberately (FABLE_REVIEW.md item 1): the tolerance
-    // coupledDefaults::orthogonalityTolerance switches the correction off on
-    // the T0 cavity (round-off 7.1e-14) and, unexpectedly, changes T0
-    // Re 1000 np1 from 58 to 106 outer iterations - to be understood first
-    orthogonal_ = (kMax == 0);
+    // Default 0 = the exact test, kept deliberately (FABLE_REVIEW.md item
+    // 1): a tolerance of 1e-10 switches the correction off on the T0 cavity
+    // (round-off 7.1e-14) and, unexpectedly, changes T0 Re 1000 np1 from 58
+    // to 106 outer iterations - to be understood first
+    if (!(orthogonalityTolerance >= 0))
+    {
+        FatalErrorInFunction
+            << "coupled.orthogonalityTolerance must be >= 0, got "
+            << orthogonalityTolerance << exit(FatalError);
+    }
+    orthogonal_ = (kMax <= orthogonalityTolerance);
 }
 
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-void Foam::nonOrthCorrection::setStaticCells(const boolList& isStatic)
+void Foam::nonOrthCorrection::setLimitedCells(const boolList& isStatic)
 {
     const labelUList& own = mesh_.owner();
     const labelUList& nei = mesh_.neighbour();
@@ -149,11 +157,12 @@ Foam::nonOrthCorrection::correctionFromGrad
     // static limiter)
     auto limit = [](const scalar lambda, const scalar snf, scalar& cf)
     {
-        // GUARD: denominator >= SMALL, as native limitedSnGrad
+        // GUARD: denominator >= cfVSmall (native limitedSnGrad uses the
+        // precision-dependent small constant, D3)
         const scalar l =
             min
             (
-                lambda*mag(snf)/((1 - lambda)*mag(cf) + SMALL),
+                lambda*mag(snf)/((1 - lambda)*mag(cf) + cfVSmall<scalar>()),
                 scalar(1)
             );
         cf *= l;

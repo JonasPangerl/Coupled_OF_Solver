@@ -123,17 +123,57 @@ coupled
 
     remediation
     {
-        static
+        // Pre-selected cells in four categories (D-066); a cell in several
+        // gets the most restrictive value of each treatment parameter
+        meshQuality                     // 8.1 quality criteria, full treatment
         {
             enabled             yes;
-            nonOrthThreshold    85;   // D-047
-            skewThreshold       6;   // D-047
-            volRatioThreshold   30;   // D-047
+            nonOrthThreshold    85;     // D-047
+            skewThreshold       6;      // D-047
+            volRatioThreshold   30;     // D-047
             aspectThreshold     2000;   // D-047
             beta                0;
-            nonOrthLimiter      0.2;
             cflFactor           0.5;
+            gradLimiter         yes;
+            nonOrthLimiter      yes;
         }
+        badMesh                         // severe defects, full treatment
+        {
+            enabled             yes;
+            volumeJump          yes;    // C1
+            volJumpThreshold    0.98;   // volume ratio > 50
+            closednessThreshold 1e-6;   // open cells; 0 = off
+            nonOrthThreshold    0;      // severe values; 0 = off
+            skewThreshold       0;
+            beta                0;
+            cflFactor           0.5;
+            gradLimiter         yes;
+            nonOrthLimiter      yes;
+        }
+        processor                       // processor boundaries, mild (D-061)
+        {
+            enabled             yes;
+            procAMI             yes;    // C1
+            nLayers             0;
+            beta                1;
+            cflFactor           0.5;
+            gradLimiter         no;
+            nonOrthLimiter      no;
+        }
+        wall                            // walls, mild (D-061)
+        {
+            enabled             yes;
+            wallStarved         no;     // C1; off by default (user, D-061)
+            maxWallInternalFaces 2;
+            patches             ();     // wordRes, e.g. (motorBikeGroup)
+            nLayers             1;
+            beta                1;
+            cflFactor           0.5;
+            gradLimiter         no;
+            nonOrthLimiter      no;
+        }
+        limitedNonOrthCoeff     0.2;    // cells with nonOrthLimiter
+        limitedGradScheme       "cellLimited Gauss linear 1";  // gradLimiter (D-018)
         zonal
         {
             enabled             no;     // amendment B6

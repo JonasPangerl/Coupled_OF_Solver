@@ -62,9 +62,9 @@ public:
     //- Window statistics of one coefficient
     struct coeffStats
     {
-        scalar mean = 0;
-        scalar rms = 0;         //!< population standard deviation
-        scalar drift = 0;       //!< |mean(older half) - mean(newer half)|
+        doubleScalar mean = 0;
+        doubleScalar rms = 0;         //!< population standard deviation
+        doubleScalar drift = 0;       //!< |mean(older half) - mean(newer half)|
         label n = 0;            //!< samples used
     };
 
@@ -75,19 +75,19 @@ private:
 
         word mode_;
         label window_;
-        scalar forceTol_;
-        scalar residualTol_;
+        doubleScalar forceTol_;
+        doubleScalar residualTol_;
 
         //- Window of the statistics and of the drift rule
         label rmsWindow_;
 
         //- Drift rule tolerances (driftTol_ 0: rule off)
-        scalar driftTol_;
-        scalar driftAbs_;
+        doubleScalar driftTol_;
+        doubleScalar driftAbs_;
 
-        DynamicList<scalar> Cd_;
-        DynamicList<scalar> Cl_;
-        DynamicList<scalar> Cm_;
+        DynamicList<doubleScalar> Cd_;
+        DynamicList<doubleScalar> Cl_;
+        DynamicList<doubleScalar> Cm_;
 
         //- The force object provides CmPitch (Cm is monitored)
         bool haveCm_;
@@ -95,17 +95,21 @@ private:
         //- Name of the forceCoeffs object used (empty: none found yet)
         word foName_;
 
+        //- Requested function object (convergence.forceCoeffs; empty:
+        //  auto-detect)
+        word foRequested_;
+
 
     // Private Member Functions
 
         //- Window criterion on one history
-        bool windowConverged(const DynamicList<scalar>& h) const;
+        bool windowConverged(const DynamicList<doubleScalar>& h) const;
 
         //- Statistics over the last min(rmsWindow_, n) samples of h
-        coeffStats windowStats(const DynamicList<scalar>& h) const;
+        coeffStats windowStats(const DynamicList<doubleScalar>& h) const;
 
         //- History of monitored coefficient i (0 Cd, 1 Cl, 2 Cm)
-        const DynamicList<scalar>& history(const label i) const;
+        const DynamicList<doubleScalar>& history(const label i) const;
 
 
 public:
@@ -117,7 +121,7 @@ public:
 
     // Member Functions
 
-        scalar residualTol() const noexcept { return residualTol_; }
+        doubleScalar residualTol() const noexcept { return residualTol_; }
 
         //- Append the current Cd, Cl (if a forceCoeffs object exists and
         //  produced a new result since the last sample, see the .C file)
@@ -137,8 +141,8 @@ public:
 
         //- Append one sample directly (record() uses it; unit tests).
         //  Without a force object name yet the source is named "samples".
-        void addSample(const scalar Cd, const scalar Cl);
-        void addSample(const scalar Cd, const scalar Cl, const scalar Cm);
+        void addSample(const doubleScalar Cd, const doubleScalar Cl);
+        void addSample(const doubleScalar Cd, const doubleScalar Cl, const doubleScalar Cm);
 
         //- Restart state (subdictionary convergenceMonitor): the last
         //  max(forceCoeffsWindow, forceCoeffsRmsWindow) samples of Cd, Cl
@@ -150,8 +154,8 @@ public:
         bool haveForces() const noexcept { return !foName_.empty(); }
 
         //- Last Cd, Cl (0 if none)
-        scalar Cd() const { return Cd_.size() ? Cd_.last() : 0; }
-        scalar Cl() const { return Cl_.size() ? Cl_.last() : 0; }
+        doubleScalar Cd() const { return Cd_.size() ? Cd_.last() : 0; }
+        doubleScalar Cl() const { return Cl_.size() ? Cl_.last() : 0; }
 
         //- Number of monitored coefficients (2: Cd, Cl; 3: + Cm)
         label nCoeffs() const noexcept { return haveCm_ ? 3 : 2; }
@@ -160,7 +164,7 @@ public:
         static const char* coeffName(const label i);
 
         //- Last value of coefficient i (0 if none)
-        scalar last(const label i) const;
+        doubleScalar last(const label i) const;
 
         //- Window statistics of coefficient i
         coeffStats stats(const label i) const;
@@ -176,10 +180,10 @@ public:
         //  tolerance, (max - min)/(forceCoeffsTol*|mean|); < 1 means the
         //  window criterion holds. -1 if not available (no forces, window
         //  not full)
-        scalar forceCriterionRatio() const;
+        doubleScalar forceCriterionRatio() const;
 
         //- Evaluate the criterion for the normalised residual R
-        bool converged(const scalar R) const;
+        bool converged(const doubleScalar R) const;
 
         //- Effective settings
         void writeSettings(dictionary& dict) const;

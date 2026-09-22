@@ -11,11 +11,16 @@ PDFs into report/paper/figures/:
                               pressure difference (T1, T2); running mean
                               and +-RMS band over the D-042 window W,
                               shaded final averaging window, vertical line
-                              at iters_to_stationary
+                              at iters_to_stationary (D-042, T4/T5) or at
+                              the 12.3(ii) point (T3); zoom panels on the
+                              shorter run when the runs differ > 5x; a
+                              simpleFoam reference continuation (mean
+                              fields) is cut off, as in the tables
     hist_<run>_residuals.pdf  coupledFoam R, rU, rp and the simpleFoam
                               initial residuals of every solved field,
-                              per iteration (left) and over wall time
-                              (right), same y range for both solvers
+                              per iteration (left, own axis per solver) and
+                              over wall time (right, common axis, inset
+                              zoom on the short run), same y range
     hist_<run>_wall.pdf       cumulative wall time per iteration with a
                               linear fit, time per iteration (raw and
                               rolling median), coupledFoam split
@@ -57,6 +62,7 @@ Usage: ~/OF/venv/bin/python bench/plot_histories.py [--commit SHA]
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
@@ -74,25 +80,36 @@ FIG = REPO / "report" / "paper" / "figures"
 sys.path.insert(0, str(REPO / "tests"))
 sys.path.insert(0, str(REPO / "bench"))
 from cflib import logs, provenance  # noqa: E402
+import plotstyle as ps  # noqa: E402
 import run_bench  # noqa: E402
 
 BUSY_MINUTES = 10.0
-# One colour pair everywhere (Okabe-Ito, colour-blind safe): simpleFoam
-# vermillion, coupledFoam blue
-C_NATIVE = "#D55E00"
-C_COUPLED = "#0072B2"
+# One colour pair everywhere (Okabe-Ito, colour-blind safe, bench/plotstyle):
+# simpleFoam vermillion, coupledFoam blue
+C_NATIVE = ps.C_NATIVE
+C_COUPLED = ps.C_COUPLED
 # per-field series (residuals, linear iterations), Okabe-Ito order
-SERIES = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9",
-          "#000000"]
-NMAX = 2500      # plotted points per curve (dense histories are binned)
+SERIES = ps.SERIES
+NMAX = 1500      # points of a smooth curve (running means, fits)
+SPLIT_RATIO = 5.0  # run lengths differing by more: zoom panels for the short run
 SPLIT = {"tAsm": "#9ecae1", "tSolve": "#1f5fbf", "tTurb": "#fdae6b",
          "other": "#d9d9d9"}
 
+def _t5_run() -> str:
+    """T5 run the report shows, the same rule as bench/make_report.py
+    _t5_run: CF_T5_MESH if set, else the variant (fine, then coarse) that
+    has a test record, else the fine one (names: run_bench.t5_run_name)."""
+    import os  # noqa: PLC0415
+    env = os.environ.get("CF_T5_MESH")
+    for v in ([env] if env else []) + ["fine", "coarse"]:
+        n = run_bench.t5_run_name(run_bench.HEAVY_NP, v)
+        if (REPO / "results" / "tests" / f"{n}.json").exists():
+            return n
+    return run_bench.t5_run_name(run_bench.HEAVY_NP, env or "fine")
+
+
 # run name: coupledFoam dir, simpleFoam reference dir, title, monitor
-# T5 on the coarse development mesh (CF_T5_MESH=coarse, D-059) unless only
-# the fine-mesh run exists
-T5_RUN = ("T5_np10" if (RUN / "T5_np10").is_dir()
-          and not (RUN / "T5_coarse_np10").is_dir() else "T5_coarse_np10")
+T5_RUN = _t5_run()
 RUNS = {
     "T0_Re100_np1": ("T0_Re100_np1", "ref_T0_Re100", "T0 cavity, Re 100, 1 rank", None),
     "T0_Re100_np4": ("T0_Re100_np4", "ref_T0_Re100", "T0 cavity, Re 100, 4 ranks", None),
@@ -109,13 +126,13 @@ RUNS = {
     T5_RUN: (T5_RUN, "ref_" + T5_RUN, "T5 Ahmed body, 10 ranks"
              + (" (coarse mesh)" if "coarse" in T5_RUN else ""), "forces"),
 }
-OSCILLATORY = ("T4", "T5")      # D-042 wake cases
+# T5 (Ahmed body) is deferred by user decision (D-063): no appendix section
+# and no overview figure unless CF_INCLUDE_T5=1
+T5_DEFERRED = os.environ.get("CF_INCLUDE_T5") != "1"
+if T5_DEFERRED:
+    RUNS.pop(T5_RUN, None)
 
-plt.rcParams.update({
-    "figure.dpi": 150, "savefig.dpi": 300, "font.size": 7,
-    "axes.grid": True, "grid.alpha": 0.3, "legend.frameon": False,
-    "pdf.fonttype": 42, "ps.fonttype": 42, "lines.linewidth": 0.8,
-})
+ps.apply()
 
 
 # --------------------------------------------------------------------------- #
@@ -215,7 +232,9 @@ def read_sf(case: Path) -> dict | None:
         n = len(ex)
         for f in set(res) | set(cur_r):
             for store, cur in ((res, cur_r), (fin, cur_f), (nit, cur_n)):
-                lst = store.setdefault(f, [np.nan] * (n - 1))
+                lst = store.get(f)
+                if lst is None:      # first appearance: NaN before it
+                    lst = store[f] = [np.nan] * (n - 1)
                 lst.append(cur.get(f, np.nan))
 
     with open(log, errors="replace") as fh:
@@ -272,9 +291,29 @@ def _dat(path: Path) -> np.ndarray | None:
     return a
 
 
+def _cut_reference(case: Path, h: dict | None) -> dict | None:
+    """A continued simpleFoam reference is its original run only: samples
+    beyond run_bench.reference_t_max(case) are dropped (M7, as in every
+    evaluation of the reference)."""
+    if h is None:
+        return None
+    t_max = run_bench.reference_t_max(case)
+    if t_max is None:
+        return h
+    keep = h["iter"] <= t_max
+    if not keep.any():
+        return None
+    return {k: v[keep] for k, v in h.items()}
+
+
 def forces(case: Path) -> dict | None:
     """Cd, Cl, CmPitch per iteration, restarts concatenated (later start
-    directories override earlier iterations)."""
+    directories override earlier iterations); a continued reference is cut
+    at its original budget."""
+    return _cut_reference(case, _forces_all(case))
+
+
+def _forces_all(case: Path) -> dict | None:
     pp = case / "postProcessing"
     fos = sorted(pp.glob("forceCoeffs*")) if pp.is_dir() else []
     for fo in fos:
@@ -314,7 +353,12 @@ def _float(s: str) -> float:
 
 
 def pressure_drop(case: Path) -> dict | None:
-    """areaAverage(p) inlet - outlet per iteration (surfaceFieldValue)."""
+    """areaAverage(p) inlet - outlet per iteration (surfaceFieldValue); a
+    continued reference is cut at its original budget."""
+    return _cut_reference(case, _pressure_drop_all(case))
+
+
+def _pressure_drop_all(case: Path) -> dict | None:
     vals = {}
     for side in ("inletP", "outletP"):
         d = case / "postProcessing" / side
@@ -411,94 +455,66 @@ def roll_std(y: np.ndarray, w: int) -> np.ndarray:
 
 
 def bands(ax, ph):
+    """Diagnostics phases as light background colours."""
     b, col = ph
     for x0, x1, name in b:
-        ax.axvspan(x0, x1, color=col.get(name, "#eeeeee"), alpha=0.5, lw=0,
+        ax.axvspan(x0, x1, color=col.get(name, "#eeeeee"), alpha=0.35, lw=0,
                    zorder=0)
 
 
 def events(ax, ev):
+    """GAMG autoTune events: thin dotted vertical lines."""
     for it, what, a, b in ev:
-        ax.axvline(it, color="k", lw=0.4, ls=":", zorder=1)
+        ax.axvline(it, color="k", lw=0.5, ls=":", alpha=0.7, zorder=1)
 
 
 def small_legend(ax, **kw):
-    h, _ = ax.get_legend_handles_labels()
+    """Legend of one panel, above the panel (outside the data)."""
+    h, lab = ax.get_legend_handles_labels()
     if h:
-        ax.legend(fontsize=5.5, ncol=kw.pop("ncol", 3), **kw)
-
-
-def iter_axis(ax, lengths: list[int]) -> None:
-    """Log iteration axis when the run lengths differ by more than 3x (the
-    shorter coupledFoam history would otherwise be squeezed into the left
-    edge)."""
-    lengths = [n for n in lengths if n]
-    if len(lengths) > 1 and max(lengths) > 3 * min(lengths):
-        ax.set_xscale("log")
-        ax.set_xlim(0.9, max(lengths) * 1.1)
-
-
-def _bins(n: int, nmax: int = NMAX) -> list[slice]:
-    edges = np.linspace(0, n, min(n, nmax) + 1).astype(int)
-    return [slice(a, b) for a, b in zip(edges[:-1], edges[1:]) if b > a]
+        ax.legend(h, lab, ncol=kw.pop("ncol", 4), loc="lower left",
+                  bbox_to_anchor=(0.0, 1.0), borderaxespad=0.1,
+                  handlelength=1.5, columnspacing=1.0, **kw)
 
 
 def decimate(x, y, nmax: int = NMAX):
     """Smooth curve with at most nmax points (bin means); exact below."""
-    x, y = np.asarray(x, float), np.asarray(y, float)
-    if len(x) <= nmax:
-        return x, y
-    with np.errstate(all="ignore"):
-        bx = np.array([np.nanmean(x[b]) for b in _bins(len(x), nmax)])
-        by = np.array([np.nanmean(y[b]) if np.any(np.isfinite(y[b])) else np.nan
-                       for b in _bins(len(x), nmax)])
-    return bx, by
+    return ps.decimate(x, y, nmax)
 
 
-NHEAD = 400      # leading iterations always drawn exactly (log-x axes)
+def raw(ax, x, y, color, label=None, log=False, lw=ps.LW_RAW, alpha=0.9,
+        z=None, nbins: int = 100):
+    """Per-iteration data: a thin line when short (<= ps.RAW_MAX points),
+    otherwise the per-bin min-max band with the bin median (plotstyle
+    trace/envelope): thousands of raw points are never drawn as one
+    polyline over another series."""
+    ps.trace(ax, x, y, color, label=label, log=log, lw=lw, alpha=alpha,
+             z=ps.Z_RAW if z is None else z, median_lw=0.7, nbins=nbins)
 
 
-def raw(ax, x, y, color, label=None, log=False, lw=0.7, alpha=0.5):
-    """Raw per-iteration data drawn light but visible: a line when short;
-    for long histories the first NHEAD iterations exactly, then the per-bin
-    min/max envelope plus the bin-mean line (vector, at most NMAX bins) -
-    never rasterized, so nothing can disappear in the PDF."""
-    x, y = np.asarray(x, float), np.asarray(y, float)
-    # simpleFoam is usually the smoother history: draw it above the noisier
-    # coupledFoam raw data so it is never hidden
-    z = 2.6 if color == C_NATIVE else 2.0
-    if len(x) <= NMAX:
-        ax.plot(x, y, color=color, lw=lw, alpha=alpha, label=label, zorder=z)
-        return
-    ax.plot(x[:NHEAD], y[:NHEAD], color=color, lw=lw, alpha=alpha, zorder=z)
-    x, y = x[NHEAD - 1:], y[NHEAD - 1:]
-    bx, lo, hi = [], [], []
-    for b in _bins(len(x), NMAX):
-        yy = y[b][np.isfinite(y[b])]
-        if log:
-            yy = yy[yy > 0]
-        if not yy.size:
-            continue
-        bx.append(np.nanmean(x[b]))
-        lo.append(yy.min())
-        hi.append(yy.max())
-    ax.fill_between(bx, lo, hi, color=color, alpha=alpha * 0.6, lw=0,
-                    label=label, zorder=z)
-    bm = decimate(x, np.where(y > 0, y, np.nan) if log else y)[1]
-    ax.plot(decimate(x, x)[0], bm, color=color, lw=lw, alpha=min(1.0, alpha + 0.2),
-            zorder=z)
-
-
-def main(ax, x, y, color, label=None, lw=1.4, ls="-", zorder=4):
+def main(ax, x, y, color, label=None, lw=ps.LW_MAIN, ls="-", zorder=ps.Z_MEAN):
     """Main curve (mean, median, cumulative, fit): strong, on top."""
     bx, by = decimate(x, y)
     ax.plot(bx, by, color=color, lw=lw, ls=ls, label=label, zorder=zorder)
 
 
 def save(fig, stem: str, outdir: Path) -> str:
-    fig.savefig(outdir / f"{stem}.pdf", bbox_inches="tight")
-    plt.close(fig)
+    ps.save(fig, outdir / f"{stem}.pdf")
     return stem
+
+
+def _xmax(x) -> float:
+    x = np.asarray(x, float)
+    x = x[np.isfinite(x)]
+    return float(x.max()) if x.size else 0.0
+
+
+def _clip_to(x, y, xmax):
+    """The part of a history with x <= xmax (so an envelope in a zoom panel
+    is binned over the visible range only)."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    k = np.isfinite(x) & (x <= xmax)
+    return x[k], y[k]
 
 
 # --------------------------------------------------------------------------- #
@@ -506,7 +522,13 @@ def save(fig, stem: str, outdir: Path) -> str:
 # --------------------------------------------------------------------------- #
 
 def load_series(cf, sf, cfd, sfd, monitor, info):
-    """[(solver, colour, iterations, wall time at each, {quantity: values})]"""
+    """[(solver, colour, iterations, wall time at each, {quantity: values},
+    None)] (the last element is kept for the tuple layout of the callers).
+
+    A continued simpleFoam reference (Allrun -restart for the mean fields,
+    D-042 addendum) is its original run only: forces()/pressure_drop() cut
+    it at run_bench.reference_t_max, as every evaluation of the reference
+    (M7)."""
     series = []
     for solver, d, case, col, taxis in (
             ("simpleFoam", sf, sfd, C_NATIVE, sf["t"] if sf else None),
@@ -518,6 +540,13 @@ def load_series(cf, sf, cfd, sfd, monitor, info):
             continue
         it = h["iter"]
         qs = {k: v for k, v in h.items() if k != "iter"}
+        t_max = run_bench.reference_t_max(case)
+        if t_max is not None and info is not None:
+            info["notes"].append(
+                f"{solver}: the reference is its original run of "
+                f"{int(t_max)} iterations, as in the tables; its "
+                "continuation (mean fields, D-042 addendum) is neither "
+                "shown nor evaluated")
         # wall time at each monitored iteration (monitor iteration i is the
         # i-th solver iteration of the run); iterations beyond the logged
         # ones (a continuation whose log is elsewhere) have no wall time
@@ -528,7 +557,7 @@ def load_series(cf, sf, cfd, sfd, monitor, info):
                 f"{solver}: the monitor has {int(it.max())} iterations, the "
                 f"solver log {len(taxis)}; the later iterations have no "
                 "wall-clock time (right column)")
-        series.append((solver, col, it, tt, qs))
+        series.append((solver, col, it, tt, qs, None))
     return series
 
 
@@ -539,6 +568,96 @@ def _user_iteration(run: str, solver: str) -> int | None:
         return ucv.lookup(ucv.load(), ucv.case_key(run), solver)
     except Exception:  # noqa: BLE001 - the plot must not fail on the file
         return None
+
+
+def _case_of(run: str) -> str | None:
+    """run_bench case key of a run name (T4a_np10, ref_T4a_np10 -> T4a;
+    T3_kOmegaSST_np1 -> T3-SST; T5_coarse_np10 -> T5; T0 -> None). Every
+    stat_window / iters_to_stationary / stationary_eval call of this module
+    gets it, so both solvers of a wake case share one window (D-068)."""
+    return run_bench.case_of_run(run)
+
+
+def stat_window(n: int, case: str | None = None) -> int:
+    return run_bench.stat_window(n, case)
+
+
+def _oscillatory(run: str) -> bool:
+    """D-042 wake case (T4, T5): stationary window mean; otherwise (T3)
+    criterion 12.3(ii)."""
+    return run_bench.is_oscillatory(run_bench.case_of_run(run) or "")
+
+
+LOAD_LABELS = {"Cd": "$C_d$", "Cl": "$C_l$", "CmPitch": "$C_m$ (pitch)",
+               "dp": r"$\Delta p$ inlet$-$outlet [m$^2$/s$^2$]"}
+
+
+def _running(y, W):
+    """Running mean and RMS over the D-042 window W (full windows only)."""
+    m = roll(y, W, np.nanmean)
+    sd = roll_std(y, W)
+    m[:max(W - 1, 0)] = np.nan
+    sd[:max(W - 1, 0)] = np.nan
+    return m, sd
+
+
+def _zoom_ranges(xs: list[float]) -> float | None:
+    """x limit of a zoom on the shorter of two runs on a common axis, or
+    None when the runs differ by less than SPLIT_RATIO."""
+    xs = [x for x in xs if x and np.isfinite(x)]
+    if len(xs) < 2 or max(xs) <= SPLIT_RATIO * min(xs):
+        return None
+    return 1.04 * min(xs)
+
+
+def _legend_handles(series, marks: dict, extra_label=None, case=None):
+    """Figure legend of the load plots: per solver the per-iteration data
+    and the running mean with its RMS band, then the markers."""
+    from matplotlib.lines import Line2D  # noqa: PLC0415
+    from matplotlib.patches import Patch  # noqa: PLC0415
+    h, lab = [], []
+    for solver, col, it, tt, qs, cont in sorted(series, key=lambda s_: s_[0] != "simpleFoam"):
+        n = len(it)
+        W = stat_window(n, case)
+        if n > ps.RAW_MAX:
+            h.append(Patch(color=col, alpha=ps.BAND_ALPHA, lw=0))
+            lab.append(f"{solver} per iteration (min-max per bin)")
+        else:
+            h.append(Line2D([], [], color=col, lw=ps.LW_RAW))
+            lab.append(f"{solver} per iteration")
+        h.append((Patch(color=col, alpha=0.18, lw=0),
+                  Line2D([], [], color=col, lw=ps.LW_MAIN, ls="--")))
+        lab.append(f"{solver} running mean $\\pm$RMS ($W$={W})")
+    if marks.get("window"):
+        h.append(Patch(color="#777777", alpha=0.18, lw=0))
+        lab.append("final averaging window")
+    if marks.get("stat"):
+        h.append(Line2D([], [], color="#333333", lw=ps.LW_MARK, ls="-."))
+        lab.append("iterations to a stationary window (D-042)")
+    if marks.get("w123"):
+        h.append(Line2D([], [], color="#333333", lw=ps.LW_MARK, ls=LS_W123))
+        lab.append("criterion 12.3(ii) met (force window)")
+    if marks.get("user"):
+        h.append(Line2D([], [], color="#333333", lw=1.8, ls="-"))
+        lab.append("user convergence point (D-060)")
+    if extra_label:
+        h.append(Line2D([], [], color="k", lw=1.0))
+        lab.append(extra_label)
+    return h, lab
+
+
+LS_W123 = (0, (6, 1.5, 1, 1.5, 1, 1.5))   # dash-dot-dot: 12.3(ii) point
+
+
+def _vline(ax, x, col, kind):
+    if x is None or not np.isfinite(x):
+        return
+    if kind == "stat":
+        ax.axvline(x, color=col, lw=ps.LW_MARK, ls="-.", zorder=ps.Z_MARK)
+    elif kind == "w123":
+        ax.axvline(x, color=col, lw=ps.LW_MARK, ls=LS_W123, zorder=ps.Z_MARK)
+    else:
+        ax.axvline(x, color=col, lw=1.8, ls="-", zorder=ps.Z_MARK + 0.5)
 
 
 def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
@@ -553,152 +672,234 @@ def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
         for q in s_[4]:
             if q not in quants:
                 quants.append(q)
-    labels = {"Cd": "$C_d$", "Cl": "$C_l$", "CmPitch": "$C_{m}$ (pitch)",
-              "dp": r"$\Delta p$ inlet$-$outlet [m$^2$/s$^2$]"}
-    fig, axs = plt.subplots(len(quants), 2, figsize=(6.5, 1.9 * len(quants) + 0.5),
-                            squeeze=False)
-    for r, q in enumerate(quants):
-        for solver, col, it, tt, qs in series:
+    # the longer run first, the shorter one is drawn on top of it
+    series = sorted(series, key=lambda s_: -len(s_[2]))
+    case = _case_of(run)
+    osc = _oscillatory(run)
+    # ---- evaluation: the averaging window W, the convergence point (D-042
+    # stationary window on the wake cases T4/T5, criterion 12.3(ii) on the
+    # other force cases), the user point (D-060)
+    evals = {}
+    for solver, col, it, tt, qs, cont in series:
+        e = {"W": {}, "run": {}}
+        for q in quants:
             if q not in qs:
                 continue
             y = qs[q]
             n = len(y)
-            W = run_bench.stat_window(n)
-            m = roll(y, W, np.nanmean)
-            sd = roll_std(y, W)
-            m[:max(W - 1, 0)] = np.nan   # only full windows (D-042 W)
-            sd[:max(W - 1, 0)] = np.nan
-            for c, x in ((0, it), (1, tt)):
-                ax = axs[r, c]
-                ok = np.isfinite(x)
-                raw(ax, x[ok], y[ok], col, label=f"{solver} per iteration" if r == 0 and c == 0 else None)
-                bx, bm = decimate(x[ok], m[ok])
-                _, bs = decimate(x[ok], sd[ok])
-                ax.fill_between(bx, bm - bs, bm + bs, color=col, alpha=0.18, lw=0,
-                                zorder=3)
-                ax.plot(bx, bm, color=col, lw=1.6, ls="--", zorder=5,
-                        label=f"{solver} running mean $\\pm$RMS (W={W})"
-                        if r == 0 and c == 0 else None)
-                if W >= 2 and n >= W and np.isfinite(x[n - W]):
-                    ax.axvspan(x[n - W], np.nanmax(x), color=col, alpha=0.08,
-                               lw=0, zorder=1)
+            W = stat_window(n, case)
+            e["W"][q] = W
+            e["run"][q] = _running(y, W)
             if q in ("Cd", "Cl") and monitor == "forces":
-                hist = {k: list(v) for k, v in qs.items() if k in ("Cd", "Cl")}
-                try:
-                    its = run_bench.iters_to_stationary(hist)
-                    ev = run_bench.stationary_eval(hist)
-                except Exception:  # noqa: BLE001
-                    its, ev = None, {}
-                if its:
-                    axs[r, 0].axvline(its, color=col, lw=1.2, ls="-.", zorder=6)
-                    k = min(int(np.searchsorted(it, its)), len(tt) - 1)
-                    if np.isfinite(tt[k]):
-                        axs[r, 1].axvline(tt[k], color=col, lw=1.2, ls="-.",
-                                          zorder=6)
-                # user-judged convergence iteration (D-060): solid line
-                uit = _user_iteration(run, solver)
-                if uit:
-                    axs[r, 0].axvline(uit, color=col, lw=1.8, ls="-", zorder=7,
-                                      label=f"{solver} user convergence"
-                                      if r == 0 else None)
-                    k = min(int(np.searchsorted(it, uit)), len(tt) - 1)
-                    if np.isfinite(tt[k]):
-                        axs[r, 1].axvline(tt[k], color=col, lw=1.8, ls="-",
-                                          zorder=7)
-                    info.setdefault("user", {})[solver] = uit
-                info.setdefault("stat", {})[solver] = (its, ev.get("W"),
-                                                       ev.get("Cd_mean"),
-                                                       ev.get("Cl_mean"))
+                if "its" not in e:
+                    hist = {k: list(v) for k, v in qs.items() if k in ("Cd", "Cl")}
+                    ev = {}
+                    try:
+                        if osc:
+                            its = run_bench.iters_to_stationary(hist, case=case)
+                            ev = run_bench.stationary_eval(hist, case=case)
+                        else:
+                            its = run_bench.iters_to_conv(hist)
+                    except Exception:  # noqa: BLE001
+                        its, ev = None, {}
+                    if not osc:
+                        # window means over the plotted averaging window
+                        ev = {"W": W, "Cd_mean": float(np.mean(qs["Cd"][n - W:]))
+                              if "Cd" in qs and W else None,
+                              "Cl_mean": float(np.mean(qs["Cl"][n - W:]))
+                              if "Cl" in qs and W else None}
+                    e["its"] = its
+                    e["kind"] = "stat" if osc else "w123"
+                    uit = _user_iteration(run, solver)
+                    e["user"] = uit
+                    if uit:
+                        info.setdefault("user", {})[solver] = uit
+                    info.setdefault("stat", {})[solver] = (its, ev.get("W"),
+                                                           ev.get("Cd_mean"),
+                                                           ev.get("Cl_mean"),
+                                                           "D-042" if osc else "12.3(ii)")
             else:
-                w = run_bench.stat_window(n)
+                w = stat_window(n, case)
                 win = y[n - w:] if w else y
                 info.setdefault("mon", {})[(solver, q)] = (float(np.mean(win)),
                                                            float(np.std(win)))
-        k = f"{q}Mean"
-        if k in extra:
-            axs[r, 0].plot(cf["iter"], extra[k], color="k", lw=1.0, zorder=6,
-                           label=f"coupledFoam {k} (solver)")
-        axs[r, 0].set_ylabel(labels.get(q, q))
-        # zoom: ignore the start-up transient in the y range
-        vals = np.concatenate([s_[4][q][len(s_[4][q]) // 5:] for s_ in series
-                               if q in s_[4] and len(s_[4][q]) > 5] or [np.array([0.0])])
-        vals = vals[np.isfinite(vals)]
-        if vals.size > 1:
-            lo, hi = np.percentile(vals, [0.5, 99.5])
-            pad = 0.25 * (hi - lo) + 1e-12
-            for c in (0, 1):
-                axs[r, c].set_ylim(lo - pad, hi + pad)
-        bands(axs[r, 0], ph)
-        iter_axis(axs[r, 0], [len(s_[2]) for s_ in series])
-    axs[-1, 0].set_xlabel("outer iteration")
-    axs[-1, 1].set_xlabel("wall-clock time [s] (fair comparison)")
-    h, lab = axs[0, 0].get_legend_handles_labels()
-    fig.suptitle(f"{title}: monitored quantities (dash-dot: iterations to "
-                 "stationary window, D-042; shading: final averaging window)",
-                 fontsize=7)
-    fig.tight_layout(rect=(0, 0.06, 1, 0.97))
-    fig.legend(h, lab, loc="lower center", ncol=2, fontsize=6)
+        evals[solver] = e
+
+    def at_time(it, tt, x):
+        """wall time of iteration x (for the markers in the right column)."""
+        if x is None:
+            return None
+        k = min(int(np.searchsorted(it, x)), len(tt) - 1)
+        return tt[k] if np.isfinite(tt[k]) else None
+
+    # ---- layout. Every panel shows both solvers on a common axis (fair
+    # comparison). Runs whose lengths differ by more than SPLIT_RATIO get a
+    # zoom panel on the shorter run: one extra column when only one of the
+    # two axes (iterations, wall time) needs it, otherwise a second row per
+    # quantity.
+    it_end = [_xmax(s_[2]) for s_ in series]
+    t_end = [_xmax(s_[3]) for s_ in series]
+    zit, zt = _zoom_ranges(it_end), _zoom_ranges(t_end)
+    short_it = min(series, key=lambda s_: _xmax(s_[2]))
+    short_t = min(series, key=lambda s_: _xmax(s_[3]) or np.inf)
+    full_it = 1.02 * max(it_end)
+    full_t = 1.02 * max(t_end) if max(t_end) > 0 else None
+    if zit is not None and zt is not None:
+        cols = [("it", None), ("t", None)]
+        rows = [(q, kind) for q in quants for kind in ("full", "zoom")]
+    else:
+        cols = [("it", None)]
+        if zit is not None:
+            cols.append(("it", zit))
+        cols.append(("t", None))
+        if zt is not None:
+            cols.append(("t", zt))
+        rows = [(q, "full") for q in quants]
+    nr, nc = len(rows), len(cols)
+    hrow = max(1.1, min(2.3, 6.4 / nr)) if nc == 2 else max(1.35, min(2.2, 6.0 / nr))
+    fig, axs = ps.subplots(nr, nc, height=hrow * nr + 0.8)
+    marks = {"window": False, "stat": False, "w123": False, "user": False}
+    for r, (q, kind) in enumerate(rows):
+        for c, (axis, zlim) in enumerate(cols):
+            ax = axs[r, c]
+            if kind == "zoom":
+                zlim = zit if axis == "it" else zt
+            lim_series = []
+            for k, (solver, col, it, tt, qs, cont) in enumerate(series):
+                if q not in qs:
+                    continue
+                y = qs[q]
+                n = len(y)
+                W = evals[solver]["W"][q]
+                m, sd = evals[solver]["run"][q]
+                x = it if axis == "it" else tt
+                ok = np.isfinite(x)
+                xs, ys, ms, sds = x[ok], y[ok], m[ok], sd[ok]
+                if zlim is not None:
+                    sel = xs <= zlim
+                    xs, ys, ms, sds = xs[sel], ys[sel], ms[sel], sds[sel]
+                if not xs.size:
+                    continue
+                dz = 0.1 * k
+                raw(ax, xs, ys, col, z=ps.Z_RAW + dz)
+                bx, bm = decimate(xs, ms)
+                _, bs = decimate(xs, sds)
+                ps.fill(ax, bx, bm - bs, bm + bs, color=col, alpha=0.18,
+                        lw=0, zorder=3 + dz)
+                ax.plot(bx, bm, color=col, lw=ps.LW_MAIN, ls="--",
+                        zorder=ps.Z_MEAN + dz)
+                if W >= 2 and n >= W and np.isfinite(x[n - W]):
+                    ax.axvspan(x[n - W], np.nanmax(x), color=col, alpha=0.08,
+                               lw=0, zorder=ps.Z_SHADE)
+                    marks["window"] = True
+                e = evals[solver]
+                if "its" in e:
+                    if e["its"]:
+                        _vline(ax, e["its"] if axis == "it" else at_time(it, tt, e["its"]),
+                               col, e["kind"])
+                        marks[e["kind"]] = True
+                    if e.get("user"):
+                        _vline(ax, e["user"] if axis == "it" else at_time(it, tt, e["user"]),
+                               col, "user")
+                        marks["user"] = True
+                lim_series.append((xs, ys, col))
+            if axis == "it" and f"{q}Mean" in extra:
+                xe, ye = cf["iter"], extra[f"{q}Mean"]
+                if zlim is not None:
+                    xe, ye = _clip_to(xe, ye, zlim)
+                main(ax, xe, ye, "k", lw=1.0, zorder=ps.Z_MARK)
+            # y range from the post-transient part; the clipped start-up
+            # transient is marked by triangles at the axis edge
+            ps.robust_ylim(ax, lim_series,
+                           skip_frac=0.25 if zlim is None else 0.4,
+                           pct=(0.5, 99.5), margin=0.2)
+            if zlim is not None:
+                ax.set_xlim(0, zlim)
+                s_ = short_it if axis == "it" else short_t
+                if nc == 2 or r == 0:
+                    ax.set_title(f"zoom: the {s_[0]} run" if nc > 2 else
+                                 (f"zoom: the {len(s_[2])} {s_[0]} iterations"
+                                  if axis == "it" else
+                                  f"zoom: the {s_[0]} run ({_xmax(s_[3]):.3g} s)"),
+                                 loc="left", fontsize=ps.FS_NOTE, color=ps.GREY)
+            else:
+                ax.set_xlim(0, full_it if axis == "it" else full_t)
+            if axis == "it":
+                bands(ax, ph)
+        lab = LOAD_LABELS.get(q, q)
+        axs[r, 0].set_ylabel(lab if kind == "full" else f"{lab} (zoom)")
+    for c, (axis, zlim) in enumerate(cols):
+        axs[-1, c].set_xlabel("outer iteration" if axis == "it" else
+                              "wall-clock time [s]")
+    h, lab = _legend_handles(series, marks,
+                             "coupledFoam window mean (solver output)"
+                             if any(f"{q}Mean" in extra for q in quants) else None,
+                             case=case)
+    ps.legend_below(fig, h, lab, ncol=2, h_pad=0.6)
     return save(fig, f"hist_{run}_loads", outdir)
+
+
+def _residual_curves(solver, d):
+    if solver == "coupledFoam":
+        curves = [(k, d[k]) for k in ("R", "rU", "rp") if k in d]
+        return curves, d["iter"], d["_t"]
+    order = ["p", "Ux", "Uy", "Uz", "k", "omega", "epsilon", "nuTilda"]
+    fields = sorted(d["res"], key=lambda f: order.index(f) if f in order else 99)
+    return ([(f, d["res"][f]) for f in fields], np.arange(1, d["n"] + 1),
+            d["t"])
 
 
 def fig_residuals(run, title, cf, sf, ph, outdir):
     rows = [x for x in (("coupledFoam", cf), ("simpleFoam", sf)) if x[1] is not None]
     if not rows:
         return None
-    fig, axs = plt.subplots(len(rows), 2, figsize=(6.5, 2.2 * len(rows) + 0.3),
-                            squeeze=False)
+    data = [(s_, *_residual_curves(s_, d)) for s_, d in rows]
+    tend = [_xmax(t) for _, _, _, t in data]
+    tmax = max(tend)
+    tzoom = _zoom_ranges(tend)
+    fig, axs = ps.subplots(len(rows), 2, height=2.45 * len(rows) + 0.35)
     ylo, yhi = [], []
-    for r, (solver, d) in enumerate(rows):
-        if solver == "coupledFoam":
-            curves = [(k, d[k]) for k in ("R", "rU", "rp") if k in d]
-            x0, t = d["iter"], d["_t"]
-        else:
-            order = ["p", "Ux", "Uy", "Uz", "k", "omega", "epsilon", "nuTilda"]
-            fields = sorted(d["res"], key=lambda f: order.index(f) if f in order else 99)
-            curves = [(f, d["res"][f]) for f in fields]
-            x0, t = np.arange(1, d["n"] + 1), d["t"]
+    for r, (solver, curves, x0, t) in enumerate(data):
         for j, (lab, y) in enumerate(curves):
             col = SERIES[j % len(SERIES)]
             for c, x in ((0, x0), (1, t)):
-                x = x[:len(y)]
-                ax = axs[r, c]
-                if len(x) > NMAX:
-                    raw(ax, x, y, col, log=True, alpha=0.3)
-                    bx = decimate(x, x)[0]
-                    by = np.exp(decimate(x, np.log(np.where(y > 0, y, np.nan)))[1])
-                    ax.plot(bx, by, color=col, lw=1.2, zorder=4,
-                            label=lab if c == 0 else None)
-                else:
-                    ax.plot(x, y, color=col, lw=1.2, zorder=4,
-                            label=lab if c == 0 else None)
-                ax.set_yscale("log")
+                x = np.asarray(x[:len(y)], float)
+                ps.trace(axs[r, c], x, y[:len(x)], col, label=lab if c == 0 else None,
+                         log=True, lw=1.0, band_alpha=0.14, median_lw=1.2,
+                         z=ps.Z_RAW + 0.1 * j)
             fy = y[np.isfinite(y) & (y > 0)]
             if fy.size:
                 ylo.append(fy.min())
                 yhi.append(fy.max())
-        axs[r, 0].set_ylabel(f"{solver}\nresidual",
-                             color=C_COUPLED if solver == "coupledFoam" else C_NATIVE)
-        small_legend(axs[r, 0], ncol=4, loc="lower left")
+        for c in (0, 1):
+            axs[r, c].set_yscale("log")
+        col = C_COUPLED if solver == "coupledFoam" else C_NATIVE
+        axs[r, 0].set_ylabel(f"{solver}\nresidual", color=col)
+        small_legend(axs[r, 0], ncol=len(curves))
+        axs[r, 0].set_xlim(0, 1.02 * _xmax(x0))
+        # both solvers on the same wall-clock axis (fair comparison)
+        axs[r, 1].set_xlim(0, 1.02 * tmax)
         bands(axs[r, 0], ph if solver == "coupledFoam" else ([], {}))
         if solver == "coupledFoam":
-            events(axs[r, 0], d["_events"])
+            events(axs[r, 0], rows[r][1]["_events"])
     if ylo:
         for ax in axs.flat:
             ax.set_ylim(min(ylo) / 2, max(yhi) * 2)
-    ns = [len(d["iter"]) if s_ == "coupledFoam" else d["n"] for s_, d in rows]
+    # the short run on the common wall-clock axis: zoom inset
+    if tzoom is not None:
+        for r, (solver, curves, x0, t) in enumerate(data):
+            if _xmax(t) * SPLIT_RATIO < tmax:
+                ins = ps.zoom_inset(axs[r, 1], (0, tzoom), bounds=(0.30, 0.30, 0.67, 0.62),
+                                    label=f"zoom: the {solver} run", ylog=True)
+                for j, (lab, y) in enumerate(curves):
+                    x = np.asarray(t[:len(y)], float)
+                    ps.trace(ins, x, y[:len(x)], SERIES[j % len(SERIES)], log=True,
+                             lw=1.0, band_alpha=0.14, median_lw=1.1, nbins=120)
+                ins.set_ylim(axs[r, 1].get_ylim())
     for r in range(len(rows)):
-        iter_axis(axs[r, 0], ns)
-    # both solvers on the same wall-clock axis
-    tmax = max((d["_t"][-1] if s_ == "coupledFoam" else d["t"][-1]) for s_, d in rows)
-    for r in range(len(rows)):
-        axs[r, 1].set_xlim(0, tmax * 1.02)
-    axs[-1, 0].set_xlabel("outer iteration")
-    axs[-1, 1].set_xlabel("wall-clock time [s] (same axis for both solvers)")
-    fig.suptitle(f"{title}: residuals (coupledFoam: combined $R$, momentum "
-                 "$r_U$, continuity $r_p$; simpleFoam: initial residuals; "
-                 "long runs: band = per-bin min/max, line = bin mean). "
-                 "Same y range; normalisations differ.", fontsize=6.5)
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+        axs[r, 0].set_xlabel(f"{data[r][0]} outer iteration")
+    axs[-1, 1].set_xlabel("wall-clock time [s] (common axis)")
+    ps.tight(fig, h_pad=0.8)
     return save(fig, f"hist_{run}_residuals", outdir)
 
 
@@ -735,7 +936,7 @@ def fig_wall(run, title, cf, sf, ph, outdir, info):
     zoom = (cf is not None and sf is not None
             and lens["simpleFoam"] > 3 * lens["coupledFoam"])
     ncol = 2 if zoom else 1
-    fig = plt.figure(figsize=(6.5, 6.8 if cf is not None else 4.6))
+    fig = ps.figure(6.9 if cf is not None else 4.6)
     nrow = 3 if cf is not None else 2
     gs = fig.add_gridspec(nrow, ncol)
     top = [fig.add_subplot(gs[0, c]) for c in range(ncol)]
@@ -755,34 +956,39 @@ def fig_wall(run, title, cf, sf, ph, outdir, info):
         lab = (f"{solver}: {n} it., {wall:.4g} s, {cpuh:.3g} CPU-h"
                if wall and cpuh else solver)
         med = roll(per, max(5, n // 50))
+        z = ps.Z_MEAN + (0.2 if solver == "coupledFoam" else 0.0)
         for c in range(ncol):
-            main(top[c], it, t, col, label=lab if c == 0 else None, lw=1.8)
+            main(top[c], it, t, col, label=lab if c == 0 else None, lw=1.8, zorder=z)
             main(top[c], it, slope * it + icpt, col, lw=1.0,
-                 ls=":", zorder=5,
+                 ls=":", zorder=z + 1,
                  label=(f"{solver} linear fit {slope:.3g} s/it ($R^2$ {r2:.3f})"
                         if c == 0 else None))
-            raw(mid[c], it, per, col, log=True, alpha=0.3)
-            main(mid[c], it, med, col, lw=1.6,
-                 label=f"{solver} rolling median" if c == 0 else None)
+            xx, pp = it, per
+            if zoom and c == 1:
+                xx, pp = _clip_to(it, per, lens["coupledFoam"] * 1.05)
+            ps.trace(mid[c], xx, pp, col, log=True, lw=0.6, alpha=0.5,
+                     z=ps.Z_RAW, band_alpha=0.18, line=False)
+            main(mid[c], it, med, col, lw=1.5, zorder=z,
+                 label=f"{solver} time per iteration, rolling median" if c == 0 else None)
             mid[c].set_yscale("log")
     if zoom:
         nz = lens["coupledFoam"] * 1.05
         for ax in (top[1], mid[1]):
             ax.set_xlim(0, nz)
-            ax.set_title(f"zoom: the {lens['coupledFoam']} coupledFoam iterations",
-                         fontsize=6)
+        top[1].set_title(f"zoom: the {lens['coupledFoam']} coupledFoam iterations",
+                         fontsize=ps.FS_NOTE)
         # y range of the zoom: what both solvers reach within nz iterations
         ymax = 0.0
         for s_, d, _ in have:
             t, it = _timing(s_, d)[:2]
             ymax = max(ymax, float(np.nanmax(t[it <= nz])) if np.any(it <= nz) else 0.0)
         top[1].set_ylim(0, ymax * 1.05)
-        top[0].set_title("all iterations (linear axis: linear growth looks linear)",
-                         fontsize=6)
+        top[0].set_title("all iterations", fontsize=ps.FS_NOTE)
+    for c in range(ncol):
+        top[c].set_xlim(0, None)
+        mid[c].set_xlim(top[c].get_xlim())
     top[0].set_ylabel("cumulative wall time [s]")
-    mid[0].set_ylabel("wall time per iteration [s]")
-    small_legend(top[0], ncol=1, loc="upper left")
-    small_legend(mid[0], ncol=1, loc="upper right")
+    mid[0].set_ylabel("wall time per\niteration [s]")
     axes = top + mid
     from matplotlib.ticker import MaxNLocator  # noqa: PLC0415
     for ax in axes:
@@ -796,24 +1002,23 @@ def fig_wall(run, title, cf, sf, ph, outdir, info):
         parts = {k: roll(cf[k], w) for k in ("tAsm", "tSolve", "tTurb") if k in cf}
         if "tIter" in cf and parts:
             parts["other"] = np.clip(roll(cf["tIter"], w) - sum(parts.values()), 0, None)
-            ax3.stackplot(it, *parts.values(), labels=list(parts),
+            bx = decimate(it, it)[0]
+            ax3.stackplot(bx, *[decimate(it, v)[1] for v in parts.values()],
+                          labels=[f"coupledFoam {k}" for k in parts],
                           colors=[SPLIT[k] for k in parts], lw=0)
-            ax3.set_ylabel("coupledFoam time per\niteration [s] (rolling median)")
-            small_legend(ax3, ncol=4, loc="upper left")
+            ax3.set_ylabel("coupledFoam time per\niteration [s]\n(rolling median)")
             events(ax3, cf["_events"])
+            ax3.set_xlim(0, _xmax(it))
         bands(ax3, ph)
     for ax in axes:
         ax.set_xlabel("outer iteration")
-    fig.suptitle(f"{title}: wall-clock time (dotted: linear fit; light band: "
-                 "per-iteration spread; vertical dotted lines: GAMG autoTune "
-                 "events)", fontsize=7)
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    ps.legend_below(fig, ncol=2, h_pad=0.8)
     return save(fig, f"hist_{run}_wall", outdir)
-
-
 def fig_overview(group: str, runs: list[str], outdir: Path, log=print) -> str | None:
     """Main-text overview: Cd and Cl of both solvers over wall-clock time
-    for a group of force cases, with the final D-042 window means."""
+    for a group of force cases, with the final D-042 window means. A case
+    whose two runs differ in wall time by more than SPLIT_RATIO gets a
+    second row zoomed on the shorter run (same axes for both solvers)."""
     rows = []
     for name in runs:
         cfn, sfn, title, monitor = RUNS[name]
@@ -821,52 +1026,74 @@ def fig_overview(group: str, runs: list[str], outdir: Path, log=print) -> str | 
         cf = (read_cf(cfd) if cfd.is_dir() and not busy(cfd)
               and provenance.active().check_run(cfd) else None)
         sf = read_sf(sfd) if sfd.is_dir() and not busy(sfd) else None
-        rows.append((title, load_series(cf, sf, cfd, sfd, "forces", None)))
+        rows.append((title, load_series(cf, sf, cfd, sfd, "forces", None),
+                     _case_of(name)))
     if not any(r[1] for r in rows):
         return None
-    fig, axs = plt.subplots(len(rows), 2, figsize=(6.5, 1.75 * len(rows) + 0.5),
-                            squeeze=False)
-    for r, (title, series) in enumerate(rows):
+    layout = []
+    for title, series, case in rows:
+        series = sorted(series, key=lambda s_: -len(s_[2]))
+        layout.append((title, series, None, case))
+        tz = _zoom_ranges([_xmax(s_[3]) for s_ in series])
+        if tz is not None:
+            layout.append((title, series, tz, case))
+    nr = len(layout)
+    hrow = max(1.3, min(2.2, 6.0 / nr))
+    fig, axs = ps.subplots(nr, 2, height=hrow * nr + 0.6)
+    long_any = False
+    for r, (title, series, tz, case) in enumerate(layout):
         for c, q in enumerate(("Cd", "Cl")):
             ax = axs[r, c]
             if not series:
-                ax.text(0.5, 0.5, "results pending", ha="center", va="center",
-                        transform=ax.transAxes, color="#555555")
+                ps.note(ax, "results pending", loc="center")
                 ax.set_yticks([])
-            vals = []
-            for solver, col, it, tt, qs in series:
+            lim, inc, tmax = [], [], 0.0
+            for k, (solver, col, it, tt, qs, cont) in enumerate(series):
                 if q not in qs:
                     continue
                 y = qs[q]
-                ok = np.isfinite(tt)
-                raw(ax, tt[ok], y[ok], col, alpha=0.3)
                 n = len(y)
-                W = run_bench.stat_window(n)
+                W = stat_window(n, case)
                 m = roll(y, W, np.nanmean)
                 m[:max(W - 1, 0)] = np.nan
-                main(ax, tt[ok], m[ok], col, lw=1.6, ls="--")
+                ok = np.isfinite(tt)
+                x, yy, mm = tt[ok], y[ok], m[ok]
+                tmax = max(tmax, _xmax(x))
+                if tz is not None:
+                    sel = x <= tz
+                    x, yy, mm = x[sel], yy[sel], mm[sel]
+                if not x.size:
+                    continue
+                long_any |= len(x) > ps.RAW_MAX
+                dz = 0.1 * k
+                raw(ax, x, yy, col, z=ps.Z_RAW + dz)
+                main(ax, x, mm, col, lw=ps.LW_MAIN, ls="--", zorder=ps.Z_MEAN + dz)
                 mw = float(np.mean(y[n - W:])) if W and n >= W else np.nan
                 if np.isfinite(mw):
-                    ax.axhline(mw, color=col, lw=0.8, ls=":", zorder=3)
-                vals.append(y[n // 5:])
-            if vals:
-                v = np.concatenate(vals)
-                v = v[np.isfinite(v)]
-                if v.size > 1:
-                    lo, hi = np.percentile(v, [0.5, 99.5])
-                    pad = 0.3 * (hi - lo) + 1e-9
-                    ax.set_ylim(lo - pad, hi + pad)
-            ax.set_ylabel(f"{title}\n" + ("$C_d$" if q == "Cd" else "$C_l$"),
-                          fontsize=6)
-            ax.tick_params(labelsize=6)
+                    ax.axhline(mw, color=col, lw=1.0, ls=":", zorder=ps.Z_MARK)
+                    inc.append(mw)
+                lim.append((x, yy, col))
+            if lim:
+                ps.robust_ylim(ax, lim, skip_frac=0.25, pct=(0.5, 99.5),
+                               margin=0.2)
+                ax.set_xlim(0, tz if tz is not None else 1.02 * tmax)
+            ax.set_ylabel("$C_d$" if q == "Cd" else "$C_l$")
+        head = title if tz is None else f"{title}: zoom on the shorter run"
+        axs[r, 0].set_title(head, loc="left", fontsize=ps.FS)
     for c in range(2):
         axs[-1, c].set_xlabel("wall-clock time [s]")
     from matplotlib.lines import Line2D  # noqa: PLC0415
-    h = [Line2D([], [], color=C_NATIVE, lw=1.6), Line2D([], [], color=C_COUPLED, lw=1.6),
-         Line2D([], [], color="k", lw=1.6, ls="--"), Line2D([], [], color="k", lw=0.8, ls=":")]
-    fig.legend(h, ["simpleFoam", "coupledFoam", "running mean over the D-042 window",
-                   "final window mean"], loc="lower center", ncol=4, fontsize=6)
-    fig.tight_layout(rect=(0, 0.05, 1, 1))
+    from matplotlib.patches import Patch  # noqa: PLC0415
+    h = [Line2D([], [], color=C_NATIVE, lw=ps.LW_MAIN),
+         Line2D([], [], color=C_COUPLED, lw=ps.LW_MAIN),
+         Line2D([], [], color="k", lw=ps.LW_MAIN, ls="--"),
+         Line2D([], [], color="k", lw=1.0, ls=":")]
+    lab = ["simpleFoam", "coupledFoam", "running mean over the D-042 window",
+           "final window mean"]
+    if long_any:
+        h.append(Patch(color="#777777", alpha=ps.BAND_ALPHA, lw=0))
+        lab.append("per iteration (band: min-max per bin)")
+    ps.legend_below(fig, h, lab, ncol=3, h_pad=0.7)
     stem = f"loads_overview_{group}"
     save(fig, stem, outdir)
     log(f"overview {group}: written")
@@ -877,6 +1104,48 @@ KNOWN = {"iter", "CFL", "omega", "cuts", "R", "rU", "rp", "linIters",
          "linRes", "tAsm", "tSolve", "tTurb", "tIter", "tWall", "nStat",
          "nDyn", "nLocLim", "nRollback", "nClamped", "eta", "rho", "nBound",
          "aa"}
+CYCLES = {"V": 0, "F": 1, "W": 2, "K": 3}
+
+
+def _cycle_series(cf, it):
+    """GAMG cycle type per outer iteration (0..3, NaN if unknown) from the
+    start value in the log and the autoTune events."""
+    cur = cf["_cycle0"]
+    y = np.full(len(it), np.nan)
+    evs = sorted((e for e in cf["_events"] if e[1] == "cycleType"), key=lambda e: e[0])
+    j = 0
+    for i, x in enumerate(it):
+        while j < len(evs) and evs[j][0] <= x:
+            cur = evs[j][3]
+            j += 1
+        y[i] = CYCLES.get(cur, np.nan) if cur else np.nan
+    return y
+
+
+def _npost_series(cf, it):
+    cur = cf["_npost0"]
+    y = np.full(len(it), np.nan)
+    evs = sorted((e for e in cf["_events"] if e[1] == "nPostSweeps"), key=lambda e: e[0])
+    if cur is None and evs:
+        cur = int(evs[0][2])
+    j = 0
+    for i, x in enumerate(it):
+        while j < len(evs) and evs[j][0] <= x:
+            cur = int(evs[j][3])
+            j += 1
+        y[i] = cur if cur is not None else np.nan
+    return y
+
+
+def _draw_series(ax, x, y, col, name, kind, log):
+    """One control history: exact step/line when short, envelope when long."""
+    if len(x) > ps.RAW_MAX:
+        ps.trace(ax, x, y, col, label=name, log=log, lw=0.9, band_alpha=0.2,
+                 median_lw=1.1, nbins=200)
+    elif kind == "step":
+        ax.step(x, y, where="mid", color=col, lw=0.9, label=name)
+    else:
+        ax.plot(x, y, color=col, lw=0.9, label=name)
 
 
 def fig_linear(run, title, cf, sf, ph, outdir, info):
@@ -885,6 +1154,8 @@ def fig_linear(run, title, cf, sf, ph, outdir, info):
     panels = []
     if cf is not None:
         it = cf["iter"]
+        cyc = _cycle_series(cf, it)
+        npost = _npost_series(cf, it)
         panels += [
             ("linear iterations\nper outer it.", [("linIters", cf.get("linIters"))], "lin", "step"),
             ("linear residual\n(final, rel.)", [("linRes", cf.get("linRes"))], "log", "line"),
@@ -910,121 +1181,113 @@ def fig_linear(run, title, cf, sf, ph, outdir, info):
             v = cf[k]
             if isinstance(v, np.ndarray) and v.size and np.nanmax(v) != np.nanmin(v):
                 panels.append((k, [(k, v)], "lin", "line"))
-    # panels whose every series is constant are listed in the text instead
+    # quantities constant over the whole run are listed in the text instead
+    # of a panel (also single constant series of a multi-series panel)
     keep = []
     for p in panels:
-        if isinstance(p[1], list):
-            ser = [(nm, y) for nm, y in p[1] if y is not None and np.any(np.isfinite(y))]
-            if ser and all(np.nanmax(y) == np.nanmin(y) for _, y in ser):
-                info.setdefault("constant", []).extend(
-                    f"{nm} = {np.nanmax(y):g}" for nm, y in ser)
+        lab, data, scale, kind = p
+        if data in ("cycle", "npost"):
+            y = cyc if data == "cycle" else npost
+            fails = [e for e in cf["_events"] if e[1] in ("failure", "kcycle-saturated")]
+            if not np.any(np.isfinite(y)):
+                info["notes"].append(("GAMG cycle type" if data == "cycle" else "nPostSweeps")
+                                     + " not in the log (panel omitted)")
                 continue
-        keep.append(p)
+            if ps.is_constant(y) and not (data == "cycle" and fails):
+                v = np.nanmax(y)
+                info.setdefault("constant", []).append(
+                    f"GAMG cycle = {[c for c, i in CYCLES.items() if i == v][0]}"
+                    if data == "cycle" else f"nPostSweeps = {v:g}")
+                continue
+            keep.append(p)
+            continue
+        ser = [(nm, y) for nm, y in data if y is not None and np.any(np.isfinite(y))]
+        const = [(nm, y) for nm, y in ser if ps.is_constant(y)]
+        info.setdefault("constant", []).extend(
+            f"{nm} = {np.nanmax(y):g}" for nm, y in const)
+        var = [(nm, y) for nm, y in ser if not ps.is_constant(y)]
+        if not var:
+            continue
+        keep.append((lab, var, scale, kind))
     panels = keep
     if sf is not None:
         panels.append(("simpleFoam linear\niterations per field", "sfnit", "log", None))
-    fig, axs = plt.subplots(len(panels), 1, figsize=(6.5, 0.95 * len(panels) + 0.6),
-                            squeeze=False)
-    axs = axs[:, 0]
-    # coupledFoam panels share the iteration axis; the simpleFoam panel has
-    # its own (it may run many more iterations)
-    for ax, p in zip(axs[1:], panels[1:]):
-        if cf is not None and p[1] != "sfnit":
-            ax.sharex(axs[0])
-    for ax, (lab, data, scale, kind) in zip(axs, panels):
+    if not panels:
+        return None
+    npan = len(panels)
+    ncol = 2 if npan > 3 else 1
+    nrow = int(np.ceil(npan / ncol))
+    fig, axs = ps.subplots(nrow, ncol, height=1.2 * nrow + 0.45)
+    # column-major: the coupledFoam panels of one column share the
+    # iteration axis; the simpleFoam panel (last) has its own
+    cells = [(i % nrow, i // nrow) for i in range(npan)]
+    for i in range(npan, nrow * ncol):
+        axs[i % nrow, i // nrow].axis("off")
+    first_in_col = {}
+    for (lab, data, scale, kind), (r, c) in zip(panels, cells):
+        ax = axs[r, c]
+        if data != "sfnit" and cf is not None:
+            if c in first_in_col:
+                ax.sharex(first_in_col[c])
+            else:
+                first_in_col[c] = ax
         if data == "cycle":
-            seq = {"V": 0, "F": 1, "W": 2, "K": 3}
-            cur = cf["_cycle0"]
-            y = np.full(len(it), np.nan)
-            evs = sorted((e for e in cf["_events"] if e[1] == "cycleType"),
-                         key=lambda e: e[0])
-            j = 0
-            for i, x in enumerate(it):
-                while j < len(evs) and evs[j][0] <= x:
-                    cur = evs[j][3]
-                    j += 1
-                y[i] = seq.get(cur, np.nan) if cur else np.nan
-            ax.step(it, y, where="post", color=C_COUPLED)
-            ax.set_yticks(list(seq.values()))
-            ax.set_yticklabels(list(seq))
+            ax.step(it, cyc, where="post", color=C_COUPLED, lw=1.0)
+            ax.set_yticks(list(CYCLES.values()))
+            ax.set_yticklabels(list(CYCLES))
             ax.set_ylim(-0.5, 3.5)
-            if cur is None:
-                ax.text(0.5, 0.5, "cycle type not in the log", transform=ax.transAxes,
-                        ha="center", fontsize=6)
             for e in cf["_events"]:
                 if e[1] in ("failure", "kcycle-saturated"):
-                    ax.axvline(e[0], color="#d62728", lw=0.6, ls="--")
-                    ax.text(e[0], 3.3, e[1], fontsize=5, color="#d62728",
-                            rotation=0, va="top")
+                    ax.axvline(e[0], color="#d62728", lw=0.7, ls="--")
+                    ax.text(e[0], 3.3, e[1], fontsize=ps.FS_NOTE, color="#d62728",
+                            va="top")
         elif data == "npost":
-            cur = cf["_npost0"]
-            y = np.full(len(it), np.nan)
-            evs = sorted((e for e in cf["_events"] if e[1] == "nPostSweeps"),
-                         key=lambda e: e[0])
-            if cur is None and evs:
-                cur = int(evs[0][2])
-            j = 0
-            for i, x in enumerate(it):
-                while j < len(evs) and evs[j][0] <= x:
-                    cur = int(evs[j][3])
-                    j += 1
-                y[i] = cur if cur is not None else np.nan
-            ax.step(it, y, where="post", color=C_COUPLED)
-            if np.all(np.isnan(y)):
-                ax.text(0.5, 0.5, "nPostSweeps not in the log", transform=ax.transAxes,
-                        ha="center", fontsize=6)
-            else:
-                ax.set_ylim(np.nanmin(y) - 0.5, np.nanmax(y) + 0.5)
+            ax.step(it, npost, where="post", color=C_COUPLED, lw=1.0)
+            ax.set_ylim(np.nanmin(npost) - 0.5, np.nanmax(npost) + 0.5)
         elif data == "sfnit":
             xs = np.arange(1, sf["n"] + 1)
             order = ["p", "Ux", "Uy", "Uz", "k", "omega", "epsilon", "nuTilda"]
             for j, f in enumerate(sorted(sf["nit"], key=lambda f: order.index(f) if f in order else 99)):
-                bx, by = decimate(xs, np.maximum(sf["nit"][f], 0.8))
-                ax.plot(bx, by, color=SERIES[j % len(SERIES)], lw=1.0, label=f)
+                ps.trace(ax, xs, np.maximum(sf["nit"][f], 0.8), SERIES[j % len(SERIES)],
+                         label=f, lw=0.9, band_alpha=0.12, median_lw=1.1, nbins=200,
+                         z=ps.Z_RAW + 0.1 * j)
             allv = np.concatenate([v[np.isfinite(v)] for v in sf["nit"].values()] or [np.array([1.0])])
             if allv.size and allv.max() > 10 * max(allv.min(), 1):
                 ax.set_yscale("log")
-            small_legend(ax, ncol=6, loc="upper right")
-            ax.text(0.01, 0.85, "simpleFoam (x axis: its own iterations)",
-                    transform=ax.transAxes, fontsize=5)
-            ax.set_xlabel("simpleFoam iteration", fontsize=6)
+            ps.inner_legend(ax, ncol=3)
+            ax.set_xlim(0, sf["n"] * 1.02)
+            ax.set_xlabel("simpleFoam iteration (own axis)")
         else:
-            nplot = 0
             for j, (name, y) in enumerate(data):
-                if y is None:
-                    continue
-                c = SERIES[j % len(SERIES)] if len(data) > 1 else C_COUPLED
-                if kind == "step":
-                    ax.step(it, y, where="mid", color=c, lw=0.7, label=name)
-                else:
-                    ax.plot(it, y, color=c, lw=0.7, label=name)
-                nplot += 1
-            ys = [y for _, y in data if y is not None]
-            fin = np.concatenate([y[np.isfinite(y) & (y > 0)] for y in ys]) if ys else np.array([])
+                col = SERIES[j % len(SERIES)] if len(data) > 1 else C_COUPLED
+                _draw_series(ax, it, y, col, name, kind, scale == "log")
+            fin = np.concatenate([y[np.isfinite(y) & (y > 0)] for _, y in data])
             if scale == "log" and fin.size and fin.max() > 10 * fin.min():
                 ax.set_yscale("log")
             elif scale == "symlog":
                 ax.set_yscale("symlog", linthresh=1)
-            if nplot > 1:
-                small_legend(ax, ncol=4, loc="upper right")
-            if nplot == 0:
-                ax.text(0.5, 0.5, "not in this log", transform=ax.transAxes,
-                        ha="center", fontsize=6)
-        ax.set_ylabel(lab, fontsize=6)
-        ax.tick_params(labelsize=6)
+            if len(data) > 1:
+                ps.inner_legend(ax, ncol=min(2, len(data)))
+        ax.set_ylabel(lab)
         if cf is not None and data != "sfnit":
             bands(ax, ph)
             events(ax, cf["_events"])
+            ax.set_xlim(0, _xmax(it) * 1.02)
+    # x tick labels only on the last coupledFoam panel of each column (and
+    # on the simpleFoam panel)
+    for c in range(ncol):
+        col_cells = [(k, p) for k, (p, cell) in enumerate(zip(panels, cells))
+                     if cell[1] == c and p[1] != "sfnit"]
+        for n_, (k, p) in enumerate(col_cells):
+            ax = axs[cells[k]]
+            if n_ < len(col_cells) - 1:
+                ax.tick_params(labelbottom=False)
+            else:
+                ax.set_xlabel("coupledFoam outer iteration")
     if cf is not None:
-        last_cf = max(i for i, p in enumerate(panels) if p[1] != "sfnit")
-        axs[last_cf].set_xlabel("outer iteration (coupledFoam)", fontsize=6)
         info["linTotal"] = float(np.nansum(cf.get("linIters", np.array([np.nan]))))
-    fig.suptitle(f"{title}: linear solver and controls per outer iteration "
-                 "(dotted: GAMG autoTune events)", fontsize=7)
-    fig.tight_layout(h_pad=0.2, rect=(0, 0, 1, 0.985))
+    ps.tight(fig, h_pad=0.4, w_pad=1.5)
     return save(fig, f"hist_{run}_linear", outdir)
-
-
 # --------------------------------------------------------------------------- #
 # appendix text
 # --------------------------------------------------------------------------- #
@@ -1055,10 +1318,17 @@ def tex_section(run, title, made, info, status) -> str:
     if info.get("linTotal") is not None:
         s.append(f"coupledFoam linear iterations in total: {info['linTotal']:.0f}")
     for solver, v in (info.get("stat") or {}).items():
-        its, W, cd, cl = v
-        s.append(f"{solver} D-042 window $W={_fmt(W, '{}')}$: "
-                 f"$\\bar C_d={_fmt(cd, '{:.4f}')}$, $\\bar C_l={_fmt(cl, '{:.4f}')}$, "
-                 f"stationary from iteration {_fmt(its, '{}')}")
+        its, W, cd, cl, kind = v
+        if kind == "D-042":
+            s.append(f"{solver} D-042 window $W={_fmt(W, '{}')}$: "
+                     f"$\\bar C_d={_fmt(cd, '{:.4f}')}$, $\\bar C_l={_fmt(cl, '{:.4f}')}$, "
+                     f"stationary from iteration {_fmt(its, '{}')}")
+        else:
+            s.append(f"{solver} means over the last $W={_fmt(W, '{}')}$ "
+                     f"iterations: $\\bar C_d={_fmt(cd, '{:.4f}')}$, "
+                     f"$\\bar C_l={_fmt(cl, '{:.4f}')}$; criterion 12.3(ii) "
+                     + (f"met at iteration {its}" if its else
+                        "not met within the run"))
     for (solver, q), (m, sd) in (info.get("mon") or {}).items():
         if q == "dp":
             s.append(f"{solver} window mean of $\\Delta p$: {m:.5g} "
@@ -1072,20 +1342,40 @@ def tex_section(run, title, made, info, status) -> str:
         L += [r"\begin{itemize}\setlength{\itemsep}{0pt}\small"]
         L += [rf"\item {x}." for x in s]
         L += [r"\end{itemize}", ""]
+    forces_case = (RUNS.get(run) or (None,) * 4)[3] == "forces"
+    marker = ("" if not forces_case else
+              ", dash-dot: iterations to a stationary window (D-042)"
+              if _oscillatory(run) else
+              ", dash-dot-dot: criterion 12.3(ii) met")
     caps = {
         "loads": "monitored quantities per outer iteration (left) and over "
-                 "wall-clock time (right); thin: raw, dashed: running mean over "
-                 "the D-042 window $W$ with $\\pm$RMS band, shaded: final "
-                 "averaging window, dash-dot: iterations to a stationary window",
-        "residuals": "residuals per outer iteration (left) and over wall-clock "
-                     "time (right), coupledFoam top, simpleFoam bottom, same "
-                     "y range",
+                 "wall-clock time (right), both solvers on the same axes; "
+                 "thin line or light band: per-iteration values (long runs: "
+                 "min--max per bin with the bin median), dashed with band: "
+                 "running mean $\\pm$RMS over the averaging window $W$, "
+                 f"shaded: final averaging window{marker}"
+                 + (", solid: user convergence point (D-060, if set)" if forces_case else "")
+                 + "; triangles at the axis "
+                 "edge mark start-up values outside the plotted range; runs "
+                 "of very different length get zoom panels on the shorter "
+                 "run (an extra column, or a second row per quantity)",
+        "residuals": "residuals per outer iteration (left, each solver on its "
+                     "own iteration axis) and over wall-clock time (right, "
+                     "same axis for both solvers; inset: zoom on the shorter "
+                     "run), coupledFoam top, simpleFoam bottom, same y range; "
+                     "long runs: light band = min--max per bin, line = bin "
+                     "median; dotted vertical lines: GAMG autoTune events",
         "wall": "cumulative wall time with linear fit (top), wall time per "
-                "iteration with rolling median (middle), coupledFoam time "
-                "split into assembly, linear solve, turbulence and other "
-                "(bottom)",
+                "iteration with rolling median (middle; light band: min--max "
+                "per bin), coupledFoam time split into assembly, linear "
+                "solve, turbulence and other (bottom); right column, if "
+                "present: zoom on the coupledFoam iterations",
         "linear": "linear solver and pseudo-time controls per outer "
-                  "iteration; bottom: simpleFoam linear iterations per field",
+                  "iteration (the coupledFoam panels of one column share the "
+                  "iteration axis; quantities constant over the run are "
+                  "listed above instead of plotted; dotted vertical lines: "
+                  "GAMG autoTune events); last panel: simpleFoam linear "
+                  "iterations per field over its own iterations",
     }
     for kind in ("loads", "residuals", "wall", "linear"):
         if kind == "loads" and kind not in made and info.get("noLoads"):
@@ -1116,6 +1406,7 @@ HIST_PREAMBLE = r"""\providecommand{\cfhistfigure}[3]{%
 
 def run(names: list[str] | None = None, outdir: Path = FIG,
         log=print) -> tuple[list[tuple[str, str]], list[str]]:
+    ps.apply()      # other figure modules may have changed the rcParams
     outdir.mkdir(parents=True, exist_ok=True)
     figs, notes, secs = [], [], []
     for name, (cfn, sfn, title, monitor) in RUNS.items():
@@ -1184,7 +1475,9 @@ def run(names: list[str] | None = None, outdir: Path = FIG,
     if not names:
         for group, members in (("wing", ["T3_kOmegaSST_np1", "T3_GEKO_np1"]),
                                ("motorbike", ["T4a_np10", "T4b_np10"]),
-                               ("ahmed", [T5_RUN])):
+                               ("ahmed", [] if T5_DEFERRED else [T5_RUN])):
+            if not members:          # deferred case (D-063)
+                continue
             try:
                 st = fig_overview(group, members, outdir, log)
             except Exception as e:  # noqa: BLE001

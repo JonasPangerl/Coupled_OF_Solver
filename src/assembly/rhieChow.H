@@ -88,14 +88,19 @@ class rhieChow
         //- True once D has been set
         bool valid_;
 
-        //- Static-remediation cells: cellLimited 1 gradient of p (8.1)
+        //- Remediation cells with gradLimiter: limited gradient of p (8.1,
+        //  D-018, D-066)
         boolList isStatic_;
         bool anyStatic_;
+
+        //- Their gradient scheme (remediation.limitedGradScheme)
+        string limitedGradScheme_;
 
         //- Tensorial diffusivity (C2)
         bool tensorial_;
         doubleScalar detRelTol_;
         doubleScalar pinvRelTol_;
+        label pinvMaxSweeps_;
 
         //- D = V A^-1 per cell with coupled boundary values (tensorial only)
         autoPtr<volTensorField> DTPtr_;
@@ -123,9 +128,10 @@ public:
 
     // Member Functions
 
-        //- Static remediation cells (8.1): the pressure gradient of the
-        //  Rhie-Chow terms uses "cellLimited Gauss linear 1" there
-        void setStaticCells(const boolList& isStatic);
+        //- Remediation cells with gradLimiter (8.1, D-066): the pressure
+        //  gradient of the Rhie-Chow terms uses remediation.limitedGradScheme
+        //  (default "cellLimited Gauss linear 1") there
+        void setGradLimitedCells(const boolList& isStatic);
 
         //- Set D from abar (per cell) and build the scalar D_f with the
         //  boundary policy (tensorial no; restart fallback)
@@ -171,8 +177,9 @@ public:
         const volScalarField& D() const noexcept { return D_; }
         const surfaceScalarField& Df() const noexcept { return Df_; }
 
-        //- gAverage(D) (row scaling reference, 5.3f)
-        scalar Dref() const;
+        //- Global mean of D, double-accumulated (row scaling reference,
+        //  5.3f; D4)
+        doubleScalar Dref() const;
 
         //- Evaluate gradp and q_f for p (needs D_f)
         void updateExplicit

@@ -4,8 +4,10 @@
 \*---------------------------------------------------------------------------*/
 
 #include "sfdControl.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "PstreamReduceOps.H"
+#include "coupledState.H"
 #include <cmath>
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
@@ -41,10 +43,12 @@ Foam::sfdControl::sfdControl
     Delta_ = d.getOrDefault<scalar>("Delta", Delta_);
     Lref_ = d.getOrDefault<scalar>("Lref", Lref_);
     deactivateBelowR_ =
-        d.getOrDefault<scalar>("deactivateBelowR", deactivateBelowR_);
+        d.getOrDefault<doubleScalar>("deactivateBelowR", deactivateBelowR_);
     resetOnFlush_ = d.getOrDefault<bool>("resetOnFlush", resetOnFlush_);
     afterStartup_ = d.getOrDefault<bool>("afterStartup", afterStartup_);
     startIter_ = d.getOrDefault<label>("startIter", startIter_);
+    // Iterations below deactivateBelowR before SFD-off (default ptc.nHold)
+    nHold_ = d.getOrDefault<label>("nHold", nHold_);
 
     // Negated comparisons also reject non-finite input
     if
@@ -108,9 +112,9 @@ void Foam::sfdControl::setReference(const scalar Uref)
         return;
     }
 
-    // GUARD: Uref, Lref > 0 (Uref >= VSMALL from lineSearch)
+    // GUARD: Uref, Lref > 0 (Uref >= cfVSmall from lineSearch)
     chiStar_ = chi_*Uref/Lref_;
-    DeltaStar_ = Delta_*Lref_/max(Uref, VSMALL);
+    DeltaStar_ = Delta_*Lref_/max(Uref, cfVSmall<scalar>());
 
     Info<< "coupledFoam: SFD (7.6) chi* = chi Uref/Lref = " << chiStar_
         << " 1/s, Delta* = Delta Lref/Uref = " << DeltaStar_ << " s"
@@ -177,8 +181,8 @@ void Foam::sfdControl::update
 
     forAll(ub, celli)
     {
-        // GUARD: V/dt >= VSMALL (5.4); dt/(Delta* + dt) in [0, 1]
-        const scalar dt = V[celli]/max(rDeltaTV[celli], VSMALL);
+        // GUARD: V/dt > 0 (5.4); dt/(Delta* + dt) in [0, 1]
+        const scalar dt = V[celli]/max(rDeltaTV[celli], cfVSmall<scalar>());
         const scalar a = dt/(DeltaStar_ + dt);
         ub[celli] += a*(u[celli] - ub[celli]);
     }
@@ -186,7 +190,7 @@ void Foam::sfdControl::update
 }
 
 
-bool Foam::sfdControl::checkOff(const scalar R, const label iter)
+bool Foam::sfdControl::checkOff(const doubleScalar R, const label iter)
 {
     if (!active())
     {
@@ -219,8 +223,8 @@ Foam::scalar Foam::sfdControl::maxDeviation
     }
     const scalar m =
         max(mag(U.primitiveField() - UbarPtr_->primitiveField())());
-    // GUARD: Uref >= VSMALL
-    return m/max(Uref, VSMALL);
+    // GUARD: Uref > 0
+    return m/max(Uref, cfVSmall<scalar>());
 }
 
 
@@ -279,10 +283,17 @@ void Foam::sfdControl::readState(const dictionary& dict)
         IOobject::NO_WRITE,
         IOobject::NO_REGISTER
     );
+    // Both decisions agreed over all ranks (D-069 F5): a USFD present on
+    // some ranks only is a FatalError, not rank-dependent SFD activity
+    const bool wanted =
+        returnReduceAnd(dict.getOrDefault<bool>("sfdInitialised", false));
     if
     (
-        dict.getOrDefault<bool>("sfdInitialised", false)
-     && io.typeHeaderOk<volVectorField>(true)
+        wanted
+     && coupledState::presentOnAllRanks
+        (
+            io.typeHeaderOk<volVectorField>(true), io.name(), io.path()
+        )
     )
     {
         const volVectorField Ur(io, mesh_);

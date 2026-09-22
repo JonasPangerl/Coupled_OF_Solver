@@ -35,6 +35,7 @@ control/gamgAutoTune.C
 control/anderson.C
 control/sfdControl.C
 control/startupControl.C
+control/precisionProfile.C
 
 io/jsonWriter.C
 io/runInfo.C

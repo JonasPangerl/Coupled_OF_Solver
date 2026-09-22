@@ -449,7 +449,14 @@ def sp_solver_settings(case: Path) -> dict:
 
     f.write_text(_SOLVER_BLOCK_RE.sub(blk, text))
     removed = []
+    try:
+        explicit = json.loads((case / "harnessSets.json").read_text()).get(
+            "system/fvSolution", {})
+    except (OSError, ValueError):
+        explicit = {}
     for e in PROFILE_ENTRIES:
+        if e in explicit:
+            continue      # set by the run itself (e.g. the benchmark stop)
         rc = cfenv.run(["foamDictionary", "-disableFunctionEntries", "-entry",
                         e, "-remove", "system/fvSolution"], cwd=case,
                        log=case / "log.foamDictionary.sp", nice=False)

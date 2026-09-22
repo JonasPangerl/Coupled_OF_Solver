@@ -67,13 +67,22 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
     const reduceScalar nf =
         (normFactorIn > 0 ? normFactorIn : normFactor(x, b));
 
-    // Work vectors 64-byte aligned (6.5.3)
-    alignedList<blockScalar> r(n);
-    alignedList<blockScalar> w(n);
-    List<alignedList<blockScalar>> V(m + 1);
+    // Work vectors 64-byte aligned (6.5.3), kept across solves (D-069 F12)
+    r_.resize_nocopy(n);
+    w_.resize_nocopy(n);
+    z_.resize_nocopy(n);
+    Vy_.resize_nocopy(n);
+    if (V_.size() != m + 1)
+    {
+        V_.clear();
+        V_.resize(m + 1);
+    }
+    alignedList<blockScalar>& r = r_;
+    alignedList<blockScalar>& w = w_;
+    List<alignedList<blockScalar>>& V = V_;
+    alignedList<blockScalar>& z = z_;
+    alignedList<blockScalar>& Vy = Vy_;
     List<const blockScalar*> vPtr(m + 1);
-    alignedList<blockScalar> z(n);
-    alignedList<blockScalar> Vy(n);
     List<blockScalar> yb(m);
     for (label j = 0; j <= m; ++j)
     {
@@ -90,14 +99,15 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
 
     // Iterate in double (iterative refinement as blockFGMRES, see the class
     // description)
-    alignedList<reduceScalar> xd(n);
+    xd_.resize_nocopy(n);
+    alignedList<reduceScalar>& xd = xd_;
     blockKernels::widen(n, x.cdata(), xd.data());
 
     matrix_.residualDouble(r, xd, b);
     reduceScalar beta = doubleReduce::norm2(r, comm);
     const reduceScalar beta0 = beta;
 
-    perf.initialResidual = beta/nf;  // GUARD: nf >= SMALL
+    perf.initialResidual = beta/nf;  // GUARD: nf >= cfVSmall
     perf.finalResidual = perf.initialResidual;
 
     if (converged(perf.initialResidual, perf.initialResidual, 0))

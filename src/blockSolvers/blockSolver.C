@@ -4,9 +4,11 @@
 \*---------------------------------------------------------------------------*/
 
 #include "blockSolver.H"
+#include "coupledConstants.H"
 #include "blockPreconditioner.H"
 #include "doubleReduce.H"
 #include "blockKernels.H"
+#include "precisionProfile.H"
 #include "coupledDefaults.H"
 #include <cmath>
 
@@ -51,7 +53,11 @@ Foam::blockSolver::blockSolver
     controlDict_(dict),
     tolerance_
     (
-        dict.getOrDefault<doubleScalar>("tolerance", coupledDefaults::tolerance)
+        dict.getOrDefault<doubleScalar>
+        (
+            "tolerance",
+            precisionProfile::current().tolerance    // D7
+        )
     ),
     relTol_(dict.getOrDefault<doubleScalar>("relTol", coupledDefaults::relTol)),
     maxIter_(dict.getOrDefault<label>("maxIter", coupledDefaults::maxIter)),
@@ -65,7 +71,11 @@ Foam::blockSolver::blockSolver
     diag_(nullptr)
 {
     const word preconName =
-        dict.getOrDefault<word>("preconditioner", "none");
+        dict.getOrDefault<word>
+        (
+            "preconditioner",
+            word(coupledDefaults::preconditioner)
+        );
 
     if (preconName != "none")
     {
@@ -116,6 +126,13 @@ bool Foam::blockSolver::converged
     const label nIter
 ) const
 {
+    // An exactly zero residual (e.g. a zero right-hand side on the coarsest
+    // level with tolerance 0) is converged: nothing to reduce, and the
+    // Krylov scalars would be 0/0 (D-069 F8)
+    if (residual == 0)
+    {
+        return true;
+    }
     if (nIter < minIter_)
     {
         return false;
@@ -227,8 +244,8 @@ Foam::reduceScalar Foam::blockSolver::normFactor
         s += std::abs(toDouble(AxPtr[i])) + std::abs(toDouble(bPtr[i]));
     }
 
-    // GUARD: normFactor >= SMALL (spec 9.2)
-    return doubleReduce::parSum(s, matrix_.comm()) + doubleScalarSMALL;
+    // GUARD: normFactor >= cfVSmall (spec 9.2, D3)
+    return doubleReduce::parSum(s, matrix_.comm()) + cfVSmall<reduceScalar>();
 }
 
 
@@ -251,7 +268,7 @@ Foam::reduceScalar Foam::blockSolver::measureRho
     // GUARD: ||r|| > 0
     return
         doubleReduce::norm2(Az, matrix_.comm())
-       /max(doubleReduce::norm2(r, matrix_.comm()), doubleScalarVSMALL);
+       /max(doubleReduce::norm2(r, matrix_.comm()), cfVSmall<reduceScalar>());
 }
 
 

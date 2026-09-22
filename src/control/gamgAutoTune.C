@@ -21,6 +21,12 @@ Foam::gamgAutoTune::gamgAutoTune
     autoTune_(coupledDefaults::autoTune),
     tuneInterval_(coupledDefaults::tuneInterval),
     nPostSweepsMax_(coupledDefaults::nPostSweepsMax),
+    rhoHigh_(coupledDefaults::tuneRhoHigh),
+    rhoLow_(coupledDefaults::tuneRhoLow),
+    rhoDemote_(coupledDefaults::tuneRhoDemote),
+    rhoFail_(coupledDefaults::tuneRhoFail),
+    consecutiveWindows_(coupledDefaults::tuneConsecutiveWindows),
+    nPostSweepsMin_(coupledDefaults::minPostSweeps),
     userCycle_(gamg.cycleType()),
     window_(),
     nInWindow_(0),
@@ -46,17 +52,46 @@ Foam::gamgAutoTune::gamgAutoTune
             coupledDefaults::nPostSweepsMax
         );
 
+    rhoHigh_ = d.getOrDefault<doubleScalar>("tuneRhoHigh", rhoHigh_);
+    rhoLow_ = d.getOrDefault<doubleScalar>("tuneRhoLow", rhoLow_);
+    rhoDemote_ = d.getOrDefault<doubleScalar>("tuneRhoDemote", rhoDemote_);
+    rhoFail_ = d.getOrDefault<doubleScalar>("tuneRhoFail", rhoFail_);
+    consecutiveWindows_ =
+        d.getOrDefault<label>("tuneConsecutiveWindows", consecutiveWindows_);
+    nPostSweepsMin_ = d.getOrDefault<label>("nPostSweepsMin", nPostSweepsMin_);
+
+    // Negated comparisons also reject non-finite input
+    if
+    (
+        !(rhoDemote_ > 0 && rhoDemote_ <= rhoLow_ && rhoLow_ < rhoHigh_
+       && rhoHigh_ <= rhoFail_ && rhoFail_ < 1)
+    )
+    {
+        FatalIOErrorInFunction(d)
+            << "autoTune thresholds must satisfy 0 < tuneRhoDemote <="
+            << " tuneRhoLow < tuneRhoHigh <= tuneRhoFail < 1, got "
+            << rhoDemote_ << ", " << rhoLow_ << ", " << rhoHigh_ << ", "
+            << rhoFail_ << exit(FatalIOError);
+    }
+    if (consecutiveWindows_ < 1 || nPostSweepsMin_ < 1)
+    {
+        FatalIOErrorInFunction(d)
+            << "tuneConsecutiveWindows (" << consecutiveWindows_
+            << ") and nPostSweepsMin (" << nPostSweepsMin_
+            << ") must be >= 1" << exit(FatalIOError);
+    }
+
     if (tuneInterval_ < 1)
     {
         FatalIOErrorInFunction(d)
             << "tuneInterval " << tuneInterval_ << " must be >= 1"
             << exit(FatalIOError);
     }
-    if (nPostSweepsMax_ < coupledDefaults::minPostSweeps)
+    if (nPostSweepsMax_ < nPostSweepsMin_)
     {
         FatalIOErrorInFunction(d)
             << "nPostSweepsMax " << nPostSweepsMax_ << " must be >= "
-            << coupledDefaults::minPostSweeps << exit(FatalIOError);
+            << nPostSweepsMin_ << exit(FatalIOError);
     }
 
     window_.reserve(tuneInterval_);
@@ -65,9 +100,9 @@ Foam::gamgAutoTune::gamgAutoTune
 
 // * * * * * * * * * * * * * Private Member Functions  * * * * * * * * * * * //
 
-Foam::scalar Foam::gamgAutoTune::median(const UList<scalar>& v)
+Foam::doubleScalar Foam::gamgAutoTune::median(const UList<doubleScalar>& v)
 {
-    List<scalar> s(v);
+    List<doubleScalar> s(v);
     std::sort(s.begin(), s.end());
 
     const label n = s.size();
@@ -84,7 +119,7 @@ void Foam::gamgAutoTune::addEvent
 (
     const label iter,
     const std::string& what,
-    const scalar rhoMed
+    const doubleScalar rhoMed
 )
 {
     Info<< "GAMG-tune: " << what.c_str() << " rho_med=" << rhoMed << endl;
@@ -92,7 +127,7 @@ void Foam::gamgAutoTune::addEvent
 }
 
 
-void Foam::gamgAutoTune::applyHigh(const label iter, const scalar rhoMed)
+void Foam::gamgAutoTune::applyHigh(const label iter, const doubleScalar rhoMed)
 {
     const label nPost = gamg_.nPostSweeps();
 
@@ -175,7 +210,7 @@ Foam::blockGAMG::cycleKind Foam::gamgAutoTune::demotionTarget() const
 }
 
 
-void Foam::gamgAutoTune::demote(const label iter, const scalar rhoMed)
+void Foam::gamgAutoTune::demote(const label iter, const doubleScalar rhoMed)
 {
     const blockGAMG::cycleKind c = gamg_.cycleType();
     const blockGAMG::cycleKind prev = demotionTarget();
@@ -195,7 +230,7 @@ void Foam::gamgAutoTune::demote(const label iter, const scalar rhoMed)
 }
 
 
-void Foam::gamgAutoTune::applyLow(const label iter, const scalar rhoMed)
+void Foam::gamgAutoTune::applyLow(const label iter, const doubleScalar rhoMed)
 {
     // 6.3.5: "rho < 0.3 and nPostSweeps > 1: nPostSweeps -= 1. If
     // nPostSweeps == 1 and rho < 0.2 and cycleType was promoted by the
@@ -205,7 +240,7 @@ void Foam::gamgAutoTune::applyLow(const label iter, const scalar rhoMed)
     // so it stays reachable once the sweeps are at the minimum.
     const label nPost = gamg_.nPostSweeps();
 
-    if (nPost > coupledDefaults::minPostSweeps)
+    if (nPost > nPostSweepsMin_)
     {
         gamg_.setNPostSweeps(nPost - 1);
         changed_ = true;
@@ -224,8 +259,8 @@ void Foam::gamgAutoTune::applyLow(const label iter, const scalar rhoMed)
 
     if
     (
-        gamg_.nPostSweeps() == coupledDefaults::minPostSweeps
-     && rhoMed < coupledDefaults::tuneRhoDemote
+        gamg_.nPostSweeps() == nPostSweepsMin_
+     && rhoMed < rhoDemote_
     )
     {
         demote(iter, rhoMed);
@@ -233,13 +268,13 @@ void Foam::gamgAutoTune::applyLow(const label iter, const scalar rhoMed)
 }
 
 
-void Foam::gamgAutoTune::evaluate(const label iter, const scalar rhoMed)
+void Foam::gamgAutoTune::evaluate(const label iter, const doubleScalar rhoMed)
 {
     // Failure condition (checked on the state the window was run with)
     const blockGAMG::cycleKind c = gamg_.cycleType();
     if
     (
-        rhoMed > coupledDefaults::tuneRhoFail
+        rhoMed > rhoFail_
      && gamg_.nPostSweeps() >= nPostSweepsMax_
      && (c == blockGAMG::cycleKind::W || c == blockGAMG::cycleKind::K)
     )
@@ -251,13 +286,13 @@ void Foam::gamgAutoTune::evaluate(const label iter, const scalar rhoMed)
         nFailWindows_ = 0;
     }
 
-    if (nFailWindows_ >= coupledDefaults::tuneConsecutiveWindows && !failed_)
+    if (nFailWindows_ >= consecutiveWindows_ && !failed_)
     {
         failed_ = true;
         WarningInFunction
             << "blockGAMG cycle efficiency failure: rho_med " << rhoMed
-            << " > " << coupledDefaults::tuneRhoFail
-            << " in " << coupledDefaults::tuneConsecutiveWindows
+            << " > " << rhoFail_
+            << " in " << consecutiveWindows_
             << " consecutive windows at nPostSweepsMax "
             << nPostSweepsMax_ << " with cycleType "
             << blockGAMG::cycleName(c) << endl;
@@ -268,17 +303,17 @@ void Foam::gamgAutoTune::evaluate(const label iter, const scalar rhoMed)
     // at the minimum and a controller promotion can be undone (6.3.5)
     const label nPost = gamg_.nPostSweeps();
     condition cond = condition::none;
-    if (rhoMed > coupledDefaults::tuneRhoHigh)
+    if (rhoMed > rhoHigh_)
     {
         cond = condition::high;
     }
     else if
     (
-        rhoMed < coupledDefaults::tuneRhoLow
+        rhoMed < rhoLow_
      && (
-            nPost > coupledDefaults::minPostSweeps
+            nPost > nPostSweepsMin_
          || (
-                rhoMed < coupledDefaults::tuneRhoDemote
+                rhoMed < rhoDemote_
              && demotionTarget() != gamg_.cycleType()
             )
         )
@@ -302,7 +337,7 @@ void Foam::gamgAutoTune::evaluate(const label iter, const scalar rhoMed)
     if
     (
         cond != condition::none
-     && nSameCondition_ >= coupledDefaults::tuneConsecutiveWindows
+     && nSameCondition_ >= consecutiveWindows_
     )
     {
         if (cond == condition::high)
@@ -321,7 +356,7 @@ void Foam::gamgAutoTune::evaluate(const label iter, const scalar rhoMed)
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-bool Foam::gamgAutoTune::record(const label iter, const scalar rho)
+bool Foam::gamgAutoTune::record(const label iter, const doubleScalar rho)
 {
     changed_ = false;
 
@@ -358,7 +393,7 @@ void Foam::gamgAutoTune::writeState(dictionary& dict) const
     dictionary d;
     d.set("nPostSweeps", gamg_.nPostSweeps());
     d.set("cycleType", blockGAMG::cycleName(gamg_.cycleType()));
-    d.set("window", scalarList(window_));
+    d.set("window", List<doubleScalar>(window_));
     d.set("nInWindow", nInWindow_);
     d.set("prevCondition", label(prevCondition_));
     d.set("nSameCondition", nSameCondition_);
@@ -384,11 +419,11 @@ void Foam::gamgAutoTune::readState(const dictionary& dict)
 
     // Re-apply the controller's sweeps and cycle type to the GAMG
     const label nPost = d.get<label>("nPostSweeps");
-    if (nPost < coupledDefaults::minPostSweeps)
+    if (nPost < nPostSweepsMin_)
     {
         FatalIOErrorInFunction(d)
             << "nPostSweeps " << nPost << " < "
-            << coupledDefaults::minPostSweeps << exit(FatalIOError);
+            << nPostSweepsMin_ << exit(FatalIOError);
     }
     gamg_.setNPostSweeps(nPost);
 
@@ -402,7 +437,7 @@ void Foam::gamgAutoTune::readState(const dictionary& dict)
             << blockGAMG::cycleName(gamg_.cycleType()) << endl;
     }
 
-    const scalarList w(d.get<scalarList>("window"));
+    const List<doubleScalar> w(d.get<List<doubleScalar>>("window"));
     window_.clear();
     window_.push_back(w);
     nInWindow_ = d.get<label>("nInWindow");
@@ -472,6 +507,12 @@ Foam::dictionary Foam::gamgAutoTune::settings() const
     d.add("autoTune", autoTune_);
     d.add("tuneInterval", tuneInterval_);
     d.add("nPostSweepsMax", nPostSweepsMax_);
+    d.add("nPostSweepsMin", nPostSweepsMin_);
+    d.add("tuneRhoHigh", rhoHigh_);
+    d.add("tuneRhoLow", rhoLow_);
+    d.add("tuneRhoDemote", rhoDemote_);
+    d.add("tuneRhoFail", rhoFail_);
+    d.add("tuneConsecutiveWindows", consecutiveWindows_);
     d.add("userCycleType", blockGAMG::cycleName(userCycle_));
     return d;
 }

@@ -1,6 +1,10 @@
 """T-fpe - torture test on T1 (spec 13).
 
-Init U = 0 everywhere, potentialInit no, CFL0 200, startupUpwindIters 0.
+Init U = 0 everywhere, potentialInit no, CFL0 200, no start-up ramp:
+coupled.startupMode none (full second-order convection and the full
+pseudo-time step from iteration 1). startupUpwindIters 0 alone had no
+effect: it is read only in startupMode upwind, while the default is the
+hybrid beta ramp (D-048; review m12, D-068).
 Pass (Debug build, traps on): no trap; the run recovers (rollbacks >= 1
 allowed) and converges to R < 1e-5. Pass (Opt build): identical converged
 dp to 1e-4 relative to the Debug result.
@@ -37,6 +41,8 @@ def test_fpe(foam):
         "system/fvSolution": {
             "coupled.potentialInit": "no",
             "coupled.ptc.CFL0": 200,
+            # no start-up ramp at all (the hybrid default would ramp)
+            "coupled.startupMode": "none",
             "coupled.startupUpwindIters": 0,
             "coupled.maxIter": MAX_ITERS,
             "coupled.convergence.residualTol": R_TARGET,

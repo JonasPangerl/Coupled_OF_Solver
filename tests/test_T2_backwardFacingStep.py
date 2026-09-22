@@ -92,7 +92,8 @@ def test_T2(foam, nprocs):
     rec["pass"] = passed
     results.write("tests", name, rec)
 
-    assert rec["rc"] == 0 and not rec["fpeTrap"]
+    assert rec["rc"] == 0 and not rec["fpeTrap"], \
+        (rec.get("failure"), rec.get("logTail"))
     assert rec["nPseudoInverse"] == 0, rec["nPseudoInverse"]  # C2
     assert rec["xrRelDiff"] < TOL_REATTACH, (xr, xr_ref)
     assert rec["iterationRatio"] is not None, (it_coupled, it_native)
