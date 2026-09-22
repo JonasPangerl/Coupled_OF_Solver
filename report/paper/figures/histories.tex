@@ -11,7 +11,7 @@
 \subsection{T0 cavity, Re 100, 1 rank}\label{app:hist:T0_Re100_np1}
 
 \begin{itemize}\setlength{\itemsep}{0pt}\small
-\item coupledFoam: 57 iterations, 5.742\,s wall-clock, 0.00171 CPU-h; time per iteration 0.0567\,s (first 10\,\%) and 0.0591\,s (last 10\,\%), linear fit 0.104\,s/it ($R^2=0.976$).
+\item coupledFoam: 57 iterations, 5.778\,s wall-clock, 0.00172 CPU-h; time per iteration 0.055\,s (first 10\,\%) and 0.0585\,s (last 10\,\%), linear fit 0.105\,s/it ($R^2=0.977$).
 \item simpleFoam: 1932 iterations, 173\,s wall-clock, 0.0481 CPU-h; time per iteration 0.0597\,s (first 10\,\%) and 0.0697\,s (last 10\,\%), linear fit 0.0913\,s/it ($R^2=0.999$).
 \item coupledFoam linear iterations in total: 465.
 \item constant over the whole coupledFoam run (panel omitted): bounding events = 0, cuts = 0, nRollback = 0.
@@ -41,7 +41,7 @@
 \subsection{T0 cavity, Re 1000, 1 rank}\label{app:hist:T0_Re1000_np1}
 
 \begin{itemize}\setlength{\itemsep}{0pt}\small
-\item coupledFoam: 111 iterations, 26.01\,s wall-clock, 0.00715 CPU-h; time per iteration 0.0834\,s (first 10\,\%) and 0.15\,s (last 10\,\%), linear fit 0.274\,s/it ($R^2=0.978$).
+\item coupledFoam: 111 iterations, 24.01\,s wall-clock, 0.00656 CPU-h; time per iteration 0.0836\,s (first 10\,\%) and 0.135\,s (last 10\,\%), linear fit 0.251\,s/it ($R^2=0.972$).
 \item simpleFoam: 1971 iterations, 179\,s wall-clock, 0.0497 CPU-h; time per iteration 0.0897\,s (first 10\,\%) and 0.0797\,s (last 10\,\%), linear fit 0.0898\,s/it ($R^2=0.999$).
 \item coupledFoam linear iterations in total: 1347.
 \item constant over the whole coupledFoam run (panel omitted): bounding events = 0, omega = 1.
@@ -173,9 +173,12 @@
 \subsection{T4a motorBike, 354k cells, 10 ranks}\label{app:hist:T4a_np10}
 
 \begin{itemize}\setlength{\itemsep}{0pt}\small
-\item coupledFoam: run in progress, skipped (pending).
+\item coupledFoam: 800 iterations, 709.5\,s wall-clock, 1.97 CPU-h; time per iteration 0.821\,s (first 10\,\%) and 0.842\,s (last 10\,\%), linear fit 0.888\,s/it ($R^2=1.000$).
 \item simpleFoam: 3000 iterations, 1516\,s wall-clock, 4.21 CPU-h; time per iteration 0.52\,s (first 10\,\%) and 0.5\,s (last 10\,\%), linear fit 0.502\,s/it ($R^2=1.000$).
+\item coupledFoam linear iterations in total: 2010.
 \item simpleFoam D-042 window $W=2250$: $\bar C_d=0.3964$, $\bar C_l=0.0768$, stationary from iteration 2300.
+\item coupledFoam D-042 window $W=400$: $\bar C_d=0.4051$, $\bar C_l=0.0771$, stationary from iteration 450.
+\item constant over the whole coupledFoam run (panel omitted): cuts = 0, eta = 0.5, nRollback = 0.
 \item simpleFoam: the monitor has 4500 iterations, the solver log 3000; the later iterations have no wall-clock time (right column).
 \end{itemize}
 

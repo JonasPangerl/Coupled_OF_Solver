@@ -7,9 +7,9 @@
 \toprule
 test & pass & iterations & final R & wall [s] & CPU-h & key metric \\
 \midrule
-T0\_Re1000\_np1 & yes & 111 & 9.69e-09 & 26 & 0.00715 & l2rel\_u = 1.43e-05 \\
+T0\_Re1000\_np1 & yes & 111 & 9.69e-09 & 24 & 0.00656 & l2rel\_u = 1.43e-05 \\
 T0\_Re1000\_np4 & yes & 257 & 5.88e-09 & 70.8 & 0.079 & l2rel\_u = 1.41e-05 \\
-T0\_Re100\_np1 & yes & 57 & 4.25e-09 & 5.74 & 0.00171 & l2rel\_u = 2.89e-06 \\
+T0\_Re100\_np1 & yes & 57 & 4.25e-09 & 5.78 & 0.00172 & l2rel\_u = 2.89e-06 \\
 T0\_Re100\_np4 & yes & 57 & 6.7e-09 & 5.72 & 0.00692 & l2rel\_u = 2.89e-06 \\
 T1\_np1 & yes & 400 & 2.75e-06 & 28.1 & 0.00779 & dpRelDiff = 5.72e-04 \\
 T1\_np4 & yes & 400 & 5.7e-06 & 17.5 & 0.0188 & dpRelDiff = 5.73e-04 \\
@@ -17,7 +17,7 @@ T2\_np1 & yes & 1000 & 8.89e-06 & 228 & 0.0632 & xrRelDiff = 6.85e-03 \\
 T2\_np4 & yes & 1000 & 9.06e-06 & 90.4 & 0.1 & xrRelDiff = 6.43e-03 \\
 T3\_GEKO\_np1 & NO & 3000 & 0.000231 & 822 & 0.228 & CdRelDiff = 3.87e-02 \\
 T3\_kOmegaSST\_np1 & NO & 3000 & 0.0149 & 684 & 0.19 & CdRelDiff = 1.16e+00 \\
-T4a\_np10 & NO & 1500 & n/a & 1.32e+03 & 3.68 & CdRelDiff = 1.76e-02 \\
+T4a\_np10 & NO & 800 & n/a & 710 & 1.97 & CdRelDiff = 2.20e-02 \\
 Test-block4Ops & yes & n/a & n/a & n/a & n/a & maxInverseError = 6.24e-08 \\
 Test-blockFGMRES & yes & n/a & n/a & n/a & n/a &  \\
 Test-blockGAMG & yes & n/a & n/a & n/a & n/a & crossRankRelDiff = 4.48e-06 \\
@@ -27,10 +27,14 @@ Test-blockGAMG\_np4 & yes & n/a & n/a & 0.136 & n/a &  \\
 Test-blockMatrix & yes & n/a & n/a & n/a & n/a & crossRankRelDiff = 1.71e-09 \\
 Test-blockMatrix\_np1 & yes & n/a & n/a & n/a & n/a &  \\
 Test-blockMatrix\_np4 & yes & n/a & n/a & n/a & n/a &  \\
+Test-convergenceMonitor & yes & n/a & n/a & n/a & n/a &  \\
 Test-doubleReduce & yes & n/a & n/a & n/a & n/a &  \\
 Test-doubleReduce\_np1 & yes & n/a & n/a & n/a & n/a & relErrorDouble = 0.00e+00 \\
 Test-doubleReduce\_np4 & yes & n/a & n/a & n/a & n/a & relErrorDouble = 0.00e+00 \\
 Test-precision & yes & n/a & n/a & n/a & n/a &  \\
+diagnostics\_force\_stats & yes & n/a & n/a & n/a & n/a &  \\
+diagnostics\_level0 & yes & n/a & n/a & n/a & n/a &  \\
+diagnostics\_np1 & yes & 20 & n/a & n/a & n/a &  \\
 test\_env & yes & n/a & n/a & n/a & n/a &  \\
 \bottomrule
 \end{tabular}

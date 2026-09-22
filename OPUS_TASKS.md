@@ -469,3 +469,42 @@ level 1 must add none beyond values already reduced today.
   numbers, file sizes per level measured on T0 (level 3) and T1
   (level 2). README section "Diagnostics" with two usage examples
   (turn it on for a case; load and plot in python).
+
+## TASK 6 - Amendment C and the FINAL clean re-run (user, 2026-09-22 ~13:55)
+
+User: "make sure it gets built and is available. When everything is done
+later we have to redo all tests. The reports must not contain any outdated
+data."
+
+Amendment C (SPEC_amendment_C.md, status table in AMENDMENT_B_STATUS.md):
+- C3 SFD: osc agent (branch osc-memory), together with the T3 burst work.
+- C2 tensorial Rhie-Chow, C4 algebraicPair keyword, C7 benchmark
+  variants: agent on branch amend-c (worktree /home/jonas/cf_amc).
+- C1 static topological criteria, C5 regex/built-in zones, C6 write-time
+  diagnostic fields: after osc-memory is merged (same files: remediation,
+  ptcControl, coupledFoam.C).
+- C8: done (D-051). nonOrthThreshold stays 85 (D-047) unless the user
+  decides otherwise; 65/60 are benchmark variants.
+
+Merge order: t4b-final -> osc-memory -> amend-c -> C1/C5/C6. Each merge:
+clean rebuild of the main install (lib, applications/coupledFoam with
+wclean, all test apps, utilities), unit battery, pytest T0.
+
+FINAL CLEAN RE-RUN (only after all of the above are merged and green):
+1. Freeze main (tag `final-rerun-<date>`); record the commit in every
+   result JSON (already done by results.write via gitCommit).
+2. Move results/tests, results/bench and every run/* coupledFoam case
+   (NOT the cached meshes run/*_mesh* and NOT the simpleFoam references
+   run/ref_* whose settings did not change) into an archive folder
+   run/_archive_<date>/ and results/_archive_<date>/ (git-ignored for
+   run/, committed deletion for results/).
+3. Re-run everything with the frozen build: unit battery, pytest T0-T3
+   (--ranks 1,4 where defined), test_restart, test_fpe, test_diagnostics,
+   T4a, T4b, T5 (mesh + reference if missing), T-scaling, benchmark A-H
+   per B10 scoping (repeats as time allows, at least 1).
+4. make_report.py with a staleness guard: every figure/table/number must
+   come from a result whose gitCommit equals the frozen commit; anything
+   else is rendered as "pending" and listed in a report appendix
+   "Missing results". Add this guard to bench/make_report.py (it must
+   refuse to use results from other commits unless --allow-stale is given).
+5. Build both PDFs, send them to the user; commit results + PDFs; push.

@@ -1761,6 +1761,27 @@ gives the typical size of that difference, relative to the free-stream
 speed and to the free-stream dynamic pressure. The proposed pass limit is
 2\,\%.
 
+\paragraph{Watching the forces settle.} Figures~\ref{fig:ovWing}
+to~\ref{fig:ovAhmed} show how the drag ($C_d$, left) and lift ($C_l$,
+right) develop while each solver runs, for the wing, the motorbike and the
+Ahmed body. Orange is \code{simpleFoam}, blue is coupledFoam, and the
+horizontal axis is the time on the clock, so the two solvers are compared
+fairly: a curve that settles further left belongs to the faster solver.
+The thin wiggly line is the value after every iteration, the dashed line
+its running average over the averaging window, and the dotted horizontal
+line the final average that enters Table~\ref{tab:validation}. Two
+dotted lines at the same height mean the solvers agree. Every quantity of
+every run, iteration by iteration, is in the appendix
+(Section~\ref{app:histories}).
+
+\cffigure{loads_overview_wing}{Wing (T3 airfoil, SST and GEKO): drag and
+lift over wall-clock time, simpleFoam (orange) and coupledFoam
+(blue).}{fig:ovWing}
+\cffigure{loads_overview_motorbike}{Motorbike (T4a coarse, T4b fine): drag
+and lift over wall-clock time.}{fig:ovMotorbike}
+\cffigure{loads_overview_ahmed}{Ahmed body (T5): drag and lift over
+wall-clock time.}{fig:ovAhmed}
+
 \cffigure{remediation_history}{Remediation set sizes and rollbacks over the
 iterations for T4 and T5.}{fig:remediation}
 
@@ -1826,7 +1847,7 @@ the channel at several positions behind the step (labelled by their
 distance in step heights, $x/h$). At each position the horizontal velocity
 is drawn as a curve starting from the thin vertical line: the further the
 curve bulges to the right, the faster the flow at that height; a bulge to
-the left of the line is backflow. Thick grey is \code{simpleFoam}, dashed
+the left of the line is backflow. Thick orange is \code{simpleFoam}, dashed
 blue is coupledFoam. \emph{Good} means: you see only one curve.
 
 \cffigure{fields_T1_U}{T1 pitzDaily: speed with streamlines, coupledFoam
@@ -1846,7 +1867,7 @@ Figure~\ref{fig:prTtwo} shows the skin friction $C_f$ on the floor: positive
 where the flow near the floor moves downstream, negative inside the bubble.
 Where it crosses zero after the step, the flow reattaches: that point is
 the ``reattachment length'' of the test. Both curves cross at the same
-place. (The narrow grey spike near $x/h\approx1.4$ exists only in the
+place. (The narrow orange spike near $x/h\approx1.4$ exists only in the
 \code{simpleFoam} run, which never reached its residual target.)
 
 \cffigure{fields_T2_U}{T2 backward-facing step: speed with streamlines,
@@ -2154,7 +2175,7 @@ solvers on the same axes.}{fig:speedres}
 \paragraph{How to read Figure~\ref{fig:speedres}.} One small plot per case.
 The vertical axis is the residual (``how wrong is the current answer''), on
 a log scale: each grid step down means ten times smaller. The horizontal
-axis is the time on the clock since the start. Blue is coupledFoam, grey
+axis is the time on the clock since the start. Blue is coupledFoam, orange
 \code{simpleFoam} (solid: pressure, dashed: velocity). The solver whose
 curve reaches the bottom further \emph{left} is the faster one. Do not
 compare the heights of the two curves at the same moment, only how quickly
@@ -2191,7 +2212,7 @@ times on T2).
 iterations.}{fig:speedtrade}
 
 \paragraph{How to read Figure~\ref{fig:speedtrade}.} Every case appears
-twice: a grey dot for \code{simpleFoam} and a blue square for coupledFoam,
+twice: an orange dot for \code{simpleFoam} and a blue square for coupledFoam,
 joined by an arrow. Right means more iterations, up means more time. The
 thin diagonal lines are ``same cost per iteration'' lines: moving along one
 changes only the number of iterations. The arrows point far to the left
@@ -2501,7 +2522,7 @@ reference of the 4-rank runs is the serial reference run.
 \noindent\fbox{\parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}{\small
 \textbf{Loads figure.} Thin wiggly line: the value (drag $C_d$, lift $C_l$,
 pitching moment, or the pressure drop $\Delta p$) after every iteration,
-grey for \code{simpleFoam}, blue for coupledFoam. Dashed line: the average
+orange for \code{simpleFoam}, blue for coupledFoam. Dashed line: the average
 over the last $W$ iterations, with a shaded band one standard deviation wide
 (it starts only once $W$ iterations exist). Light shading at the right end:
 the final averaging window whose mean is compared between the solvers.

@@ -1229,6 +1229,24 @@ the snappyHexMesh cases is shown in Figure~\ref{fig:remediation}.
 reattachment length, $C_l$, $C_d$, torque) of coupledFoam and simpleFoam and
 their relative differences.}{tab:validation}
 
+\paragraph{Force histories.} Figures~\ref{fig:ovWing}--\ref{fig:ovAhmed}
+overlay the drag and lift coefficients of both solvers over the wall-clock
+time for the wing (T3), the motorbike (T4a, T4b) and the Ahmed body (T5),
+with the running mean over the averaging window of the D-042 rule and the
+final window mean; the complete per-iteration histories of every run,
+including residuals, cost per iteration and the linear-solver controls, are
+in Appendix~\ref{app:histories}. Histories of runs that are still being
+computed end early and are completed when the report is regenerated.
+
+\cffigure{loads_overview_wing}{Wing (T3 airFoil2D, SST and GEKO): $C_d$
+(left) and $C_l$ (right) over wall-clock time, simpleFoam (orange) and
+coupledFoam (blue); dashed: running mean over the D-042 window, dotted:
+final window mean.}{fig:ovWing}
+\cffigure{loads_overview_motorbike}{motorBike (T4a, T4b): $C_d$ and $C_l$
+over wall-clock time, both solvers.}{fig:ovMotorbike}
+\cffigure{loads_overview_ahmed}{Ahmed body (T5): $C_d$ and $C_l$ over
+wall-clock time, both solvers.}{fig:ovAhmed}
+
 \cffigure{remediation_history}{Remediation set sizes and rollbacks over the
 iterations for T4 and T5.}{fig:remediation}
 
@@ -1283,7 +1301,7 @@ coupledFoam (top), simpleFoam (middle), difference (bottom).}{fig:fldToneU}
 difference.}{fig:fldToneP}
 \cffigure{profiles_T1}{T1 pitzDaily: streamwise velocity profiles at the
 stations $x/h$ downstream of the step ($h$ step height), simpleFoam thick
-grey, coupledFoam dashed blue.}{fig:prTone}
+orange, coupledFoam dashed blue.}{fig:prTone}
 
 \clearpage
 \paragraph{T2.} Separation at the step corner, the recirculation bubble and
