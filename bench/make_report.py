@@ -287,6 +287,12 @@ def load_bench() -> list[dict]:
     for s in stale:
         notes.append(f"benchmark record {s} is stale (configHash mismatch), "
                      "excluded")
+    # failed runs (M3): never a timing; listed as missing in the appendix
+    for r in run_bench.load_failed():
+        why = "; ".join(map(str, r.get("failure") or [f"rc {r.get('rc')}"]))
+        tag = f"bench {r.get('case')} {r.get('config')} run {r.get('run', '?')}"
+        notes.append(f"benchmark run {tag} FAILED ({why}), excluded")
+        GUARD.missing(tag, "benchmark run", f"run failed: {why}"[:120])
     return recs
 
 
@@ -1074,6 +1080,20 @@ def table_b10(rows: list[dict]) -> str:
 # speed-up figures from the test records and the run logs
 # --------------------------------------------------------------------------- #
 
+def _t5_run() -> str:
+    """T5 test-run name the report shows (m7): CF_T5_MESH if set, else the
+    variant (fine, then coarse) that has a test record, else the fine one."""
+    import os  # noqa: PLC0415
+    env = os.environ.get("CF_T5_MESH")
+    for v in ([env] if env else []) + ["fine", "coarse"]:
+        n = run_bench.t5_run_name(run_bench.HEAVY_NP, v)
+        if (RESULTS / "tests" / f"{n}.json").exists():
+            return n
+    return run_bench.t5_run_name(run_bench.HEAVY_NP, env or "fine")
+
+
+T5_RUN = _t5_run()
+
 # (label, test record, coupledFoam run dir, simpleFoam reference dir)
 SPEED_CASES = [
     ("T0 Re100", "T0_Re100_np1", "T0_Re100_np1", "ref_T0_Re100"),
@@ -1084,7 +1104,7 @@ SPEED_CASES = [
     ("T3 GEKO", "T3_GEKO_np1", "T3_GEKO_np1", "ref_T3_GEKO"),
     ("T4a", "T4a_np10", "T4a_np10", "ref_T4a_np10"),
     ("T4b", "T4b_np10", "T4b_np10", "ref_T4b_np10"),
-    ("T5", "T5_np10", "T5_np10", "ref_T5_np10"),
+    ("T5", T5_RUN, T5_RUN, "ref_" + T5_RUN),
 ]
 BUSY_MINUTES = 10.0   # a log written less than this ago belongs to a live run
 _RES_LINE = logs._RES
@@ -1164,50 +1184,189 @@ def sf_timeline(case: Path) -> dict | None:
             "n": n}
 
 
+# Residual target of the speed-up on the residual cases when the record does
+# not carry one (T2: tests/test_T2 R_TARGET)
+SPEED_R_DEFAULT = 1e-5
+
+
+def speed_criterion(rec_name: str, d: dict) -> tuple[str, float | None]:
+    """Criterion both solvers are timed to in the speed-up (M1, D-068):
+    ("residual", R) on T0-T2 - the test's R target of coupledFoam's combined
+    residual, applied to simpleFoam as "every initial residual of the log
+    below R" (the D-024 definition of T2); ("forceWindow", None) on T3 -
+    spec 12.3(ii), the 100-iteration Cd/Cl window; ("stationary", None) on
+    the wake cases - the D-042 point under the case's common window
+    (D-068)."""
+    if str(d.get("criterion", "")).startswith("stationaryMean") or \
+            run_bench.is_oscillatory(run_bench.case_of_run(rec_name) or ""):
+        return "stationary", None
+    if rec_name.startswith("T3"):
+        return "forceWindow", None
+    return "residual", float(d.get("Rtarget") or SPEED_R_DEFAULT)
+
+
+def _sf_residual_iteration(sft: dict | None, target: float) -> int | None:
+    """First simpleFoam iteration at which EVERY initial residual of the log
+    (first solve of each field per iteration: p, Ux, Uy, [Uz], k, omega, ...)
+    is below `target`."""
+    if not sft or not sft["res"]:
+        return None
+    hist = list(sft["res"].values())
+    n = min(len(h) for h in hist)
+    for i in range(n):
+        if all(h[i] < target for h in hist):
+            return i + 1
+    return None
+
+
+def _frac(tl: dict | None, it: int | None, n: int | None) -> float | None:
+    """Wall-clock fraction of a run spent up to iteration `it` (timeline of
+    cf_timeline / sf_timeline; iteration share without one)."""
+    if it is None:
+        return None
+    if tl is not None and len(tl["t"]) and it <= len(tl["t"]) \
+            and tl["t"][-1] > 0:
+        return float(tl["t"][it - 1] / tl["t"][-1])
+    return it / n if n else None
+
+
 def _speed_record(tests: dict, rec: str, cfd: str, sfd: str) -> dict | None:
     """Wall time and CPU-hours to convergence of both solvers for one case,
-    with flags for 'did not reach the criterion' (then: whole run, a lower
-    bound for the time to convergence)."""
+    both timed to the SAME criterion (speed_criterion; review M1, D-068):
+
+    residual (T0-T2)  coupledFoam: first R < R_target (iterationsToR);
+                      simpleFoam: first iteration with every initial
+                      residual < R_target (its log). Times: solver only
+                      (coupledFoam solver loop, simpleFoam ClockTime), the
+                      wall-clock fraction of the run up to that iteration.
+    forceWindow (T3)  12.3(ii) on both force histories (a D-060 user point
+                      from the record takes precedence); times as above.
+    stationary (T4/T5) the D-042 point under the case's common window
+                      (D-068) from the test record (wallToConv_s,
+                      cpuHoursToConv: rank timing incl. potentialFoam), or
+                      recomputed from the run directories for records
+                      written before D-068; the per-run-window values are
+                      added as *_perRun. Flags of review M2
+                      (run_bench.reference_timing_flags).
+
+    A solver that never reaches the criterion is shown with its whole run
+    (conv_* False; for simpleFoam the speed-up is then a lower bound).
+    it_*_conv are the convergence iterations (None if not reached)."""
     d = tests.get(rec)
     if not d:
         return None
+    # M9: the run directory read below must still be this record's run
+    if (RUN / cfd).is_dir() and not GUARD.check_record_run(rec, d, RUN / cfd):
+        return None
     ref = d.get("reference") or {}
+    kind, target = speed_criterion(rec, d)
+    out: dict = {"criterion": kind, "Rtarget": target,
+                 "np_cf": d.get("nProcs") or 1,
+                 "np_sf": ref.get("nProcs") or 1}
+    if kind == "stationary":
+        return _speed_record_stationary(d, ref, cfd, sfd, out)
+
+    # ---- coupledFoam
     n_cf = d.get("iterations")
-    it_cf = d.get("iterationsToR") or d.get("iterationsToR_coupled")
     wall_cf_run = d.get("wallSecondsSolver") or d.get("wallSeconds")
     cpu_cf_run = d.get("cpuHoursSolver") or d.get("cpuHours")
     if not (n_cf and wall_cf_run and cpu_cf_run):
         return None
-    # records without an iteration count to the residual target (T3: the
-    # residual target was not reached in the 3000 iterations) count as not
-    # converged; the bar is then the whole run
-    conv_cf = bool(it_cf)
     cft = cf_timeline(RUN / cfd)
-    if conv_cf and cft is not None and it_cf <= len(cft["t"]):
-        frac = cft["t"][it_cf - 1] / cft["t"][-1]
-    elif conv_cf:
-        frac = it_cf / n_cf
+    if kind == "residual":
+        it_cf = d.get("iterationsToR") or d.get("iterationsToR_coupled")
+        if it_cf is None and cft is not None:
+            hit = np.nonzero(cft["R"] < target)[0]
+            it_cf = int(hit[0]) + 1 if hit.size else None
     else:
-        frac = 1.0
-    it_sf = ref.get("convergedAt")
-    n_sf = ref.get("iterations")
-    conv_sf = it_sf is not None
+        it_cf = d.get("itersToConv")
+        if it_cf is None and run_ok(RUN / cfd):
+            it_cf = run_bench.iters_to_conv(run_bench.force_history(RUN / cfd))
+        if it_cf is None and cft is not None and \
+                cft["summary"].get("converged"):
+            it_cf = n_cf        # the solver's own stop (R below its tolerance)
+    f_cf = _frac(cft, it_cf, n_cf)
+
+    # ---- simpleFoam reference
+    sft = sf_timeline(RUN / sfd)
+    n_sf = ref.get("iterations") or (sft["n"] if sft else None)
     ta = ref.get("timingAllrun") or {}
-    wall_sf = ref.get("wallSecondsSolver") or ref.get("wallSeconds") \
+    wall_sf_run = (float(sft["t"][-1]) if sft else None) \
+        or ref.get("wallSecondsSolver") or ref.get("wallSeconds") \
         or ta.get("wallSeconds")
-    cpu_sf = ta.get("cpuHours") or ref.get("cpuHours")
-    nproc_sf = ref.get("nProcs") or 1
-    if cpu_sf is None and wall_sf:
-        cpu_sf = wall_sf * nproc_sf / 3600.0   # serial reference: CPU = wall
-    if not wall_sf:
+    cpu_sf_run = ref.get("cpuHours") or ta.get("cpuHours")
+    if cpu_sf_run is None and wall_sf_run:
+        cpu_sf_run = wall_sf_run * out["np_sf"] / 3600.0  # serial: CPU = wall
+    if not wall_sf_run:
         return None
-    return {
-        "wall_cf": wall_cf_run * frac, "cpu_cf": cpu_cf_run * frac,
+    if kind == "residual":
+        it_sf = _sf_residual_iteration(sft, target)
+    else:
+        u = ref.get("user") or {}
+        if u and not u.get("ignored"):
+            it_sf = ref.get("itersToConv")       # D-060 user point
+        elif (RUN / sfd).is_dir():
+            it_sf = run_bench.iters_to_conv(run_bench.force_history(RUN / sfd))
+        else:
+            it_sf = ref.get("itersToConv")
+    f_sf = _frac(sft, it_sf, n_sf)
+    conv_cf, conv_sf = f_cf is not None, f_sf is not None
+    out.update({
+        "wall_cf": wall_cf_run * (f_cf if conv_cf else 1.0),
+        "cpu_cf": cpu_cf_run * (f_cf if conv_cf else 1.0),
         "it_cf": it_cf if conv_cf else n_cf, "conv_cf": conv_cf,
-        "wall_sf": wall_sf, "cpu_sf": cpu_sf,
+        "it_cf_conv": it_cf if conv_cf else None, "n_cf": n_cf,
+        "wall_sf": wall_sf_run * (f_sf if conv_sf else 1.0),
+        "cpu_sf": cpu_sf_run * (f_sf if conv_sf else 1.0),
         "it_sf": it_sf if conv_sf else n_sf, "conv_sf": conv_sf,
-        "np_cf": d.get("nProcs") or 1, "np_sf": nproc_sf,
-    }
+        "it_sf_conv": it_sf if conv_sf else None, "n_sf": n_sf,
+    })
+    return out
+
+
+def _speed_record_stationary(d: dict, ref: dict, cfd: str, sfd: str,
+                             out: dict) -> dict | None:
+    """Wake cases (T4, T5): see _speed_record."""
+    case = run_bench.case_of_run(cfd)
+    user = d.get("convergenceSource") == "user"
+    common = str(d.get("windowRule", "")).startswith("common")
+    pts = {}
+    for side, r, rdir, solver in (("cf", d, RUN / cfd, "coupledFoam"),
+                                  ("sf", ref, RUN / sfd, "simpleFoam")):
+        p: dict = {}
+        if (user or common) and r.get("wallToConv_s") is not None:
+            p = {"iters": r.get("itersToConv"), "wall": r.get("wallToConv_s"),
+                 "cpuh": r.get("cpuHoursToConv"),
+                 "iters_perRun": r.get("iters_to_stationary_perRun"),
+                 "wall_perRun": r.get("wallToConv_s_perRun"),
+                 "cpuh_perRun": r.get("cpuHoursToConv_perRun"),
+                 "n": r.get("iterationsRun") or r.get("iterations"),
+                 "wallTotal": r.get("wallSeconds"),
+                 "cpuhTotal": r.get("cpuHours")}
+        elif rdir.is_dir() and (side == "sf" or run_ok(rdir)):
+            # record from before D-068: recompute from the run directory
+            p = run_bench.stationary_point(rdir, solver, case)
+        if not p or not p.get("wallTotal"):
+            return None
+        pts[side] = p
+    for s, p in pts.items():
+        conv = p.get("wall") is not None and p.get("iters") is not None
+        out.update({
+            f"wall_{s}": p["wall"] if conv else p["wallTotal"],
+            f"cpu_{s}": p["cpuh"] if conv else p["cpuhTotal"],
+            f"it_{s}": p["iters"] if conv else p.get("n"),
+            f"conv_{s}": conv, f"it_{s}_conv": p["iters"] if conv else None,
+            f"n_{s}": p.get("n"),
+            f"wall_{s}_perRun": p.get("wall_perRun"),
+            f"cpu_{s}_perRun": p.get("cpuh_perRun"),
+            f"it_{s}_perRun": p.get("iters_perRun"),
+        })
+    for k in ("wall", "cpu"):
+        a, b = out.get(f"{k}_sf_perRun"), out.get(f"{k}_cf_perRun")
+        out[f"speedup_{k}_perRun"] = a / b if a and b else None
+    out["W"] = case and run_bench.case_window(case)
+    out.update(run_bench.reference_timing_flags(RUN / sfd, ref))
+    return out
 
 
 def fig_speed(tests: dict) -> None:

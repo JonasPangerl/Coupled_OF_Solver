@@ -24,6 +24,19 @@ Staleness guard
     Their numbers enter the report through the test records, which are
     guarded.
 
+    Build and record identity (review M9, D-068):
+    - a coupledFoam run must have used ONE build (every start) equal to the
+      report's build (Guard.build_id: $CF_REPORT_BUILD_ID, else the install
+      on PATH, else the first run checked), and the binary / library at the
+      recorded paths must not have been rebuilt since (binaries_changed);
+    - a result record carries the fingerprint of its run directory
+      (results.write: runFingerprint); check_record rejects the record when
+      the directory was re-run or its solver log changed afterwards, or the
+      run started at another commit than the record's; check_record_run
+      does the same for a consumer that reads a record's run directory
+      (older records: the directory was started after the record was
+      written).
+
 Standard library only: render_fields.py imports this under pvbatch.
 """
 
@@ -210,6 +223,114 @@ def read(case: Path) -> dict | None:
 
 
 # --------------------------------------------------------------------------- #
+# binaries of a run vs the current install (M9)
+# --------------------------------------------------------------------------- #
+
+def current_build_id(solver: str = "coupledFoam") -> str | None:
+    """Build id of the coupledFoam install on PATH now (None without an
+    OpenFOAM environment)."""
+    if not shutil.which(solver):
+        return None
+    return build_id({"coupledFoam": binary_record(solver)})
+
+
+def binaries_changed(prov: dict) -> list[str]:
+    """Binaries of a run's provenance whose file at the recorded (resolved)
+    path now has another content (rebuilt since the run) or is gone."""
+    out = []
+    cf = (prov.get("binaries") or {}).get("coupledFoam") or {}
+    for key in ("binary", "libcoupledFoam"):
+        info = cf.get(key) or {}
+        path = info.get("resolved") or info.get("path")
+        if not path or not info.get("sha256"):
+            continue
+        now = file_info(path)
+        if not now or not now.get("exists", True):
+            out.append(f"{key} {path} is gone")
+        elif now.get("sha256") != info["sha256"]:
+            out.append(f"{key} {path} was rebuilt after the run")
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# record <-> run directory fingerprint (M9)
+# --------------------------------------------------------------------------- #
+
+FINGERPRINT_LOGS = ("log.coupledFoam", "log.simpleFoam", "log.potentialFoam")
+
+
+def run_fingerprint(run_dir: Path | str | None) -> dict | None:
+    """Identity of a run directory at the time a result record is written:
+    start date, commit and build id of its provenance and the size of its
+    solver logs. Stored in the record (results.write, runFingerprint); a
+    later re-run in the same directory changes it."""
+    if not run_dir:
+        return None
+    d = Path(run_dir)
+    if not d.is_dir():
+        return None
+    prov = read(d) or {}
+    logs_ = {}
+    for name in FINGERPRINT_LOGS:
+        f = d / name
+        if f.exists():
+            logs_[name] = {"size": f.stat().st_size}
+    return {"runDir": str(d.resolve()), "provenanceDate": prov.get("date"),
+            "provenanceCommit": prov.get("gitCommit"),
+            "buildId": prov.get("buildId"), "logs": logs_}
+
+
+def fingerprint_mismatch(fp: dict | None) -> str | None:
+    """Why the run directory of a record no longer is the run the record
+    was made from (None: it is, or the directory is gone)."""
+    if not fp or not fp.get("runDir"):
+        return None
+    cur = run_fingerprint(fp["runDir"])
+    if cur is None:
+        return None
+    if fp.get("provenanceDate") != cur.get("provenanceDate"):
+        return (f"run directory re-run after the record was written (start "
+                f"{fp.get('provenanceDate')} -> {cur.get('provenanceDate')})")
+    for name, v in (fp.get("logs") or {}).items():
+        c = cur["logs"].get(name)
+        if c is None or c.get("size") != v.get("size"):
+            return f"{name} changed after the record was written"
+    return None
+
+
+def record_run_mismatch(rec: dict, run_dir: Path | str) -> str | None:
+    """fingerprint_mismatch of the record's own fingerprint; for records
+    written before fingerprints: the run directory was started after the
+    record was written (provenance date > record timestamp)."""
+    fp = rec.get("runFingerprint")
+    if fp:
+        return fingerprint_mismatch(fp)
+    if not run_dir or not Path(run_dir).is_dir():
+        return None
+    prov = read(Path(run_dir))
+    ts, start = rec.get("timestamp"), (prov or {}).get("date")
+    if ts and start and str(start) > str(ts):
+        return (f"run directory started {start}, after the record was "
+                f"written ({ts})")
+    if ts:
+        # no provenance either: a solver log written after the record
+        # (60 s slack) belongs to a later run in the same directory
+        try:
+            t_rec = time.mktime(time.strptime(str(ts)[:19],
+                                              "%Y-%m-%dT%H:%M:%S"))
+        except ValueError:
+            return None
+        for name in FINGERPRINT_LOGS:
+            f = Path(run_dir) / name
+            if f.exists() and f.stat().st_mtime > t_rec + 60:
+                return (f"{name} written "
+                        + time.strftime("%Y-%m-%dT%H:%M:%S",
+                                        time.localtime(f.stat().st_mtime))
+                        + f", after the record ({ts})")
+    return None
+
+
+# --------------------------------------------------------------------------- #
 # staleness guard
 # --------------------------------------------------------------------------- #
 
@@ -222,10 +343,20 @@ class Guard:
     report and collects everything it rejected (or accepted as stale)."""
 
     def __init__(self, target: str | None, allow_stale: bool = False,
-                 enabled: bool = True):
+                 enabled: bool = True, build_id: str | None = "auto"):
+        """build_id: the coupledFoam build every guarded coupledFoam run
+        must have used (M9). "auto": $CF_REPORT_BUILD_ID, else the install
+        on PATH now (current_build_id); if neither exists, the first
+        coupledFoam run checked sets it (all runs of a report must share
+        one build). None: no build-id comparison."""
         self.target = target
         self.allow_stale = allow_stale
         self.enabled = enabled and bool(target)
+        if build_id == "auto":
+            build_id = (os.environ.get("CF_REPORT_BUILD_ID")
+                        or (current_build_id() if self.enabled else None)
+                        or "first-run")
+        self.build_id = build_id
         # (case, item) -> {"found", "date", "reason", "status"}
         self.items: dict[tuple[str, str], dict] = {}
         self._runs: dict[str, bool] = {}
@@ -277,7 +408,17 @@ class Guard:
             return True
         commit = rec.get("gitCommit")
         if self.matches(commit):
-            return True
+            # M9: the record's run directory must still be the run the
+            # record was made from, started at the same commit
+            fp = rec.get("runFingerprint") or {}
+            why = fingerprint_mismatch(fp)
+            if why is None and fp.get("provenanceCommit") and \
+                    not self.matches(fp["provenanceCommit"]):
+                why = (f"run started at {_short(fp['provenanceCommit'])}, "
+                       "record written at another commit")
+            if why is None:
+                return True
+            return self._reject(case, item, commit, rec.get("timestamp"), why)
         if not commit:
             reason = "record carries no gitCommit"
         elif str(commit).endswith("-dirty"):
@@ -314,6 +455,12 @@ class Guard:
         dirty = any(s.get("dirty") for s in starts)
         ok = (len(commits) == 1 and self.matches(prov.get("gitCommit"))
               and not dirty)
+        if ok:
+            why = self.build_problem(starts)
+            if why:
+                self._runs[key] = False
+                return self._reject(case, item, prov.get("buildId"),
+                                    prov.get("date"), why)
         self._runs[key] = ok
         if ok:
             return True
@@ -326,6 +473,47 @@ class Guard:
         else:
             reason = "run from another commit"
         return self._reject(case, item, found, prov.get("date"), reason)
+
+    def build_problem(self, starts: list[dict]) -> str | None:
+        """M9: the coupledFoam binary of a run (every start of it) must be
+        the report's build (self.build_id) and must not have been rebuilt
+        since. None if fine or not a coupledFoam run."""
+        cf_starts = [s for s in starts if s.get("solver") == "coupledFoam"]
+        if not cf_starts:
+            return None
+        ids = {s.get("buildId") for s in cf_starts}
+        if None in ids:
+            return "run without a recorded coupledFoam build id"
+        if len(ids) > 1:
+            return "run continued across coupledFoam builds"
+        bid = ids.pop()
+        if self.build_id == "first-run":
+            self.build_id = bid
+        if self.build_id and bid != self.build_id:
+            return (f"coupledFoam build {bid} is not the report's build "
+                    f"{self.build_id} (stale or foreign binary)")
+        changed = binaries_changed(cf_starts[-1])
+        if changed:
+            return "stale solver binary: " + "; ".join(changed)
+        return None
+
+    def check_record_run(self, case: str, rec: dict, run_dir: Path,
+                         item: str = "run directory of the record") -> bool:
+        """A result record together with the run directory a consumer is
+        about to read for it: the directory must pass check_run (unless
+        it is a simpleFoam reference, run/ref_*) and must still be the run
+        the record was made from (record_run_mismatch)."""
+        if not self.enabled:
+            return True
+        run_dir = Path(run_dir)
+        if not run_dir.name.startswith("ref_") and \
+                not self.check_run(run_dir, case=case):
+            return self.allow_stale
+        why = record_run_mismatch(rec, run_dir)
+        if why is None:
+            return True
+        return self._reject(case, item, rec.get("gitCommit"),
+                            rec.get("timestamp"), why)
 
     def run_commit(self, run_dir: Path) -> str | None:
         prov = read(run_dir)

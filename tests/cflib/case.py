@@ -165,3 +165,47 @@ def solver_ok(case: Path, solver: str) -> bool:
         return False
     text = log.read_text(errors="replace")
     return "FOAM FATAL" not in text and "\nEnd" in text
+
+
+def log_tail(case: Path, solver: str | None = None, n: int = 25) -> str:
+    """The last n lines of log.Allrun and of log.<solver> (for failure
+    messages: a failed mpirun, e.g. an invalid --cpu-set, leaves rc 1 and
+    nothing else)."""
+    out = []
+    names = ["log.Allrun"] + ([f"log.{solver}"] if solver else [])
+    for name in names:
+        f = Path(case) / name
+        if not f.exists():
+            out.append(f"--- {name}: missing")
+            continue
+        lines = f.read_text(errors="replace").splitlines()
+        out.append(f"--- {name} (last {min(n, len(lines))} of {len(lines)} "
+                   "lines)")
+        out.extend(lines[-n:])
+    return "\n".join(out)
+
+
+def run_failure(case: Path, solver: str, rc: int | None,
+                iterations: int | None = None,
+                budget: int | None = None) -> list[str]:
+    """Reasons why a solver run failed; empty if it ended normally.
+
+    Checks: Allrun return code, the solver log exists and ends normally
+    ("End", no FOAM FATAL), and - if both are given - the run reached its
+    iteration budget (a harness run with the solver's own stop disabled
+    must run all of it)."""
+    reasons = []
+    if rc != 0:
+        reasons.append(f"Allrun rc {rc}")
+    log = Path(case) / f"log.{solver}"
+    if not log.exists():
+        reasons.append(f"no log.{solver}")
+    else:
+        text = log.read_text(errors="replace")
+        if "FOAM FATAL" in text:
+            reasons.append(f"FOAM FATAL in log.{solver}")
+        if "\nEnd" not in text:
+            reasons.append(f"log.{solver} has no normal end")
+    if iterations is not None and budget is not None and iterations < budget:
+        reasons.append(f"{iterations} of {budget} iterations")
+    return reasons

@@ -1796,3 +1796,249 @@ for SP to be built and tested against the maximum precision available.
   switchable and tunable in the case dictionaries (D-061 follow-up).
 - Every setting that may need changing must be a run-time keyword, not a
   compile-time constant.
+
+## D-068 - Harness fixes of the harness review: common averaging window, distinct benchmark configurations, failed runs, equal criteria (lead, 2026-09-22; to be confirmed by the user)
+
+Source: the read-only review of the test harness and benchmark (findings
+C1, C2, M1-M3, M6, M7, M9 and minor items). Branch harness-fix. Items 1
+and 2 change what the report states; the lead decided them overnight and
+the user confirms or reverts them in the morning.
+
+### 1. One averaging window per wake case (review C1)
+
+Problem: D-042 addendum 2 derived the window from each run's own budget,
+W = max(300, n/2). iters_to_stationary scans from N = W, so the earliest
+possible convergence point of a run was set by its budget: simpleFoam
+(n = 3000 / 4000) could not converge before iteration 1550 / 2050,
+coupledFoam (n = 800) from iteration 400. The wake-case speed-up came from
+this rule, not from the solvers.
+
+Decision: ONE window W per case for both solvers,
+run_bench.CASES[case]["statWindow"] = max(STAT_WINDOW_MIN, coupledFoam
+budget // 2) = 400 on T4a, T4b and T5 (capped at the iterations run).
+stat_window(n, case), stationary_eval(hist, case=...),
+iters_to_stationary(hist, case=...) and field_average_start(n, case)
+take the case (a CASES key or a run name such as T4a_np10 or
+ref_T4a_np10, run_bench.case_of_run); without a case they keep the
+per-run rule (backward compatible). The per-run window stays in the
+records as an informational sensitivity value: W_perRun,
+iters_to_stationary_perRun, stationary_perRun, <q>_mean_perRun and the
+times to it (bench: wall_to_conv_s_perRun / cpu_to_conv_h_perRun; tests:
+wallToConv_s_perRun / cpuHoursToConv_perRun, speedupWall_perRun /
+speedupCpu_perRun). The stationarity drift tolerance and the comparison
+tolerances are unchanged. The reference continuation keeps its per-run
+length (T4a 1500, T4b 2000; default_n_extra), because the existing
+continuations are reused and a longer reference mean field is the better
+estimate; the report must say that the reference mean fields cover that
+continuation while coupledFoam's cover its last 400 iterations.
+
+Recomputed read-only from the existing run directories (same numeric
+criterion; np10; all timings "under load", NOT the final timing
+measurement; coupledFoam including potentialFoam):
+
+| run | window | coupledFoam N / wall / CPU-h | simpleFoam N / wall / CPU-h | speed-up wall / CPU |
+|---|---|---|---|---|
+| T4a, main run/T4a_np10 (13:40) | common W 400 | 600 / 561 s / 1.557 | 450 / 233 s / 0.647 | 0.42 / 0.42 |
+| same | per run (400 / 1500) | 600 / 561 s / 1.557 | 1550 / 783 s / 2.175 | 1.40 / 1.40 |
+| T4a, D-057 default run (cf_start) | common W 400 | 450 / 401 s / 1.113 | 450 / 233 s / 0.647 | 0.58 / 0.58 |
+| same | per run (400 / 1500) | 450 / 401 s / 1.113 | 1550 / 783 s / 2.175 | 1.95 / 1.95 |
+| T4b, D-057 run (cf_start) | common W 400 | 450 / 2117 s / 5.880 | 450 / 1296 s / 3.600 | 0.61 / 0.61 |
+| same | per run (400 / 2000) | 450 / 2117 s / 5.880 | 2050 / 5942 s / 16.504 | 2.81 / 2.81 |
+
+Window means under the common window: ref_T4a Cd 0.39648 / Cl 0.07708
+(per run 0.39640 / 0.07675); ref_T4b Cd 0.40022 / Cl 0.06734 (per run
+0.39962 / 0.06568); T4b coupledFoam Cd 0.40777 / Cl 0.06550, i.e. Cd
++1.89 % (PASS within 2 %; under the per-run window +2.04 %, a marginal
+FAIL). On the wake cases coupledFoam is therefore SLOWER than simpleFoam
+to a stationary 400-iteration window mean (0.4-0.6x) with the present
+settings; the earlier 2-2.8x came from the window rule. The report must
+state this.
+
+### 2. Benchmark configurations redefined (review C2)
+
+Problem: since D-043 every template runs a V-cycle with autoTune off. C
+(the template), E (sets V + autoTune no) and H (sets autoTune no only) were
+the same run on T1-T5, labelled "K with controller", "fixed V" and "fixed
+K". E-sfd on T3 set sfd.enabled yes, which the T3 template already has
+(D-058). On T1, A and B are identical: the pitzDaily tutorial is SIMPLEC
+with p unrelaxed and U, k, omega 0.9, which is B.
+
+New definitions (bench/run_bench.py COUPLED_CONFIGS, E_VARIANTS,
+CONFIG_SCOPE):
+
+| config | solver | settings on top of the template | scope |
+|---|---|---|---|
+| A | simpleFoam | tutorial settings (T3: consistent no) | T1, T2, T3-SST, T3-GEKO, T4a |
+| B | simpleFoam | SIMPLEC, p 1 / U 0.9 / .* 0.9 | T2, T3-SST, T3-GEKO, T4a (T1: == A) |
+| C | coupledFoam | none: V-cycle, autoTune off (D-043), adaptive relTol | T1, T2, T3-SST, T3-GEKO, T4a, T4b |
+| D | coupledFoam | preconditioner blockDiagonal | T1, T2, T3-SST, T3-GEKO |
+| F | coupledFoam | adaptiveRelTol no (B10) | T1, T3-SST |
+| G | coupledFoam | anderson on (B10) | T1, T3-SST |
+| H | coupledFoam | cycleType K, autoTune no: the fixed K-cycle; H vs C is the cycle comparison | T1, T2, T3-SST, T3-GEKO, T4a |
+| H-tune | coupledFoam | cycleType K, autoTune yes: the pre-D-043 default controller; H-tune vs H isolates it | T1, T2 |
+| E-rcScalar | coupledFoam | C + rhieChow.tensorial no | T2 |
+| E-algPair | coupledFoam | C + agglomerator algebraicPair, weights pressure | T2 |
+| E-eta07 | coupledFoam | C + etaMax 0.7, minIter 2 | T2 |
+| E-noSFD | coupledFoam | C + sfd.enabled no (was E-sfd, a no-op) | T3-SST, T3-GEKO |
+| E-nonOrth60 / 65 | coupledFoam | C + static nonOrthThreshold 60 / 65 | none (only the snappyHexMesh meshes have such cells; --no-scope) |
+
+- E is no longer a configuration; "E" on the command line is an alias of
+  C (with a note). The E-* variants are variants of the defaults C (the
+  names are kept from amendment C7).
+- Scope follows D-063: T4a only A, B, C, H; T4b only C; T5 none; the heavy
+  cases run one repeat (MAX_REPEATS, D-059) unless --no-scope.
+- b10_evaluate compares every coupledFoam configuration with C; H-tune also
+  with H (dWall_X_vs_H). The E-vs-H and X-vs-E columns are gone.
+- HARNESS_VERSION 4: every configuration hash changes, earlier benchmark
+  records are stale.
+- tests/test_harness.py reads the templates (tests/cflib/foamdict.py, no
+  OpenFOAM needed) and checks that the configurations in the scope of every
+  case differ in the settings the solver actually uses
+  (run_bench.effective_settings) and in their hashes.
+
+### 3. Failed runs are failures, not timings (review M3)
+
+- run_bench.run_one checks the Allrun rc, the solver log (normal "End",
+  no FOAM FATAL; cflib.case.run_failure), the whole budget run (the
+  solver's own stop is disabled in the benchmark) and complete timing
+  reports. A failed run is written with failed true, the reasons
+  (failure) and the log tail, and without any time to convergence. The
+  next invocation reruns it (it is not skipped as "exists"). load_current
+  leaves failed records out; load_failed lists them; summary.json lists
+  "failed" and "missing" (expected case/config/run without a successful
+  record); run_bench exits with rc 4 if a run of the invocation failed.
+  make_report.load_bench lists failed runs in the missing-results
+  appendix. Older records count as failed if rc != 0 or they carry an
+  "error" without a time.
+- rank_times no longer raises KeyError when every report of an
+  application is incomplete; it returns what it can with complete false
+  and incompleteReports.
+- Test helpers: a run that failed without output (e.g. mpirun refused an
+  invalid --cpu-set: rc 1, nothing else) raises with the tail of log.Allrun
+  and of the solver log (refcase.coupled, test_T4.run_solver, T0). Any
+  other failure is flagged in the record (failed, failure, logTail); the
+  T4/T5 tests write the record with pass false and fail loudly
+  (fail_if_failed); the T0-T2 and scaling asserts show the log tail.
+
+### 4. Speed-up figure: both solvers timed to the same criterion (review M1)
+
+make_report._speed_record (numbers SpeedWall*/SpeedCpu*, figure
+speed_time_to_conv) took coupledFoam at its residual target and
+simpleFoam at its residualControl stop (1e-8) or its whole run, and T3/T4
+always as "not conv.". Now (speed_criterion):
+- T0-T2: the test's R target (T0 1e-8, T1 1e-5, T2 1e-5). coupledFoam:
+  first R < target. simpleFoam: first iteration at which EVERY initial
+  residual in its log (p, Ux, Uy, k, omega, ...) is below the target (the
+  D-024 definition already used by T2). The two residuals are normalised
+  differently (paper Section 3.2); this is the closest common definition.
+  Times: solver only, wall-clock fraction of the run up to the iteration.
+- T3: spec 12.3(ii) (100-iteration Cd/Cl window, 0.2 %) on both force
+  histories; a D-060 user point takes precedence; coupledFoam's own stop
+  counts if the window is not met.
+- T4/T5: the D-042 point under the common window (item 1), from the test
+  record (rank timing incl. potentialFoam) or recomputed from the run
+  directories for older records; per-run values as *_perRun.
+The records carry it_cf_conv / it_sf_conv (convergence iterations of both)
+and n_cf / n_sf. Read-only check on main's records and runs: T1 1.04x
+(was about 1.4x), T0 Re100 18x, Re1000 5x, T2 >= 12.9x (simpleFoam never
+reaches 1e-5), T3 from the old 3000-iteration runs 0.07x / 0.02x
+(coupledFoam never met 12.3(ii) there; rerun pending), T4a 0.42x (per-run
+window 1.40x).
+
+### 5. T4b/T5 speed-up against the cached reference as data (review M2)
+
+The D-059 comparison (T4b and T5 are benchmarked with C only; their
+simpleFoam side is the cached test reference) was produced nowhere. Now
+the T4/T5 test records carry speedupWall / speedupCpu (common window) and
+speedupWall_perRun / speedupCpu_perRun, speedupBasis, referenceTimingDate
+and the fairness flags of run_bench.reference_timing_flags, which the
+report must state: referenceNoPotentialStart (the references ran without
+the tutorial's potentialFoam start; true for ref_T4a/T4b/T5),
+referenceTimingConditionsUnknown (the cached reference records have no
+machine state; true for all three) and referenceSingleConfig (one native
+configuration, not the best of A/B). make_report._speed_record passes the
+same flags for T4a/T4b/T5. run_solver now records the machine state
+before every run (machineBefore) and nativePotentialStart, so a
+reference computed from now on has known timing conditions.
+
+### 6. T3 test requires convergence and compares window means (review M6)
+
+tests/test_T3_airFoil.py compared the LAST Cd/Cl samples, without any
+convergence requirement: a limit cycle passed whenever its last sample fell
+within the tolerance. Now both solvers must be converged - coupledFoam: the
+12.3(ii) window (100 iterations, 0.2 % on Cd and Cl) at the end of the run
+or the solver's own stop (summary converged); simpleFoam: its
+residualControl stop or the 12.3(ii) window at the end of its run - and
+the compared coefficients are the final 100-iteration window means.
+Tolerance unchanged (5 %, D-058). The record carries itersToConv (first
+12.3(ii) window, or the solver's stop) of both solvers, converged,
+finalWindowOk, the last samples and the window ranges. Evidence on main's
+old runs (before D-058, read-only): ref_T3_kOmegaSST and ref_T3_GEKO are
+converged (final window range 0.01 % / 0.03 % of Cd); the old coupledFoam
+runs T3_kOmegaSST_np1 (Cd range 300 % of the mean) and T3_GEKO_np1 (10 %)
+would now fail on convergence.
+
+### 7. The reference continuation is not part of the reference (review M7)
+
+ref_T4a has 4500 force samples (3000 original + 1500 continuation). The
+test evaluated t <= 3000, but user_convergence and the plots used all of
+them (W from 4500, user iterations up to 4500 accepted, means including
+the continuation). Now run_bench.reference_t_max(case) (reference.json
+continuation.startTime) and run_bench.force_history(case) (cut there by
+default) are the one way to read a run's force history for evaluation;
+user_convergence.force_hist uses it, so a user iteration beyond the
+original budget is ignored and flagged (D-060) and the N..end means stop
+at the original end. make_report._speed_record reads through it.
+plot_histories (owned by the figures agent) still reads all samples; the
+change it needs is given to the lead.
+
+### 8. Staleness guard: build id, guarded run reads, overwritten run directories (review M9)
+
+- Build: Guard.check_run rejects a coupledFoam run whose starts used more
+  than one build, whose build id differs from the report's build
+  (Guard.build_id: $CF_REPORT_BUILD_ID, else the coupledFoam on PATH when
+  make_report runs in an OpenFOAM environment, else the first coupledFoam
+  run checked, so that all runs of a report share one build), or whose
+  binary / libcoupledFoam.so at the recorded path was rebuilt since the
+  run (stale binary). The report should run in the same environment as the
+  campaign (cfenv sys) so that the install on PATH is the freeze build.
+- Record identity: results.write stores runFingerprint (provenance start
+  date, commit and build id of the run directory, size of its solver logs).
+  Guard.check_record rejects a record whose directory was re-run or whose
+  solver log changed afterwards, or whose run started at another commit
+  than the record's. Guard.check_record_run(case, rec, run_dir) does the
+  same for a consumer that reads a record's run directory; for records
+  without a fingerprint it compares the run start (provenance) or the
+  solver-log time with the record timestamp. Verified on main:
+  results/tests/T4a_np10.json (11:20) vs run/T4a_np10 (log.coupledFoam
+  13:40) is detected.
+- Guarded reads: user_convergence.evaluate / auto_iteration (and so
+  apply_test, apply_bench and make_report.table_convergence, which calls
+  evaluate) and make_report._speed_record read a run directory only if it
+  passes check_record_run (run/ref_* exempt from the commit check).
+- user_convergence.apply_test keeps Cd_mean / Cl_mean / *_std of the
+  coupledFoam record consistent with a user point (they were updated on
+  the reference side only).
+
+### 9. Minor items (review m2, m7, m10, m12, m13)
+
+- T5 hash: the configuration hash of T5 used CF_T5_MESH of the process
+  that computed it, so make_report without the variable dropped the
+  coarse records as stale. Bench records now store meshVariant and
+  is_current hashes T5 records with it (run_bench.case_args,
+  mesh_variant).
+- T5 run names: run_bench.t5_run_name (T5_np10 fine, T5_coarse_np10
+  coarse) is used by tests/test_T5_ahmed.py and by make_report.SPEED_CASES
+  (the variant with a test record; CF_T5_MESH first).
+- run_bench.foam_dictionary uses -disableFunctionEntries on fvSolution only
+  (CLAUDE.md rule; controlDict WITHOUT it). Checked with the system
+  foamDictionary on copies of the T4/T5/T1 controlDicts: only the set
+  entries change (T1: $inletP is expanded in place, as with
+  cflib.case.set_entry).
+- test_fpe: startupUpwindIters 0 had no effect under the default hybrid
+  start-up (D-048); the torture start now sets coupled.startupMode none
+  (no ramp: full second order and the full CFL0 200 from iteration 1).
+  Smoke run on the current main build (T1, 1 rank): converged to R < 1e-5
+  in 140 iterations, no trap, no rollback.
+- Docstrings and the T4/T5 controlDict comment no longer say
+  max(1000, n/2); the run_bench configuration list matches item 2.
