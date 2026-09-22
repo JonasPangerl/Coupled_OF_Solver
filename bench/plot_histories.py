@@ -62,6 +62,7 @@ Usage: ~/OF/venv/bin/python bench/plot_histories.py [--commit SHA]
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
@@ -125,6 +126,11 @@ RUNS = {
     T5_RUN: (T5_RUN, "ref_" + T5_RUN, "T5 Ahmed body, 10 ranks"
              + (" (coarse mesh)" if "coarse" in T5_RUN else ""), "forces"),
 }
+# T5 (Ahmed body) is deferred by user decision (D-063): no appendix section
+# and no overview figure unless CF_INCLUDE_T5=1
+T5_DEFERRED = os.environ.get("CF_INCLUDE_T5") != "1"
+if T5_DEFERRED:
+    RUNS.pop(T5_RUN, None)
 
 ps.apply()
 
@@ -1469,7 +1475,9 @@ def run(names: list[str] | None = None, outdir: Path = FIG,
     if not names:
         for group, members in (("wing", ["T3_kOmegaSST_np1", "T3_GEKO_np1"]),
                                ("motorbike", ["T4a_np10", "T4b_np10"]),
-                               ("ahmed", [T5_RUN])):
+                               ("ahmed", [] if T5_DEFERRED else [T5_RUN])):
+            if not members:          # deferred case (D-063)
+                continue
             try:
                 st = fig_overview(group, members, outdir, log)
             except Exception as e:  # noqa: BLE001
