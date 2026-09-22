@@ -1269,3 +1269,23 @@ reproducible from run to run. In three identical runs of the pre-TASK-5
 main-install binary, the iteration-1 linIters were 7/9/9 and rho
 differed. The level-0 equality check of test_diagnostics is therefore
 asserted serially only.
+
+## D-051 - Amendment C design exclusions (C8, 2026-09-22)
+
+The following were considered in an external coupled-solver comparison
+and are deliberately not adopted:
+- **No solve-on-variables form.** The increment form A dx = b - A x is
+  required for the line search (7.2), the Eisenstat-Walker adaptive
+  tolerance (B2) and the rollback (9.3) (sections 5.7, 7.2, 9.3).
+- **No multiplicative relaxation stack.** The local pseudo-time step
+  replaces explicit under-relaxation of the coupled system. The (2 - r)
+  approximation is numerically wrong for r < 0.8 and is not adopted.
+- **Static-only remediation is insufficient.** The dynamic set (8.2)
+  stays.
+- **No post-solve pressure shift for closed domains.** Row replacement
+  (D-021) stays, because it avoids a singular system.
+
+Also recorded: amendment C1 proposes lowering nonOrthThreshold from 70 to
+65. The user set 85 on the same day (D-047), and that later, explicit
+user decision stands. 65 and 60 are benchmark variants (C7) only, until
+the user decides otherwise.

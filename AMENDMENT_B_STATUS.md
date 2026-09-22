@@ -38,3 +38,16 @@ is dropped silently (spec rule 0.3). Status: `todo`, `code` (written, builds),
 | B11 6.5.5 | assembly writes flat arrays in one owner/neighbour pass; fvm:: only to obtain coefficients | verified, see FABLE_REVIEW / final report of the B11 session | coupledAssembler |
 | B11 6.5.6 | Test-kernelBandwidth: 5 M cells, Amul >= 60 % STREAM, axpy_dot >= 80 % -> results/gates/phase_A.json, report 15.5 | done, gate PASS (Amul 85 %, axpy_dot 135 % of triad) | applications/test/Test-kernelBandwidth |
 | B11 6.5.7 | DECISIONS entry: expression templates out of scope | text proposed in the B11 session report (not yet in DECISIONS.md) | DECISIONS.md |
+
+## Amendment C (SPEC_amendment_C.md, received 2026-09-22)
+
+| item | what | status | owner / where |
+|---|---|---|---|
+| C1 | static criteria wallStarved, procAMI, volumeJump; remediationFlag bits 4/8/16; nonOrth 65 (user keeps 85, 65/60 as benchmark variants) | todo (after osc merge) | remediation |
+| C2 | tensorial Rhie-Chow diffusivity D_P = V A_P^-1 (3x3), n.D_f.n, pseudo-inverse guard, nPseudoInverse | todo | rhieChow, coupledAssembler, block4Ops |
+| C3 | Selective Frequency Damping (sfd dict), filtered U in coupledState, rollback/Anderson interaction, unbiasedness test on T3-SST | todo (osc agent) | coupledAssembler, coupledFoam.C, coupledState |
+| C4 | `agglomerator algebraicPair` = p-p weights (exists as agglomerationWeights pressure, D-039) | todo: keyword alias + benchmark | blockGAMG |
+| C5 | regex patch sets (wordRes), built-in zones, product of factors, cflFactorEff/betaEff fields | todo (after osc merge) | remediation zonal |
+| C6 | write-time diagnostic fields localDt, localCFL, cflFactorEff, betaEff, remediationFlag, USFD | todo | coupledFoam.C, ptcControl, remediation |
+| C7 | benchmark config E variants: tensorial no, nonOrth 60, algebraicPair, sfd yes (T3), etaMax 0.7 + minIter 2 | todo | bench/run_bench.py |
+| C8 | DECISIONS entries | done (D-051) | DECISIONS.md |
