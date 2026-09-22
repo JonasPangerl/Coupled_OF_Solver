@@ -589,3 +589,23 @@ Decisions:
   - The upwind k/omega answer differs from the limitedLinear one by
     0.95 % in dp (stalled limitedLinear simpleFoam as the reference).
   - The paper reports this deviation from the tutorial.
+
+## D-040 - nut safety cap raised to 1e8*nu (T3 root cause, 2026-09-22)
+
+The applyBounds nut cap (nutMaxFactor, spec 9.2) was 1e5*nu. On T3
+airFoil2D (kOmegaSST, Re_c ~ 9e7) the correct solution has nut/nu up to
+3.6e5 in the wake (measured on the simpleFoam reference), so the cap
+clipped the wake eddy viscosity to 28 % of its physical value on every
+outer iteration; the under-diffused shear layer went numerically
+unsteady, R limit-cycled at ~1e-2 and the forces oscillated with sign
+flips (the reported Cd -0.015 / Cl -0.46 were one sample of that
+oscillation, not a sign error; the GEKO run on the identical case capped
+almost no cells and was fine). nutMaxFactor is now 1e8: a divergence
+guard that never binds on a physically correct RANS solution. The
+per-case override coupled/bounds/nutMaxFactor is unchanged.
+
+Verified: with the cap at 1e8, nNutCapped stays 0 on T3 (run
+exp_T3_nutcap). NOT resolved by this alone: T3-SST still limit-cycles
+(R 1e-3..1e-2) - tracked in FABLE_REVIEW (suspects: PTC aggressiveness
+vs a case simpleFoam needs 20000 relaxed iterations for; k bounding
+firing every iteration; freestream mixed-BC switching).

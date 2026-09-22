@@ -158,7 +158,14 @@ constexpr label sentinelMaxReport = 20;
 // Bounds (spec 5.8, 9.2)
 constexpr doubleScalar kMin = 1e-12;
 constexpr doubleScalar boundOmegaMin = 1e-6;
-constexpr doubleScalar nutMaxFactor = 1e5;
+// nut/nu safety cap. This is a divergence guard, NOT a model limiter: it
+// must never bind on a physically correct RANS solution. High-Re external
+// aerodynamics reaches large ratios routinely - the T3 airFoil2D reference
+// (simpleFoam, kOmegaSST, Re_c ~ 9e7) peaks at nut/nu = 3.6e5 in the wake,
+// so the previous value of 1e5 clipped the wake eddy viscosity to 28 % of
+// its correct value and drove the outer loop into a limit cycle with
+// oscillating, sign-flipped force coefficients (D-040).
+constexpr doubleScalar nutMaxFactor = 1e8;
 
 // Convergence (spec 12.3; D-005)
 constexpr label forceCoeffsWindow = 100;
