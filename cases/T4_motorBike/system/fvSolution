@@ -204,6 +204,6 @@ cache
     grad(U);
 }
 
-#include "relaxation"
+#sinclude "relaxation"     // written by Allrun from relaxation.<solver>
 
 // ************************************************************************* //
