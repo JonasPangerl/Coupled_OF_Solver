@@ -30,7 +30,7 @@ solvers
         gammaEW         0.9;
         alphaEW         2;
         minIter         1;
-        maxIter         200;
+        maxIter         400;        // 200 marginally fails on stretched meshes (B4 abort on T3, 2026-09-22)
         restart         30;             // GMRES(10) stagnates (D-038); 6 above 40 M cells (B7)
         blockGAMG
         {
