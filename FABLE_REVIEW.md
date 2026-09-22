@@ -7,7 +7,27 @@ Resolved items move to the "Resolved" section with the commit.
 
 ## Open
 
-### 1. Round-off-sized change doubles T0 Re 1000 iterations (np1)
+### 1. RESOLVED 2026-09-22 ~04:30 - trajectory chaos, not a code defect
+
+Perturbation experiment (run/chaos_T0_*, committed build, exact
+orthogonality test in both runs): T0 Re 1000 np1 with nu perturbed by
+1e-5 relative needs 122 (Re 999.99) and 108 (Re 1000.01) outer
+iterations instead of 56; unperturbed reruns are bit-identical at 56.
+So the outer iteration count at Re 1000 is chaotically sensitive to
+round-off-sized perturbations near the start-up switch, and the
+orthogonality-flag A/B (58 vs 106) was trajectory scatter with n=1 per
+cell, not a causal mechanism. The same explains the np4 decomposition
+scatter (182-282).
+
+Consequences:
+- The exact test stays (validated baseline); the tolerance would be
+  equally valid statistically, but there is no reason to re-validate.
+- Iteration counts on T0 Re 1000 (and their wall times) carry a ~2x
+  trajectory scatter; the paper must not present single Re-1000
+  iteration counts as robust. Re 100 is deterministic and insensitive.
+- No further debugging warranted.
+
+### 1-old. Round-off-sized change doubles T0 Re 1000 iterations (np1)
 
 Evidence (debug agent, 2026-09-21, A/B on T0 Re 1000 np1):
 
