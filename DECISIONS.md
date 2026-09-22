@@ -1614,3 +1614,25 @@ strong scaling on T4b (serial run several hours). The user asked for about
   simpleFoam comparison uses the simpleFoam references of the T4/T5 tests
   (run/ref_*, same system simpleFoam and tutorial settings, unchanged by
   coupledFoam commits), which the final re-run keeps.
+
+## D-060 - User-judged convergence point of the force cases (user, 2026-09-22)
+
+The user is not yet sure about the automatic convergence criteria
+(12.3(ii) window for T3, D-042 stationary mean for T4/T5). After the final
+re-run the user inspects the load histories and may name, per run, an
+earlier iteration from which they consider it converged. Decision details:
+
+- The stop criteria of the runs stay unchanged (user). A user iteration can
+  therefore only move the convergence point earlier; a value beyond the last
+  iteration of a run is ignored and flagged.
+- File `report/user_convergence.json` (by hand), keys T3-SST, T3-GEKO, T4a,
+  T4b, T5; entries "coupledFoam"/"simpleFoam" (test run and its reference)
+  or a benchmark configuration letter. `bench/make_report.py` writes
+  `report/user_convergence_template.json` with the automatic iterations as
+  hints.
+- With a user iteration N: iterations, wall time and CPU-hours to
+  convergence count up to N (run_bench.to_convergence), Cd/Cl are the means
+  over N..end, speed-ups and reference deviations are recomputed.
+- The pass/fail of the tests is NOT changed; it keeps the automatic
+  criteria. Table `convergence_choice` lists automatic and user points side
+  by side; the load plots mark the user point with a solid line.

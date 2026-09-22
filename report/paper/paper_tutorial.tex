@@ -2062,6 +2062,17 @@ T5 Ahmed body & \cfnum{SpeedupWallTFive} & \cfnum{SpeedupCpuTFive}\\
 Table~\ref{tab:speedups} extracts the speed-ups; the full executive summary
 with absolute times and the memory ratio is Table~\ref{tab:summary}.
 
+\paragraph{You decide when it is converged.} A computer criterion is only a
+rule of thumb. For the wing, the motorbike and the Ahmed body you can look at
+the load plots in the appendix and say ``from iteration $N$ on this is
+converged for me''. The report then measures time and CPU-hours only up to $N$
+and averages $C_d$ and $C_l$ from $N$ to the end. Table~\ref{tab:convchoice}
+shows the computer's choice next to yours; in the plots the computer's point is
+dash-dotted and yours is solid.
+
+\cftable{convergence_choice}{Convergence point of the force cases: automatic
+and user choice (D-060).}{tab:convchoice}
+
 \cftable{executive_summary}{Executive summary: time to convergence (identical
 window criterion), best native configuration against coupledFoam, as
 wall-clock time and CPU-hours.}{tab:summary}

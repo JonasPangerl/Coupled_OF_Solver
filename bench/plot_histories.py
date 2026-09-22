@@ -89,6 +89,10 @@ SPLIT = {"tAsm": "#9ecae1", "tSolve": "#1f5fbf", "tTurb": "#fdae6b",
          "other": "#d9d9d9"}
 
 # run name: coupledFoam dir, simpleFoam reference dir, title, monitor
+# T5 on the coarse development mesh (CF_T5_MESH=coarse, D-059) unless only
+# the fine-mesh run exists
+T5_RUN = ("T5_np10" if (RUN / "T5_np10").is_dir()
+          and not (RUN / "T5_coarse_np10").is_dir() else "T5_coarse_np10")
 RUNS = {
     "T0_Re100_np1": ("T0_Re100_np1", "ref_T0_Re100", "T0 cavity, Re 100, 1 rank", None),
     "T0_Re100_np4": ("T0_Re100_np4", "ref_T0_Re100", "T0 cavity, Re 100, 4 ranks", None),
@@ -102,7 +106,8 @@ RUNS = {
     "T3_GEKO_np1": ("T3_GEKO_np1", "ref_T3_GEKO", "T3 airFoil2D, GEKO", "forces"),
     "T4a_np10": ("T4a_np10", "ref_T4a_np10", "T4a motorBike, 354k cells, 10 ranks", "forces"),
     "T4b_np10": ("T4b_np10", "ref_T4b_np10", "T4b motorBike, 1.70M cells, 10 ranks", "forces"),
-    "T5_np10": ("T5_np10", "ref_T5_np10", "T5 Ahmed body, 10 ranks", "forces"),
+    T5_RUN: (T5_RUN, "ref_" + T5_RUN, "T5 Ahmed body, 10 ranks"
+             + (" (coarse mesh)" if "coarse" in T5_RUN else ""), "forces"),
 }
 OSCILLATORY = ("T4", "T5")      # D-042 wake cases
 
@@ -527,6 +532,15 @@ def load_series(cf, sf, cfd, sfd, monitor, info):
     return series
 
 
+def _user_iteration(run: str, solver: str) -> int | None:
+    """User-judged convergence iteration of a test run (D-060)."""
+    try:
+        import user_convergence as ucv  # noqa: PLC0415
+        return ucv.lookup(ucv.load(), ucv.case_key(run), solver)
+    except Exception:  # noqa: BLE001 - the plot must not fail on the file
+        return None
+
+
 def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
     series = load_series(cf, sf, cfd, sfd, monitor, info)
     extra = ({k: cf[k] for k in cf if re.match(r"^(Cd|Cl|Cm)\w*(Mean|Rms)$", k)}
@@ -581,6 +595,17 @@ def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
                     if np.isfinite(tt[k]):
                         axs[r, 1].axvline(tt[k], color=col, lw=1.2, ls="-.",
                                           zorder=6)
+                # user-judged convergence iteration (D-060): solid line
+                uit = _user_iteration(run, solver)
+                if uit:
+                    axs[r, 0].axvline(uit, color=col, lw=1.8, ls="-", zorder=7,
+                                      label=f"{solver} user convergence"
+                                      if r == 0 else None)
+                    k = min(int(np.searchsorted(it, uit)), len(tt) - 1)
+                    if np.isfinite(tt[k]):
+                        axs[r, 1].axvline(tt[k], color=col, lw=1.8, ls="-",
+                                          zorder=7)
+                    info.setdefault("user", {})[solver] = uit
                 info.setdefault("stat", {})[solver] = (its, ev.get("W"),
                                                        ev.get("Cd_mean"),
                                                        ev.get("Cl_mean"))
@@ -1159,7 +1184,7 @@ def run(names: list[str] | None = None, outdir: Path = FIG,
     if not names:
         for group, members in (("wing", ["T3_kOmegaSST_np1", "T3_GEKO_np1"]),
                                ("motorbike", ["T4a_np10", "T4b_np10"]),
-                               ("ahmed", ["T5_np10"])):
+                               ("ahmed", [T5_RUN])):
             try:
                 st = fig_overview(group, members, outdir, log)
             except Exception as e:  # noqa: BLE001
