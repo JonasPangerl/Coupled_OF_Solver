@@ -100,8 +100,35 @@ constexpr doubleScalar refFluxBalanceTol = 1e-8;
 // Outer iteration (spec 11)
 constexpr label outerMaxIter = 2000;
 constexpr bool potentialInit = true;
-constexpr label startupUpwindIters = 50;
+constexpr label startupUpwindIters = 50;         // startupMode upwind only
 constexpr doubleScalar startupSwitchR = 1e-2;    // 7.4, D-008
+
+// Start-up of the convection scheme, startupControl (D-048). upwind =
+// beta 0 until startupUpwindIters or R/R1 < startupSwitchR, then 1 (the
+// behaviour before D-048, bit-identical). hybrid = upwind, then a linear
+// beta ramp 0 -> 1 over startupRampLength iterations from the ramp start
+// n0 (startupRampStart; earlier on R/R1 < startupSwitchR or on stagnation
+// of upwind; later while upwind still drops R fast, at most
+// startupRampStartMax; startupRampStartMax = startupRampStart disables the
+// delay). Measured on T1 (serial, iterations to R < 1e-5): upwind 290,
+// plain ramp 10 -> 30 348, delayed ramp (start 21) 375, ramp on the
+// stagnation trigger (start 7) not within 400; T0 Re1000 np4 did not
+// converge in 300 iterations with the ramp. The default therefore stays
+// upwind, and the hybrid ramp is not delayed.
+constexpr const char* startupMode = "upwind";    // hybrid | upwind | none
+constexpr label startupRampStart = 10;
+constexpr label startupRampLength = 20;
+constexpr label startupRampStartMax = 10;
+// stagnation: R_n > factor*R_(n-W) (less than 10 % reduction in W its)
+constexpr doubleScalar startupStagnationFactor = 0.9;
+constexpr label startupStagnationWindow = 5;
+// fast drop (delays the ramp start): R_n < factor*R_(n-W)
+constexpr doubleScalar startupFastFactor = 0.7;
+// developed start (hybrid and upwind modes; fresh start, potentialInit
+// off, non-uniform U): max(rU, rp) of iteration 1 assembled with beta = 1
+// below this (scale-free residuals sum|r|/sum(|Ax|+|b|); potential-flow
+// starts of T4 give 0.13 / 0.03, the stationary T4a state 0.0033 / 0.0025)
+constexpr doubleScalar startupDevelopedTol = 1e-2;
 constexpr doubleScalar nonOrthLimiter = 0.5;
 
 // Under-relaxation of the block smoother update per sweep (OPUS_TASKS
@@ -138,6 +165,12 @@ constexpr doubleScalar betaMax = 1.5;
 constexpr doubleScalar betaExp = 1.1;
 constexpr label nHold = 10;
 constexpr label maxLinFails = 3;                 // B4
+// B4 failure definition (linFailPolicy): "strict" = not converged to eta within
+// maxIter is a failure; "reduction" = accepted if finite and the true
+// residual dropped to at most linAcceptReduction * initial
+constexpr const char* linFailPolicy = "strict";
+constexpr doubleScalar linAcceptReduction = 0.9;
+
 
 // Line search (spec 7.2)
 constexpr doubleScalar fU = 0.3;
