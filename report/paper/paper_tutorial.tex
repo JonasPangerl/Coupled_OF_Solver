@@ -167,9 +167,9 @@ boxed ``pending'' placeholder rather than as a guess.
 % =============================================================================
 
 The professional paper (\code{paper.pdf}) is written for CFD numerics
-specialists. This tutorial follows the same path in more steps. You can
-read it front to back, or jump to the building block you are curious about:
-each one in Section~\ref{sec:blocks} is self-contained.
+specialists. This tutorial follows the same path in more steps. It can
+be read front to back, or consulted for a single building block: each one in
+Section~\ref{sec:blocks} is self-contained.
 
 Four kinds of boxes appear throughout:
 \begin{intuition}{the blue box}
@@ -177,8 +177,8 @@ Four kinds of boxes appear throughout:
   next to it says what is actually done.
 \end{intuition}
 \begin{whyitmatters}{the green box}
-  The practical consequence for you as a user: what you will see in a run,
-  which setting it affects, or which result it explains.
+  The practical consequence for the user: what appears in a run, which
+  setting it affects, or which result it explains.
 \end{whyitmatters}
 \begin{pitfall}{the orange box}
   Something that went wrong during development or that easily goes wrong in
@@ -187,7 +187,7 @@ Four kinds of boxes appear throughout:
 \begin{bblock}{the grey box}
   \bbwhat A short definition.
   \bbwhy Its job inside coupledFoam.
-  \bbwithout The failure you would see if it were missing.
+  \bbwithout The failure that would appear if it were missing.
 \end{bblock}
 
 \paragraph{Numbers.} All measured values in this document are inserted
@@ -267,7 +267,7 @@ $\nabla\cdot\Uv=0$.
 \end{intuition}
 
 This is why incompressible solvers need a special strategy for pressure:
-there is no equation that you could simply ``solve for $p$''. The two
+there is no equation that could simply be ``solved for $p$''. The two
 strategies, segregated (Section~\ref{sec:simple}) and coupled
 (Section~\ref{sec:coupled}), differ precisely in how they deal with this.
 
@@ -455,7 +455,7 @@ tolerance, while coupledFoam needed \cfnum{TZeroReOneZeroZeroIterations}.
 the order of magnitude, not a race; see Section~\ref{sec:residual}.)
 
 \begin{whyitmatters}{relaxation factors are case-specific}
-  With \code{simpleFoam} you have probably spent time choosing relaxation
+  Users of \code{simpleFoam} usually spend time choosing relaxation
   factors: too small and the run crawls, too large and it diverges. The
   benchmark in this project therefore compares against two native settings:
   the tutorial's own, and a tuned SIMPLEC setting with factors 1.0 for $p$
@@ -604,16 +604,16 @@ solver is \emph{faster} in the end is therefore not obvious, and it can
 depend on the case.
 
 \begin{whyitmatters}{wall-clock time and CPU-hours, not iterations}
-  An iteration count says nothing about how long you wait or how much
-  machine you use. A solver that needs 50 iterations of one minute each is
+  An iteration count says nothing about the waiting time or the machine
+  time used. A solver that needs 50 iterations of one minute each is
   slower than one that needs 2000 iterations of one second each. The
   project's explicit requirement (D-025) is therefore: the fastest solver
   wins, measured as
   \begin{itemize}
-  \item \textbf{wall-clock time} to a converged answer (how long you wait),
+  \item \textbf{wall-clock time} to a converged answer (the waiting time),
     and
-  \item \textbf{CPU-hours} to a converged answer (how much computing you
-    pay for: the CPU time of all ranks added up),
+  \item \textbf{CPU-hours} to a converged answer (the computing time paid
+    for: the CPU time of all ranks added up),
   \end{itemize}
   with the \emph{same} convergence criterion for both solvers. Iteration
   counts are shown only for completeness.
@@ -698,10 +698,10 @@ accurate but make the matrix less well behaved.
 
 coupledFoam uses the standard trick of \emph{deferred
 correction}~\cite{Khosla1974,Ferziger2002}: the matrix always contains the
-robust upwind operator, and the difference between your chosen scheme (from
+robust upwind operator, and the difference between the chosen scheme (from
 \code{fvSchemes}, key \code{div(phi,U)}) and upwind is added as a known
 source computed from the current fields. At convergence the source is exact,
-so the converged solution is that of your high-order scheme. A per-cell
+so the converged solution is that of the chosen high-order scheme. A per-cell
 blending factor $\beta$ between 0 (pure upwind) and 1 (full scheme) allows
 switching the correction off locally.
 
@@ -838,12 +838,12 @@ ends up. The converged steady solution is the same whatever time steps were
 used (up to the small Rhie--Chow effect noted above).
 
 \begin{intuition}{walking down a foggy mountain}
-  You want to reach the bottom of a valley in fog. Small steps are safe but
-  slow; big steps are fast but you might walk off a cliff. PTC is a rule
-  for choosing the step length: start with small steps, and each time the
-  ground has clearly gone downhill (the residual dropped), lengthen your
-  stride. If a step looks dangerous, shorten it again. The valley floor
-  (the steady solution) does not depend on how you walked there.
+  A walker descends into a valley in fog. Small steps are safe but slow;
+  big steps are fast but risk a fall off a cliff. PTC is a rule for choosing
+  the step length: start with small steps, and each time the ground has
+  clearly gone downhill (the residual dropped), lengthen the stride. If a
+  step looks dangerous, shorten it again. The valley floor (the steady
+  solution) does not depend on the path taken.
 \end{intuition}
 
 \paragraph{Local time steps and the CFL number.}
@@ -888,7 +888,7 @@ would be robust but as slow as a transient simulation.
 \begin{whyitmatters}{reading the CFL column in the log}
   In a healthy run the CFL number climbs steadily towards its maximum and
   stays there. A CFL number that keeps dropping back, or never gets
-  above a few tens, tells you the solver is repeatedly running into
+  above a few tens, indicates that the solver is repeatedly running into
   trouble: look at the line-search factor, the cut counter and the
   remediation set sizes in the same log line.
 \end{whyitmatters}
@@ -937,11 +937,11 @@ create huge velocities, negative turbulence quantities, and a diverged run.
   than their last one.
 \end{pitfall}
 
-\begin{whyitmatters}{what $\omega$ in the log tells you}
+\begin{whyitmatters}{what $\omega$ in the log indicates}
   $\omega=1$ means the full step was taken. Values well below one in the
   early iterations are normal. Persistent small $\omega$ late in the run
   means some region keeps producing large changes; the dynamic remediation
-  set size (next section) tells you how many cells are involved.
+  set size (next section) gives the number of cells involved.
 \end{whyitmatters}
 
 % -----------------------------------------------------------------------------
@@ -969,15 +969,15 @@ whole simulation more cautious.
   how far the update may move them away from their neighbours' mean. A cell
   leaves the set after 20 quiet iterations. A warning appears if the sets
   cover more than 1\,\% of the mesh.
-\item[Zonal factors (optional).] You can name cell zones or patches (with
-  a number of cell layers around them) where the time step and the
-  high-order blending should be reduced, e.g.\ around a wheel. Off by
+\item[Zonal factors (optional).] Cell zones or patches (with a number of
+  cell layers around them) can be named in which the time step and the
+  high-order blending are reduced, e.g.\ around a wheel. Off by
   default (D-027).
 \end{description}
 
 \begin{intuition}{local speed limits}
   Rather than lowering the speed limit on the whole motorway because of one
-  construction site, you put a local speed limit at the construction site.
+  construction site, a local limit is posted at the construction site.
   Remediation is exactly that: local time step and scheme reductions where
   they are needed, full speed everywhere else.
 \end{intuition}
@@ -986,8 +986,8 @@ whole simulation more cautious.
   Pure upwind in a handful of cells changes the solution only locally and
   slightly. The test criteria require the static set to stay at or below
   1\,\% of the cells on the motorBike meshes (T4), and an empty dynamic set
-  at convergence on the airfoil (T3). If on your case a large fraction of
-  cells ends up in the sets, that is a sign to improve the mesh.
+  at convergence on the airfoil (T3). If a large fraction of the cells of
+  a case ends up in the sets, that is a sign to improve the mesh.
 \end{whyitmatters}
 
 % -----------------------------------------------------------------------------
@@ -1007,7 +1007,7 @@ A time directory containing \code{nan} or \code{inf} is never written.
 \begin{whyitmatters}{when a run stops}
   If coupledFoam stops with a sentinel error, open the \code{\_lastValid}
   time directory in ParaView and look at the \code{sentinelFlag} field: it
-  shows you where the trouble started, usually at a mesh defect or a
+  shows where the trouble started, usually at a mesh defect or a
   boundary-condition problem.
 \end{whyitmatters}
 
@@ -1042,9 +1042,9 @@ once per outer iteration. For millions of cells a direct solution
   by the matrix, multiplies the result again, and so on. Each product shows
   how the system ``responds'' to a certain pattern. From these responses it
   builds a combination that best explains the right-hand side. Think of
-  tuning a sound system: you play a few test signals, record how the room
-  responds, and combine them into the correction that best cancels the
-  echo.
+  tuning a sound system: a few test signals are played, the response of
+  the room is recorded, and they are combined into the correction that best
+  cancels the echo.
 \end{intuition}
 
 \begin{description}
@@ -1092,7 +1092,7 @@ system is close to the identity and is solved in a few steps.
 
 \begin{intuition}{glasses for the solver}
   The Krylov method is a good reader with bad eyes. The preconditioner is a
-  pair of glasses: it does not read for you, but it makes the text sharp
+  pair of glasses: it does not do the reading, but it makes the text sharp
   enough that reading is fast. Better glasses (a stronger preconditioner)
   cost more to make, so there is a sweet spot.
 \end{intuition}
@@ -1119,9 +1119,9 @@ reduce, and recursively to even coarser meshes; then interpolate the
 correction back and smooth again. That is \emph{multigrid}.
 
 \begin{intuition}{fixing a picture at several zoom levels}
-  To fix the colour balance of a large photo you do not retouch pixel by
-  pixel: you fix the overall tone on a thumbnail, then the regional
-  shading at medium size, then the fine details at full size. Each level
+  The colour balance of a large photo is not repaired pixel by pixel: the
+  overall tone is fixed on a thumbnail, then the regional shading at medium
+  size, then the fine details at full size. Each level
   corrects the errors it can see best.
 \end{intuition}
 
@@ -1335,8 +1335,8 @@ the first iteration and during the upwind start-up, and at least one
 Krylov iteration is always made.
 
 \begin{intuition}{measuring with the right ruler}
-  When you are still sawing a board roughly to length you do not measure
-  with a micrometer; you measure to the millimetre only for the final cut.
+  A board sawn roughly to length is not measured with a micrometer;
+  millimetre precision is needed only for the final cut.
   Eisenstat--Walker picks the measuring precision of each inner solve to
   match how close the outer iteration is to the answer.
 \end{intuition}
@@ -1432,10 +1432,10 @@ classical idea of mixed-precision iterative
 refinement~\cite{Baboulin2009,Carson2018}, built into the outer iteration.
 
 \begin{intuition}{a cheap tape measure and a precise reference}
-  You adjust a machine part using a cheap tape measure (the float solve),
-  but after each adjustment you check the part against a precise gauge (the
-  double residual). The cheap tape is good enough to know which way and
-  roughly how far to adjust; the precise gauge guarantees you do not stop
+  A machine part is adjusted with a cheap tape measure (the float solve)
+  and checked after each adjustment against a precise gauge (the double
+  residual). The cheap tape is good enough to tell which way and roughly how
+  far to adjust; the precise gauge guarantees that the work does not stop
   until the part is exactly right.
 \end{intuition}
 
@@ -1660,7 +1660,7 @@ centre of the box, plotted against height. Near the top it approaches the
 lid speed; lower down it is negative, which is the return flow of the
 vortex. Right: the vertical velocity $v$ along the horizontal centreline.
 \code{simpleFoam} is drawn as a thick line, coupledFoam as a thin dashed
-line on top of it. \emph{Good} means: you cannot see two lines.
+line on top of it. \emph{Good} means: the two lines are indistinguishable.
 
 \cffigure{T0_Re100_np1_history}{T0, $Re=100$, one rank: combined residual $R$
 of coupledFoam and native initial residuals of simpleFoam (left); CFL number
@@ -1696,7 +1696,7 @@ Table~\ref{tab:tests}.
   tests turbulence coupling and inlet/outlet boundary conditions. Pass:
   $R<10^{-6}$ within 400 iterations; pressure drop from inlet to outlet
   within 1\,\% of \code{simpleFoam}; the CFL number at least 100 without
-  cuts after iteration 100; no rollbacks. \emph{Why you should care:} the
+  cuts after iteration 100; no rollbacks. \emph{Why this matters:} the
   pressure drop is the simplest integral engineering quantity, and the CFL
   criterion checks that the solver runs at full speed once past the
   start-up.
@@ -1706,13 +1706,13 @@ Table~\ref{tab:tests}.
   reattachment length (where the wall shear stress on the lower wall changes
   sign) within 2\,\% of \code{simpleFoam}, and at least two times fewer
   outer iterations to a residual of $10^{-5}$ (the iteration definition for
-  the two solvers is fixed in D-024). \emph{Why you should care:}
+  the two solvers is fixed in D-024). \emph{Why this matters:}
   separation and reattachment are the phenomena that dominate the wake and
   diffuser of a car.
 \item[T3, airFoil2D (SST and GEKO).] The 2D airfoil tutorial. Pass: $C_l$
   and $C_d$ within 0.5\,\% of \code{simpleFoam}, for each turbulence model,
   with identical settings; empty dynamic remediation set at convergence.
-  \emph{Why you should care:} lift and drag of a wing profile, which is
+  \emph{Why this matters:} lift and drag of a wing profile, which is
   what front and rear wings are.
 \item[T4, motorBike.] The OpenFOAM motorbike-with-rider tutorial meshed with
   \code{snappyHexMesh}: a coarse mesh of about 350\,k cells (T4a) and a
@@ -1720,7 +1720,7 @@ Table~\ref{tab:tests}.
   Pass: the averaged $C_d$ and $C_l$ have settled and agree with
   \code{simpleFoam} (2\,\% for $C_d$; averaged criterion for the oscillating
   wake, D-042); static remediation set at most 1\,\% of the cells; no
-  rollbacks. \emph{Why you should care:} this is the first case with a
+  rollbacks. \emph{Why this matters:} this is the first case with a
   complex 3D geometry and an automatically generated mesh with real
   bad cells, the closest test to a car.
 \item[T5, Ahmed body, $25^\circ$ slant.] A simplified car body with a slanted
@@ -1728,7 +1728,7 @@ Table~\ref{tab:tests}.
   model, 5--8\,M cells, $U_\infty=\SI{40}{m/s}$, SST with wall functions.
   Pass: as T4 (averaged criterion, D-042); the comparison with the
   experimental $C_d=0.285$ ($\pm10$\,\%) is for information only.
-  \emph{Why you should care:} it is the size class and flow type of a
+  \emph{Why this matters:} it is the size class and flow type of a
   vehicle simulation: separation on the slant, a wake, ground effect.
 \end{description}
 
@@ -1741,7 +1741,7 @@ Three further tests check specific features:
 \item[T-fpe.] A deliberately brutal start of T1: zero initial velocity, no
   potential-flow initialisation, start CFL 200, no upwind start-up. The
   solver must not crash; rollbacks are allowed; it must recover and
-  converge. \emph{Why you should care:} this is the test of the safety net
+  converge. \emph{Why this matters:} this is the test of the safety net
   (line search, remediation, sentinel).
 \item[T-mrf.] The \code{mixerVessel2D} tutorial with a rotating MRF zone;
   torque compared with \code{simpleFoam}. Informational only, because the
@@ -1860,7 +1860,7 @@ distance in step heights, $x/h$). At each position the horizontal velocity
 is drawn as a curve starting from the thin vertical line: the further the
 curve bulges to the right, the faster the flow at that height; a bulge to
 the left of the line is backflow. Thick orange is \code{simpleFoam}, dashed
-blue is coupledFoam. \emph{Good} means: you see only one curve.
+blue is coupledFoam. \emph{Good} means: only one curve is visible.
 
 \cffigure{fields_T1_U}{T1 pitzDaily: speed with streamlines, coupledFoam
 (top), simpleFoam (middle), difference (bottom).}{fig:fldToneU}
@@ -1925,7 +1925,7 @@ the chord.}{fig:prTthreesst}
 \paragraph{T4 and T5: 3D pictures.} For the motorbike and the Ahmed body
 the pictures are rendered with ParaView. The first picture shows the body
 with the surface mesh drawn on it: every small polygon is the face of one
-cell touching the body, so you can see where the mesh generator placed fine
+cell touching the body, which shows where the mesh generator placed fine
 and coarse cells. The slice pictures cut the flow with two flat planes, a
 vertical one through the middle of the body (side view) and a horizontal
 one at 20\,\% of the body height (top view); the body itself is drawn in
@@ -2021,8 +2021,8 @@ machine load before each run is recorded (D-007).
   Both solvers are stopped by the same, physically meaningful criterion
   (the forces do not change any more), not by their incomparable residuals;
   both get the same hardware and the same mesh; and the native solver gets
-  its best of two settings. A speed-up measured this way is the time you
-  would actually save.
+  its best of two settings. A speed-up measured this way is the time
+  actually saved in practice.
 \end{whyitmatters}
 
 \subsection{How to read speed-ups}
@@ -2062,13 +2062,16 @@ T5 Ahmed body & \cfnum{SpeedupWallTFive} & \cfnum{SpeedupCpuTFive}\\
 Table~\ref{tab:speedups} extracts the speed-ups; the full executive summary
 with absolute times and the memory ratio is Table~\ref{tab:summary}.
 
-\paragraph{You decide when it is converged.} A computer criterion is only a
-rule of thumb. For the wing, the motorbike and the Ahmed body you can look at
-the load plots in the appendix and say ``from iteration $N$ on this is
-converged for me''. The report then measures time and CPU-hours only up to $N$
-and averages $C_d$ and $C_l$ from $N$ to the end. Table~\ref{tab:convchoice}
-shows the computer's choice next to yours; in the plots the computer's point is
-dash-dotted and yours is solid.
+\paragraph{Convergence point chosen by the user.} An automatic criterion is
+only a rule of thumb. For the wing, the motorbike and the Ahmed body the user
+may inspect the load histories in the appendix and name an earlier iteration
+$N$ from which the run is considered converged (\texttt{report/user\_%
+convergence.json}, D-060). Wall time and CPU-hours are then counted up to $N$,
+and $C_d$ and $C_l$ are averaged from $N$ to the end of the run. The stop
+criteria of the runs themselves are unchanged, so a user iteration can only
+move the convergence point earlier. Table~\ref{tab:convchoice} shows the
+automatic point next to the user's; in the load histories the automatic point
+is dash-dotted and the user's point solid.
 
 \cftable{convergence_choice}{Convergence point of the force cases: automatic
 and user choice (D-060).}{tab:convchoice}
@@ -2106,7 +2109,7 @@ and~\ref{fig:benchcpu}.}{fig:benchiters}
 \paragraph{Figure~\ref{fig:benchiters}} shows iteration counts. Expect
 coupledFoam to need far fewer; that alone proves nothing
 (Section~\ref{sec:fair}). The ratio of the iteration ratio to the time
-ratio tells you how much more expensive a coupled iteration is.
+ratio gives how much more expensive a coupled iteration is.
 
 \cffigure{bench_breakdown}{coupledFoam time per outer iteration split into
 assembly, linear solve and turbulence.}{fig:breakdown}
@@ -2209,7 +2212,7 @@ with the speed-up factors.}{fig:speedconv}
 
 \paragraph{How to read Figure~\ref{fig:speedconv}.} Left: seconds on the
 clock until each solver was done; right: the same as CPU-hours, i.e.\ the
-computing time of all cores added up (the unit you pay for on a cluster).
+computing time of all cores added up (the unit billed on a cluster).
 Here every run used one core, so the two panels look alike. The number
 above each pair is the speed-up: \code{simpleFoam} time divided by
 coupledFoam time. On the cavity at $Re=100$ coupledFoam was
@@ -2357,7 +2360,7 @@ exactly the evidence those items require.
   SIMPLE solution depends on its relaxation factor
   (Section~\ref{sec:rc}).
 \item \textbf{Gradient limiting in bad cells} applies to the Rhie--Chow
-  pressure gradient only; the gradient inside your convection scheme cannot
+  pressure gradient only; the gradient inside the convection scheme cannot
   be limited per cell (D-018). With the default settings, bad cells use
   pure upwind, so this gradient does not enter there.
 \item \textbf{Some boundary conditions are linearised about the previous
