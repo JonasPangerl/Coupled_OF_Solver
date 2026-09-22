@@ -41,11 +41,22 @@ class blockILU0
     // Private Data
 
         //- Inverse of the modified diagonal blocks D*^-1, 16 per cell
+        //- Pivot-growth limit: cells whose modified pivot inverse exceeds
+        //  limit*|D^-1| (max-abs norms) use the unmodified block (0: off)
+        const doubleScalar pivotGrowthLimit_;
+
+        //- Cells with the fallback in the last update()
+        label nPivotFallback_;
+
         blockScalarList rD_;
 
         //- Work vectors
         mutable blockScalarList r_;
         mutable blockScalarList w_;
+
+        //- Debug (CF_ILU_DEBUG): pivot-inverse growth per cell
+        List<double> grow_;
+        label nUpdDbg_ = 0;
 
 
 public:
@@ -66,6 +77,8 @@ public:
     // Member Functions
 
         virtual void update();
+
+        label nPivotFallback() const noexcept { return nPivotFallback_; }
 
         //- w = M^-1 r
         void applyInverse(blockScalarUList& w, const blockScalarUList& r) const;
