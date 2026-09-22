@@ -1,5 +1,9 @@
 """T-scaling - strong scaling on T4b (spec 13). Heavy.
 
+CF_SCALING_MESH=a runs it on T4a instead, CF_SCALING_ITERS overrides the
+iteration count (final re-run budget of 12 h, user 2026-09-22: T4a, 150
+iterations, ranks 1,2,4,8,12,16 on physical cores).
+
 Ranks 1, 2, 4, 8 and NP = CF_HEAVY_NP (default 10; the spec's 16 is
 capped by the 10-core user directive D-031; CF_SCALING_RANKS overrides),
 300 iterations each,
@@ -30,7 +34,7 @@ from cflib import logs, results
 
 from test_T4_motorBike import NP, TEMPLATE, mesh_dir, run_solver
 
-N_ITER = 300
+N_ITER = int(os.environ.get("CF_SCALING_ITERS", "300"))
 SKIP = 50
 SOLVERS = ("coupledFoam", "simpleFoam")
 MIN_RELATIVE_EFFICIENCY = 0.8
@@ -86,13 +90,14 @@ def time_per_iteration(case, solver: str) -> dict:
 
 @pytest.mark.heavy
 def test_scaling(foam):
-    mesh_args = ["-mesh", "b"]
+    variant = os.environ.get("CF_SCALING_MESH", "b")
+    mesh_args = ["-mesh", variant]
     rs = ranks()
     runs: dict[str, dict[int, dict]] = {s: {} for s in SOLVERS}
     for n in rs:
-        mesh = mesh_dir(TEMPLATE, "T4b_mesh", mesh_args, n, NP)
+        mesh = mesh_dir(TEMPLATE, f"T4{variant}_mesh", mesh_args, n, NP)
         for solver in SOLVERS:
-            name = f"scaling_T4b_{solver}_np{n}"
+            name = f"scaling_T4{variant}_{solver}_np{n}"
             case, rec = run_solver(TEMPLATE, mesh, name, solver, mesh_args,
                                    fixed_iterations(solver), fpe=False)
             rec.pop("history", None)
@@ -101,7 +106,7 @@ def test_scaling(foam):
             assert rec["rc"] == 0, f"{name} failed (rc {rec['rc']})"
 
     n0 = rs[0]
-    summary: dict = {"ranks": rs, "baseRanks": n0, "iterations": N_ITER,
+    summary: dict = {"mesh": f"T4{variant}", "ranks": rs, "baseRanks": n0, "iterations": N_ITER,
                      "skip": SKIP, "meshCells": None}
     for solver in SOLVERS:
         t0 = runs[solver][n0].get("timePerIter_s")
@@ -142,7 +147,7 @@ def test_scaling(foam):
                   "cpuHours", "peakRSS_GB_sum"):
             summary[solver][k] = {str(n): v
                                   for n, v in summary[solver][k].items()}
-    results.write("tests", "T_scaling_T4b", summary)
+    results.write("tests", f"T_scaling_T4{variant}", summary)
 
     assert ec is not None and es is not None, "efficiency not measured"
     assert rel >= MIN_RELATIVE_EFFICIENCY, (
