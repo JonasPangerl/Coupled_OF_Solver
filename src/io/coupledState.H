@@ -10,7 +10,8 @@ Description
     directory (per processor directory in parallel; a global IOdictionary
     would be read by the master and broadcast, giving every rank the state
     of rank 0) with
-        CFL, iter, startupDone, R1, Uref, pref, nHoldRemaining, Rprev,
+        CFL, iter, startupDone, start-up ramp state, R1, Uref, pref
+        (frozen at iteration 1, D-050), nHoldRemaining, Rprev,
         dynamicSet, dynamicSetAge, nRollbacks, Eisenstat-Walker state,
         gamgAutoTune (sweeps, cycle type, rho window, hysteresis, latches),
         convergenceMonitor (last forceCoeffsWindow Cd/Cl samples),

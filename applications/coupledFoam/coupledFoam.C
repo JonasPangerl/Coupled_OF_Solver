@@ -595,8 +595,9 @@ int main(int argc, char *argv[])
         if (!ls.referenceSet())
         {
             ls.setReference(U);
-            Info<< "coupledFoam: Uref " << ls.Uref() << ", pref "
-                << ls.pref() << endl;
+            Info<< "coupledFoam: Uref " << ls.Uref() << " (" << ls.UrefSource()
+                << ", mode " << ls.UrefMode() << "), pref " << ls.pref()
+                << endl;
         }
 
         const volScalarField nuEff("nuEff", turbulence->nuEff());
@@ -1541,6 +1542,10 @@ int main(int argc, char *argv[])
         j.add("solver", "coupledFoam");
         j.add("nProcs", UPstream::nProcs());
         j.add("nCells", returnReduce(mesh.nCells(), sumOp<label>()));
+        j.add("Uref", ls.Uref());
+        j.add("pref", ls.pref());
+        j.add("UrefMode", ls.UrefMode());
+        j.add("UrefSource", ls.UrefSource());
         j.add("iterations", iter);
         j.add("converged", converged);
         j.add("finalR", lastR);

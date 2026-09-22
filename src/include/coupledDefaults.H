@@ -171,6 +171,18 @@ constexpr label maxLinFails = 3;                 // B4
 constexpr const char* linFailPolicy = "strict";
 constexpr doubleScalar linAcceptReduction = 0.9;
 
+// Velocity reference Uref (D-050): the scale of the line search (fU Uref),
+// the local CFL limit (fLoc Uref), the dynamic-set thresholds (cU Uref,
+// cp pref with pref = Uref^2/2) and the sentinel (sentinelUFactor Uref).
+// "boundary": max |U| over the non-coupled boundary values (inflow, moving
+// walls, free stream) at iteration 1; "field": the maximum over the cells
+// and the non-coupled boundaries (the behaviour before D-050, which with
+// potentialInit is the singular potential-flow peak: T4b 8.8 U_inf, so the
+// dynamic set never fired); a number: that value. If the boundary maximum
+// is below UrefFallbackFactor times the field maximum (no driving boundary
+// velocity, e.g. an MRF-driven closed domain) the field maximum is used.
+constexpr const char* UrefMode = "boundary";     // boundary | field | value
+constexpr doubleScalar UrefFallbackFactor = 1e-6;
 
 // Line search (spec 7.2)
 constexpr doubleScalar fU = 0.3;
