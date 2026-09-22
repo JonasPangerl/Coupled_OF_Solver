@@ -56,7 +56,7 @@ NP = int(os.environ.get("CF_HEAVY_NP", "10"))
 WINDOW = run_bench.WINDOW           # 100
 TOL = run_bench.TOL                 # 0.002
 TOL_CD = 0.01
-MAX_STATIC_FRACTION = 0.01
+MAX_STATIC_FRACTION = 0.015   # user, D-047 (was 0.01)
 WRAPPER = cfenv.REPO / "bench" / "rank_wrapper.sh"
 
 # Iteration budgets: those of the benchmark harness (bench/run_bench.py)

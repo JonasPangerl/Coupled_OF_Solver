@@ -141,10 +141,10 @@ constexpr doubleScalar fLoc = 0.5;
 
 // Remediation, static (spec 8.1)
 constexpr bool staticEnabled = true;
-constexpr doubleScalar nonOrthThreshold = 70;
-constexpr doubleScalar skewThreshold = 4;
-constexpr doubleScalar volRatioThreshold = 20;
-constexpr doubleScalar aspectThreshold = 1000;
+constexpr doubleScalar nonOrthThreshold = 85;     // user, D-047 (was 70)
+constexpr doubleScalar skewThreshold = 6;         // user, D-047 (was 4)
+constexpr doubleScalar volRatioThreshold = 30;    // user, D-047 (was 20)
+constexpr doubleScalar aspectThreshold = 2000;    // user, D-047 (was 1000)
 constexpr doubleScalar staticBeta = 0;
 constexpr doubleScalar staticNonOrthLimiter = 0.2;
 constexpr doubleScalar staticCflFactor = 0.5;

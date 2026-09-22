@@ -1014,3 +1014,29 @@ window minimum 1000 -> 300, i.e. W = max(300, n/2): coupledFoam W = 400
 (fieldAverage from iteration 401); the simpleFoam reference windows are
 unchanged (n/2 = 1500/2000/2500 >= 1000 anyway). T4a result so far
 (1500-iteration budget) remains valid evidence; it is rerun with 800.
+
+## D-047 - Static remediation thresholds relaxed; test limit 1.5 % (user, 2026-09-22)
+
+On the snappyHexMesh motorBike mesh (T4a) the static remediation set
+held 1.37 % of the cells, which failed the 1 % test limit. The static
+set marks cells by mesh quality at start-up and demotes them to
+first-order convection with a reduced local CFL.
+
+The user decided to raise the non-orthogonality threshold to 85 degrees
+(explicitly 85, not 75) and to give the other quality criteria slightly
+larger tolerances, so that fewer cells enter the set.
+
+| threshold | old | new |
+|---|---|---|
+| nonOrthThreshold | 70 | 85 |
+| skewThreshold | 4 | 6 |
+| volRatioThreshold | 20 | 30 |
+| aspectThreshold | 1000 | 2000 |
+| test limit MAX_STATIC_FRACTION (T4/T5) | 1 % | 1.5 % |
+
+The new values apply in coupledDefaults.H and in every case template.
+The static non-orthogonal limiter (0.2) and the static CFL factor (0.5)
+are unchanged.
+
+All T4 coupledFoam results obtained before this entry used the old
+thresholds and are rerun.
