@@ -1,0 +1,794 @@
+% =============================================================================
+%  solver_comparison_tutorial.tex
+%  Section of the TUTORIAL paper (paper_tutorial.tex, \input by the lead):
+%  "How coupledFoam compares to commercial and other open-source solvers".
+%
+%  Needs the tutorial preamble (booktabs, longtable, array, tcolorbox boxes
+%  intuition / whyitmatters / pitfall, \cfnum, \code, natbib). Measured
+%  coupledFoam numbers come only from the generated macros (\cfnum{...});
+%  no measured number is typed by hand. Vendor facts carry a citation; what
+%  is not publicly documented is marked \cmpnpd.
+%  Bibliography keys of this section are prefixed cmp- (references.bib).
+% =============================================================================
+
+% --- local helpers (guarded, so the file can be \input more than once) ------
+\providecommand{\cmpnpd}{\textit{(n.p.d.)}}
+\providecommand{\cmphead}[1]{\multicolumn{6}{l}{\rule{0pt}{2.6ex}\textbf{#1}}\\*[1pt]}
+\makeatletter
+\@ifundefined{cmpf1box}{%
+  \newtcolorbox{cmpf1box}[1]{cfbase, colback=cfwhybg, colframe=cfwhy,
+    title={#1}}}{}
+\makeatother
+
+% =============================================================================
+\section{How coupledFoam compares to commercial and other open-source solvers}
+\label{sec:compare}
+% =============================================================================
+
+If you have worked with Simcenter STAR-CCM+ or Ansys Fluent, you have met
+coupled solvers before: both products offer one, and so does ENGYS HELYX,
+which many motorsport teams use on top of an OpenFOAM-derived code base.
+This section puts coupledFoam next to them. For every aspect it says what
+coupledFoam does the same, what it does differently, \emph{why}, and when
+that should make it better or worse.
+
+\begin{pitfall}{what we can and cannot know about commercial solvers}
+  The commercial codes are closed. Their user guides and theory guides
+  describe the \emph{method} and the \emph{user settings} (for example the
+  default Courant number), but rarely the internals (which smoother runs on
+  which level, which operations run in single precision, how a rotating
+  zone enters the matrix). Everything below is taken from vendor
+  documentation, vendor blog posts or peer-reviewed papers, and each
+  statement carries its source. Where a detail is not publicly documented,
+  the table says \cmpnpd{} (``not publicly documented''), and the text says
+  what typical practice suggests; nothing is filled in by guessing. Vendor
+  speed-up claims are the vendors' own measurements, on their own cases,
+  against their own baselines. They are quoted as claims, not as facts
+  we verified.
+\end{pitfall}
+
+% -----------------------------------------------------------------------------
+\subsection{Four pairs of words you need first}\label{sec:cmp-words}
+
+\paragraph{Segregated versus coupled.} A \emph{segregated} solver solves
+one equation at a time: first momentum with the old pressure, then a
+pressure(-correction) equation, then turbulence, and repeats
+(Section~\ref{sec:simple}). A \emph{coupled} solver puts momentum and
+continuity into one linear system and solves for velocity and pressure
+together (Section~\ref{sec:coupled}). In every solver discussed here,
+``coupled'' means \emph{velocity and pressure} (and energy, where it
+applies). Turbulence is solved separately, after the flow update, in all of
+them, commercial ones included.
+
+\paragraph{Pressure-based versus density-based.} These are two historical
+families of coupled solvers. A \emph{pressure-based} solver takes pressure
+as the unknown that enforces mass conservation; it was born for
+incompressible flow and extended to compressible flow. coupledFoam, the
+Fluent pressure-based coupled solver~\cite{cmp-ChenPrzekwas2010,cmp-Fluent12TG}
+and HELYX-Coupled's pressure-based solver~\cite{cmp-HelyxCoupled} belong
+here. A \emph{density-based} solver was born for compressible, high-speed
+flow: it solves the conservation laws of mass, momentum and energy as one
+vector of equations. At low speed the sound waves are much faster than the
+flow and such a solver would crawl, so it uses \emph{low-Mach
+preconditioning}, which rescales the pseudo-time behaviour so that sound
+and flow travel at comparable speeds~\cite{cmp-WeissSmith1995,Weiss1999}.
+Siemens describes the STAR-CCM+ Coupled Flow solver as a density-based
+solver with Weiss--Smith preconditioning, used also for constant-density
+flow~\cite{cmp-StarCoupledDoc,cmp-StarCoupledGPU2023}.
+
+\begin{intuition}{two ways to the same valley}
+  Pressure-based and density-based solvers solve the same physics and,
+  when converged on the same mesh with equivalent schemes, should give
+  practically the same answer. They differ in the route: how the
+  equations are written for the iteration, and what keeps pressure and
+  velocity from decoupling. For a steady incompressible car simulation
+  both routes are established industrial practice.
+\end{intuition}
+
+\paragraph{Pseudo-transient versus relaxed.} A steady answer can be
+approached in two ways. \emph{Under-relaxation} (SIMPLE) accepts only a
+fixed fraction of each change. \emph{Pseudo-transient continuation}
+marches in a fake time towards the steady state, with a time step set by a
+Courant (CFL) number (Section~\ref{sec:ptc}). Mathematically, a pseudo-time
+term acts like an \emph{implicit} relaxation whose strength adapts to the
+local flow; Fluent's documentation calls its pseudo-time method ``a form of
+implicit under-relaxation''~\cite{cmp-FluentPseudoTime}. All coupled
+solvers here use some form of pseudo-time; several add an explicit
+relaxation on top.
+
+\paragraph{Algebraic multigrid (AMG) and its smoother.} All the solvers
+solve their large linear systems with algebraic multigrid
+(Section~\ref{sec:amg}). For a coupled solver the AMG must handle small
+blocks per cell instead of single numbers (``block'' or ``coupled'' AMG),
+and the \emph{smoother} (the cheap local iteration on each level) matters a
+lot: Fluent's documentation recommends Gauss--Seidel for scalar,
+segregated systems and ILU for block-coupled systems~\cite{cmp-Fluent12UG},
+which is the same lesson coupledFoam learnt the hard way
+(Section~\ref{sec:smoothers}).
+
+% -----------------------------------------------------------------------------
+\subsection{The solvers in one paragraph each}\label{sec:cmp-who}
+
+\begin{description}
+\item[coupledFoam] (this project). Steady, incompressible RANS; pressure-based,
+  fully implicit $u$--$v$--$w$--$p$ coupling with a $4\times4$ block per
+  cell, solved in increment form with pseudo-transient continuation, a
+  physicality line search, remediation sets and rollback; FGMRES with its
+  own block AMG in mixed precision. An add-on to a stock OpenFOAM v2606,
+  GPL-licensed, and young: its open problems are listed openly in the
+  project files and in Section~\ref{sec:limits}.
+\item[Simcenter STAR-CCM+, Coupled Flow.] Density-based coupled solver with
+  Weiss--Smith preconditioned Roe flux, implicit pseudo-time marching
+  controlled by a Courant number, AMG linear solver; since version 2020.1
+  an automatic CFL control is the default for steady runs, optionally with
+  a line search on the explicit relaxation~\cite{cmp-StarCoupledDoc,
+  cmp-StarAutoCFL2020,cmp-StarEffortless2020}. Siemens names vehicle
+  external aerodynamics as a typical application and has shipped a
+  GPU-native version since release 2306~\cite{cmp-StarCoupledGPU2023}.
+\item[Simcenter STAR-CCM+, Segregated Flow.] The SIMPLE-type alternative
+  in the same product, with SIMPLEC available since release 2302, where
+  the pressure under-relaxation is 1 and, according to Siemens, the
+  velocity under-relaxation can often be raised to 1
+  too~\cite{cmp-StarSIMPLEC2023}. It is the common choice for
+  incompressible external aerodynamics in STAR-CCM+ (typical practice; the
+  vendor does not publish a ``recommended for F1'' statement).
+\item[Ansys Fluent, pressure-based coupled.] Solves momentum and the
+  pressure-based continuity equation together, with implicit pressure
+  gradient and implicit face mass flux including the Rhie--Chow pressure
+  dissipation, in $\delta$-form, with a coupled AMG~\cite{cmp-Fluent12TG,
+  cmp-ChenPrzekwas2010}. Steady runs are controlled by a ``flow Courant
+  number'' (default 200) and explicit relaxation factors for momentum and
+  pressure (default 0.75)~\cite{cmp-Fluent12UG}; a separate pseudo-time
+  method with automatic global time step is available, and a local
+  pseudo-time-step method for this solver appears in recent (beta)
+  documentation~\cite{cmp-FluentPseudoTime,cmp-FluentLocalPseudo}. Fluent
+  also has a density-based coupled solver, mainly for compressible flow.
+\item[ENGYS HELYX-Coupled.] An add-on to the OpenFOAM-derived HELYX
+  product: a fully implicit, pressure-based, block-coupled solver for
+  incompressible and compressible flow (plus a density-based one),
+  local time stepping with a per-cell CFL target, and an optional
+  end-to-end single-precision (FP32) mode~\cite{cmp-HelyxCoupled,
+  cmp-HelyxTechniques}. ENGYS states that seven of ten F1 teams use HELYX
+  and all of them use HELYX-Coupled~\cite{cmp-HelyxCoupled} (vendor claim).
+  Linear solver and discretisation internals are not public.
+\item[foam-extend \code{pUCoupledFoam}.] The open-source academic
+  predecessor closest to coupledFoam: a steady incompressible
+  $4\times4$ $\Uv$--$p$ block solver in foam-extend with Rhie--Chow
+  interpolation, implicit velocity relaxation (e.g.\ 0.85--0.995, none on
+  pressure) and segregated turbulence~\cite{cmp-Jareteg2014,cmp-Jareteg2015};
+  its block-selective AMG (classical AMG on a ``primary'' matrix, best with
+  the pressure equation) and its parallel version are by Uroi\'c and
+  Jasak~\cite{Uroic2018,Uroic2021}. The OpenFOAM coupled solver of Mangani,
+  Buchmayr and Darwish~\cite{Mangani2014a,Mangani2014b} is the other
+  well-documented line of work.
+\item[OpenFOAM \code{simpleFoam}.] The segregated SIMPLE/SIMPLEC baseline
+  you use today~\cite{Patankar1972,VanDoormaal1984,OpenFOAMv2606}, and the
+  reference every coupledFoam test is measured against.
+\end{description}
+
+% -----------------------------------------------------------------------------
+\subsection{The big table}\label{sec:cmp-table}
+
+Table~\ref{tab:cmp} compares the five solvers aspect by aspect.
+\cmpnpd{} means ``not publicly documented''. A number without a citation in
+the coupledFoam column is a coupledFoam default and can be found in the
+sections of this document that are referenced in the text below. After the
+table, every group of rows is explained in plain words.
+
+{\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\setlength{\LTcapwidth}{\linewidth}
+\renewcommand{\arraystretch}{1.15}
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.125\linewidth}
+                  >{\raggedright\arraybackslash}p{0.165\linewidth}
+                  >{\raggedright\arraybackslash}p{0.165\linewidth}
+                  >{\raggedright\arraybackslash}p{0.165\linewidth}
+                  >{\raggedright\arraybackslash}p{0.155\linewidth}
+                  >{\raggedright\arraybackslash}p{0.155\linewidth}}
+\caption{coupledFoam next to industrial and open-source solvers for steady
+incompressible RANS. \cmpnpd: not publicly documented. Sources: STAR-CCM+
+\cite{cmp-StarCoupledDoc,cmp-StarAutoCFL2020,cmp-StarEffortless2020,
+cmp-StarCoupledGPU2023,cmp-VolupeCoupled}; Fluent
+\cite{cmp-Fluent12UG,cmp-Fluent12TG,cmp-FluentPseudoTime,
+cmp-ChenPrzekwas2010}; HELYX \cite{cmp-HelyxCoupled,cmp-HelyxTechniques};
+simpleFoam \cite{OpenFOAMv2606}; coupledFoam: this document.}
+\label{tab:cmp}\\
+\toprule
+aspect & coupledFoam & STAR-CCM+ Coupled Flow & Fluent pressure-based coupled
+  & HELYX-Coupled (pressure-based) & OpenFOAM simpleFoam\\
+\midrule
+\endfirsthead
+\multicolumn{6}{l}{\small\textit{Table~\ref{tab:cmp}, continued}}\\
+\toprule
+aspect & coupledFoam & STAR-CCM+ Coupled Flow & Fluent pressure-based coupled
+  & HELYX-Coupled (pressure-based) & OpenFOAM simpleFoam\\
+\midrule
+\endhead
+\midrule
+\multicolumn{6}{r}{\small\textit{continued on the next page}}\\
+\endfoot
+\bottomrule
+\endlastfoot
+%
+\cmphead{A. What is solved together}
+coupling family
+  & pressure-based, fully implicit
+  & density-based with low-Mach (Weiss--Smith) preconditioning, also for
+    constant density
+  & pressure-based, fully implicit
+  & pressure-based, fully implicit (a density-based variant also exists)
+  & pressure-based, segregated (SIMPLE / SIMPLEC)\\
+unknowns in one system
+  & $u,v,w,p$: one $4\times4$ block per cell
+  & continuity, momentum, energy (and species) as one vector
+  & momentum + pressure-based continuity
+  & momentum + pressure (``block-coupled'')
+  & none: $U$ components, then $p$, one after the other\\
+form of the unknown
+  & increment $\delta\vect x$ with residual in double
+  & pseudo-time increment \cmpnpd{} in detail
+  & $\delta$-form (documented)
+  & \cmpnpd
+  & the new values (with relaxation)\\
+pressure--velocity link on the faces
+  & Rhie--Chow, implicit $p$--$p$ block; fluxes recomputed with the same
+    formula; tensorial variant being added
+  & preconditioned Roe flux-difference dissipation (not Rhie--Chow)
+  & Rhie--Chow type, implicit in the face mass flux
+  & \cmpnpd{} (Rhie--Chow type expected for a pressure-based FV code)
+  & Rhie--Chow type momentum interpolation (\code{rAU}, \code{consistent}
+    for SIMPLEC)\\
+%
+\cmphead{B. The steady iteration}
+path to steady state
+  & pseudo-transient continuation, local time step per cell
+  & implicit pseudo-time, Courant number; automatic CFL default for
+    steady since 2020.1
+  & ``flow Courant number'' (default 200); optional pseudo-time method
+    (automatic global step, local step in beta)
+  & local time stepping with a per-cell CFL target
+  & relaxation only (no pseudo-time)\\
+CFL / step control
+  & adaptive CFL 1--500 (start 5), grows with residual drop, cut by the
+    safety checks; per-cell limiter
+  & automatic (algorithm \cmpnpd); expert driver as older alternative
+  & fixed user value, or automatic pseudo time step (length/velocity
+    scales, factor)
+  & automatic per cell (algorithm \cmpnpd)
+  & n/a\\
+explicit relaxation / line search
+  & none on $\Uv,p$; physicality line search $\omega\le1$
+    (30\,\% of $U_\text{ref}$)
+  & explicit relaxation, constant or adapted by line search
+  & explicit relaxation 0.75 default (0.5 for high order, 0.25 for very
+    skewed meshes suggested)
+  & \cmpnpd
+  & typical $p$ 0.3 / $U$ 0.7 (SIMPLE); up to 1 / 0.9 (SIMPLEC)\\
+start-up help
+  & \code{potentialFoam} start, first-order start-up phase
+  & grid-sequencing initialisation
+  & hybrid / FMG initialisation (Fluent option; details \cmpnpd)
+  & \cmpnpd
+  & \code{potentialFoam}, user tricks (upwind first)\\
+%
+\cmphead{C. The linear solver}
+Krylov method
+  & FGMRES(30), BiCGStab option
+  & \cmpnpd{} (AMG as solver; Krylov acceleration option \cmpnpd)
+  & AMG as solver (Krylov acceleration \cmpnpd{} for default)
+  & \cmpnpd
+  & PCG/PBiCGStab or GAMG as solver, per equation\\
+inner tolerance
+  & adaptive (Eisenstat--Walker, 0.5 to $10^{-3}$)
+  & user convergence tolerance per AMG solve (default \cmpnpd)
+  & user termination criterion per AMG solve
+  & \cmpnpd
+  & fixed \code{relTol}/\code{tolerance} per equation\\
+AMG type
+  & own block additive-correction AMG, $4\times4$ blocks, pair
+    agglomeration on matrix weights
+  & AMG (details \cmpnpd)
+  & coupled AMG, additive correction (Hutchinson--Raithby), Galerkin
+    coarse operator, groups of 2--4 strongest neighbours
+  & \cmpnpd
+  & scalar GAMG (face-area pair agglomeration) for $p$\\
+cycle and smoother
+  & V cycle (F, W, K available); damped block ILU(0), relaxation 0.5
+  & Gauss--Seidel relaxation documented for AMG in general; coupled
+    details \cmpnpd
+  & F cycle default for the coupled flow system; ILU smoother default for
+    coupled systems (Gauss--Seidel for scalar)
+  & \cmpnpd
+  & GAMG V-type cycle with Gauss--Seidel or DIC smoother (user choice)\\
+precision
+  & matrix and Krylov vectors in float; residual, sums, fields in double
+  & mixed- and double-precision builds; what runs in single \cmpnpd
+  & single- and double-precision modes
+  & FP32 end-to-end option, vendor claims about 40\,\% shorter runtimes
+  & double (the SPDP build stores fields in float)\\
+%
+\cmphead{D. Turbulence and robustness}
+turbulence
+  & segregated: native OpenFOAM model once per outer iteration
+  & separate turbulence solvers with own relaxation (typical; coupling
+    \cmpnpd)
+  & segregated, after the coupled solve (documented)
+  & segregated \cmpnpd{} (typical)
+  & segregated, relaxed\\
+bad cells
+  & static set (mesh quality) and dynamic set (behaviour): local upwind,
+    smaller local time step, clipping
+  & limiters and automatic CFL; per-cell treatment \cmpnpd
+  & lower explicit relaxation for skewed meshes; per-cell treatment
+    \cmpnpd
+  & vendor: ``more permissive with poor quality grids'' than segregated
+  & limited / bounded schemes, non-orthogonal limiter, global relaxation\\
+failure handling
+  & sentinel check, rollback to the last good state, CFL cut, abort
+    with \code{\_lastValid} fields
+  & \cmpnpd{} (line search on explicit relaxation)
+  & \cmpnpd
+  & \cmpnpd
+  & none (a diverged run is simply lost)\\
+oscillation damping
+  & optional Anderson acceleration; selective frequency damping being
+    added (off by default)
+  & \cmpnpd
+  & \cmpnpd
+  & \cmpnpd
+  & none\\
+convergence monitoring
+  & one \code{CF|} log line per iteration, JSON diagnostics (levels 0--3),
+    force-window mean and RMS, stationary-mean stop rule
+  & residual and report monitors, stopping criteria (GUI)
+  & residual and report monitors, convergence conditions (GUI)
+  & residuals, function objects \cmpnpd{} in detail
+  & initial residuals, function objects (\code{forceCoeffs},
+    \code{solverInfo})\\
+%
+\cmphead{E. Physics and features}
+MRF / rotating wheels
+  & MRF, rotation term implicit in the $3\times3$ block
+  & supported; implicitness \cmpnpd
+  & supported; implicitness \cmpnpd
+  & MRF and ``generalised reference frames'' supported
+  & MRF, rotation term explicit source\\
+sliding and AMI interfaces
+  & \code{cyclic}, \code{cyclicAMI} coupled explicitly (lagged)
+  & supported \cmpnpd{} in detail
+  & supported \cmpnpd{} in detail
+  & supported \cmpnpd{} in detail
+  & \code{cyclicAMI} implicit inside the linear solver\\
+parallel
+  & MPI; processor interfaces implicit; coarse-level gathering; tested up
+    to 10 ranks so far
+  & proven on thousands of cores; GPU-native since 2306
+  & proven on thousands of cores
+  & vendor: 250\,M cells on about 1000 cores in about 30 minutes
+  & proven on thousands of cores\\
+transient
+  & no (steady only)
+  & yes (dual time stepping)
+  & yes (coupled or PISO)
+  & yes (RANS, URANS, DES, LES)
+  & no; \code{pimpleFoam} is the transient sibling\\
+compressible
+  & no
+  & yes, all speeds
+  & yes (pressure-based and density-based)
+  & yes, up to about Mach 1.5 (pressure-based)
+  & no; \code{rhoSimpleFoam} is the sibling\\
+%
+\cmphead{F. Practicalities}
+typical speed
+  & measured here against simpleFoam: faster on T0, T1, T2, T4a; T3 not
+    converged (Section~\ref{sec:speedtests})
+  & vendor: automatic CFL 2.4$\times$ faster than before on a vehicle case
+  & documented: convergence ``significantly improves'' vs segregated;
+    memory 1.5--2$\times$
+  & vendor: 2--10$\times$ faster than segregated
+  & baseline\\
+maturity and validation
+  & days to weeks old; own test suite T0--T5; open problems listed
+  & decades of industrial use and validation
+  & decades of industrial use and validation
+  & industrial use; vendor names most F1 teams as users
+  & very mature, huge user base\\
+cost and licence
+  & free, GPL-3.0
+  & commercial licence
+  & commercial licence
+  & commercial add-on to an OpenFOAM-derived product
+  & free, GPL-3.0\\
+transparency
+  & full source and every design decision (\code{DECISIONS.md})
+  & closed; user guide and theory guide
+  & closed; user guide and theory guide
+  & closed for the coupled internals
+  & full source\\
+\end{longtable}
+}
+
+% -----------------------------------------------------------------------------
+\subsection{Group by group: what we do the same, what differently, and why}
+\label{sec:cmp-why}
+
+\subsubsection*{A1. Coupling family: pressure-based, like Fluent and HELYX}
+
+\paragraph{Why we do it this way.} For incompressible flow the density is
+constant, so the density-based route needs an artificial device (low-Mach
+preconditioning or artificial compressibility~\cite{cmp-WeissSmith1995,
+cmp-Economon2020}) to make pressure appear in the time-marching. The
+pressure-based coupled formulation works with the incompressible equations
+directly; it fits OpenFOAM, whose whole incompressible toolbox (boundary
+conditions, turbulence models, MRF, function objects) is written in terms
+of $\Uv$, $p$ and the face flux $\phi$. coupledFoam can therefore reuse all
+of it unchanged. This is also the choice of Fluent's pressure-based coupled
+solver, of HELYX-Coupled and of the academic OpenFOAM coupled solvers
+\cite{Darwish2009,Mangani2014a,cmp-Jareteg2014}.
+
+\paragraph{Better or worse, and when.} For steady incompressible car
+aerodynamics neither family has a built-in accuracy advantage; the
+converged answers depend on the mesh, the schemes and the turbulence model,
+not on the solution route. A density-based solver handles compressible
+flow naturally, which coupledFoam cannot do at all; for an F1 car at
+racing speed (Mach well below 0.3) that does not matter. One practical
+difference: STAR-CCM+'s coupled solver stabilises pressure through the
+preconditioned Roe dissipation, coupledFoam through the Rhie--Chow term. Both
+add a small, mesh-dependent smoothing of the pressure; with the same mesh,
+differences should be small but not exactly zero. Compare forces, not
+residuals, if you ever run the same case in both.
+
+\subsubsection*{A2. Pressure--velocity link: Rhie--Chow, like Fluent and
+simpleFoam}
+
+\paragraph{Why we do it this way.} Rhie--Chow~\cite{RhieChow1983} is the
+standard for cell-centred pressure-based codes. Fluent documents it
+explicitly (``Rhie--Chow pressure dissipation'', implicit in the face mass
+flux~\cite{cmp-Fluent12TG}), and simpleFoam's momentum interpolation is the
+segregated form of the same idea. coupledFoam puts the direct pressure
+difference implicitly into the matrix (Section~\ref{sec:rc}) and uses
+\emph{exactly} the same face formula to compute the fluxes after the solve,
+so the mass imbalance you see is the continuity residual itself.
+
+\paragraph{Better or worse, and when.} Same idea as the commercial
+pressure-based solvers; no advantage either way is expected. A known
+weakness of the plain (scalar) Rhie--Chow coefficient is that it ignores
+the directional structure of the momentum matrix, which matters in rotating
+MRF zones and in stretched boundary-layer cells. A tensorial coefficient
+(amendment C2 of the specification) is being added for exactly that reason.
+Whether the commercial codes use a scalar or a tensorial coefficient is
+\cmpnpd.
+
+\subsubsection*{B1. The steady iteration: pseudo-time instead of
+relaxation factors}
+
+\paragraph{What is the same.} Every coupled solver in the table marches in
+pseudo-time with a Courant number: STAR-CCM+ (automatic CFL since
+2020.1)~\cite{cmp-StarEffortless2020}, Fluent (flow Courant number, optional
+automatic pseudo-time step)~\cite{cmp-Fluent12UG,cmp-FluentPseudoTime},
+HELYX-Coupled (local time step per cell aiming at an optimal
+CFL)~\cite{cmp-HelyxTechniques}. coupledFoam does the same with a local time
+step per cell and an adaptive global CFL (Section~\ref{sec:ptc}). The idea
+that the CFL should grow as the residual falls is standard in the
+literature~\cite{MulderVanLeer1985,Kelley1998,Ceze2013AIAA}.
+
+\paragraph{What is different.} Fluent and STAR-CCM+ \emph{also} apply an
+explicit relaxation to the coupled update (Fluent: 0.75 by default,
+recommended lower for high-order schemes and skewed
+meshes~\cite{cmp-Fluent12UG}; STAR-CCM+: constant or adapted by a line
+search~\cite{cmp-StarAutoCFL2020}). coupledFoam has no fixed explicit
+relaxation. It uses a \emph{physicality} line search instead: the full step
+is taken unless some cell would change by more than a fixed fraction of the
+reference velocity or pressure, and only then is the step shortened
+(Section~\ref{sec:ls}). A decision record (D-051) explains why a stacked
+relaxation was not adopted: the pseudo-time step already plays that role,
+and the increment form is needed for the line search, the adaptive inner
+tolerance and the rollback.
+
+\paragraph{Why.} A fixed relaxation factor is a global brake: it slows
+every cell because a few might misbehave. The line search brakes only when
+a step is actually dangerous, and the remediation sets
+(Section~\ref{sec:remediation}) brake only the cells that cause it. STAR-CCM+'s
+2020 move to an automatic CFL with a line search on the relaxation
+factor~\cite{cmp-StarAutoCFL2020} goes in the same direction: less hand
+tuning, more automatic step control.
+
+\paragraph{Better or worse, and when.} On clean meshes and well-behaved
+flows the automatic step control should give fewer outer iterations than a
+conservative fixed setting, with no tuning by you. Where the flow has a
+physical tendency to oscillate (bluff-body wakes, massive separation), a
+very large pseudo-time step removes the damping that a relaxed solver has,
+and the iteration can fall into a \emph{limit cycle}. coupledFoam shows
+exactly this on the separated airfoil T3 with $k$-$\omega$ SST, where
+\code{simpleFoam} reaches a steady answer and coupledFoam does not
+(Section~\ref{sec:limits}). The commercial solvers' answer to such cases is
+typically a lower CFL or a lower relaxation set by the user; how their
+automatic controllers behave in this situation is \cmpnpd. coupledFoam's
+answer is being built: selective frequency damping~\cite{cmp-Akervik2006}
+(damps the oscillation and vanishes at the steady state) as an option.
+
+\begin{whyitmatters}{the ``Courant number'' is not the same number everywhere}
+  A Fluent flow Courant number of 200, a STAR-CCM+ CFL of 100\,000 in a
+  vendor example~\cite{cmp-StarAutoCFL2020} and a coupledFoam CFL of 500
+  are not comparable. Each code defines its time step differently (global
+  or local, convective or with viscous limits, density-based acoustic
+  speed or flow speed), and each adds its own relaxation on top. Compare
+  how the \emph{residual and the forces} behave, not the CFL values.
+\end{whyitmatters}
+
+\subsubsection*{C1. The linear solver: FGMRES and block AMG}
+
+\paragraph{What is the same.} Everyone uses algebraic multigrid on the
+coupled system, and the additive-correction type that coupledFoam uses
+(coarse equations are sums of fine equations,
+Section~\ref{sec:amg}) is the one Fluent documents for its coupled
+AMG~\cite{cmp-Fluent12TG,Hutchinson1986,Weiss1999}. Like Fluent, coupledFoam
+keeps the four equations of a cell together when it builds coarse levels,
+groups cells with their strongest neighbours (coupledFoam: pair
+agglomeration on matrix-based weights, D-039), and smooths with an ILU-type
+method: Fluent's documentation names ILU as the default smoother for
+coupled systems because it ``has better smoothing properties, especially
+for block-coupled systems''~\cite{cmp-Fluent12TG,cmp-Fluent12UG}. The
+coupledFoam project reached the same conclusion by measurement: block
+Gauss--Seidel failed, block ILU(0) worked (Section~\ref{sec:smoothers}).
+
+\paragraph{What is different.}
+\begin{itemize}
+\item coupledFoam wraps the AMG in a Krylov method (FGMRES with restart 30)
+  and chooses the inner tolerance adaptively
+  (Eisenstat--Walker~\cite{EisenstatWalker1996},
+  Section~\ref{sec:ew}). Fluent and STAR-CCM+ let you set a fixed AMG
+  termination criterion; whether a Krylov accelerator runs by default in
+  their coupled solvers is \cmpnpd.
+\item coupledFoam's default cycle is V with a \emph{damped} ILU(0)
+  smoother (factor 0.5, D-043). Fluent's default for the coupled flow
+  system is the F cycle~\cite{cmp-Fluent12UG}. The V cycle was chosen by a
+  measured grid of variants on systems dumped from T1--T4 (D-043); the
+  damping was needed because the undamped ILU(0) overshoots on the rows of
+  the coupled system that are far from diagonally dominant.
+\item The foam-extend line of work uses a different AMG family, a
+  \emph{selective} (classical) AMG that coarsens on a scalar ``primary''
+  matrix, best taken from the pressure equation~\cite{Uroic2018,Uroic2021}.
+  coupledFoam lists it as a Phase-2 preconditioner.
+\end{itemize}
+
+\paragraph{Better or worse, and when.} The commercial AMG
+implementations have been tuned for decades on millions of customer cases;
+coupledFoam's block AMG has been tuned on a handful of test meshes. On the
+graded, high-aspect-ratio meshes of T1--T4 its settings had to be
+re-tuned several times (D-038, D-039, D-043), and on the finer snappy mesh
+T4b the solve still degrades at moderate CFL (Section~\ref{sec:limits}).
+Expect the linear solver to be the component where a commercial code is
+most clearly ahead in robustness today. Where coupledFoam can be ahead is
+cost per linear iteration: hand-written, bandwidth-bound block kernels in
+single precision (next item).
+
+\subsubsection*{C2. Precision: float matrix, double residual}
+
+\paragraph{What is the same.} Single precision is industrial practice:
+Fluent and STAR-CCM+ both ship single-/mixed-precision and double-precision
+executables, and HELYX-Coupled offers an end-to-end FP32 mode that ENGYS
+says gives ``around 40\,\% shorter runtimes''~\cite{cmp-HelyxTechniques}.
+The reason is the same in all codes: sparse linear algebra waits for
+memory, and float halves the data (Section~\ref{sec:precision}).
+
+\paragraph{What is different.} coupledFoam's split is explicit and
+documented: the big matrix and the Krylov/multigrid vectors are float;
+every residual, sum, norm and reduction, and all fields, are double
+(D-001, D-012). Because the solver works in increment form, the final
+accuracy is set by the double residual, not by the float solve (classical
+mixed-precision iterative refinement~\cite{Baboulin2009,Carson2018}). Which
+parts of the commercial codes' single-precision modes are single is
+\cmpnpd.
+
+\paragraph{Better or worse, and when.} Pure single precision can stall the
+residual at a level set by round-off, which matters when you want deep
+convergence or small force differences between two design variants. The
+double-residual design avoids that floor at little cost. Against a
+commercial double-precision run, coupledFoam should need less memory
+bandwidth per linear iteration; against a commercial single-precision run,
+it should reach deeper residuals. Neither statement has been measured
+against a commercial code in this project.
+
+\subsubsection*{D1. Turbulence: segregated everywhere}
+
+\paragraph{What is the same.} All solvers in the table solve the
+turbulence equations \emph{after} the coupled flow update, with their own
+relaxation. For Fluent this is documented: the remaining equations are
+solved ``in a decoupled fashion as in the segregated
+algorithm''~\cite{cmp-Fluent12TG}; the same holds for its density-based
+solver. For STAR-CCM+ the turbulence solvers appear as separate solver
+objects with their own relaxation (typical practice; the detailed coupling
+is \cmpnpd). foam-extend \code{pUCoupledFoam} calls
+\code{turbulence->correct()} after the block solve~\cite{cmp-Jareteg2015},
+exactly like coupledFoam, which uses the unmodified OpenFOAM models
+(Section~\ref{sec:turb}).
+
+\paragraph{Why.} Coupling $k$ and $\omega$ into the block would make it
+$6\times6$, more than double the matrix memory, and tie the solver to one
+turbulence model. Keeping them segregated lets any OpenFOAM RANS model run
+unchanged, including your SST settings.
+
+\paragraph{Better or worse, and when.} The price is a lag: the flow step
+sees the eddy viscosity of the previous iteration. On attached flows this
+costs little. On strongly separated flows the lag is one suspect for
+coupledFoam's T3 limit cycle (Section~\ref{sec:limits}); the commercial
+codes face the same structure and, in practice, the same advice (lower
+CFL or more turbulence relaxation on hard separated cases).
+
+\subsubsection*{D2. Robustness: local treatment and rollback}
+
+\paragraph{What is different.} This is where coupledFoam is most
+distinctive. It combines
+(i) a static set of bad-quality cells and a dynamic set of misbehaving
+cells, both treated locally with first-order convection and a smaller
+local time step (Section~\ref{sec:remediation}),
+(ii) a physicality line search (Section~\ref{sec:ls}), and
+(iii) a sentinel with rollback to the last good state, CFL cut, and, if
+all fails, a clean stop that writes the last valid fields and marks the
+offending cells (Section~\ref{sec:sentinel}). The commercial codes offer
+limiters, automatic CFL, lower relaxation and (STAR-CCM+) a continuity
+convergence accelerator~\cite{cmp-VolupeCoupled,cmp-Caraeni2013}; whether
+they roll back or treat single cells specially is \cmpnpd.
+
+\paragraph{Why.} Real \code{snappyHexMesh} meshes of a car always contain
+a few bad cells. A global brake (lower relaxation or CFL everywhere) would
+slow the whole run for the sake of a few hundred cells; local treatment
+keeps full speed elsewhere. The rollback turns ``the run blew up at
+3~a.m.'' into ``the run stepped back, slowed down, and continued'', or at
+worst into a stop with a field that shows you where the trouble started.
+
+\paragraph{Better or worse, and when.} The remediation sets are an
+accuracy trade: first-order convection in a marked cell is less accurate.
+The thresholds were therefore chosen with care (D-044: the dynamic set must
+not catch the physically correct suction peaks under a wing; D-047: the
+static set is kept near 1\,\% of the cells on snappy meshes). Check the set
+sizes in the log. A commercial code that simply runs the whole mesh with a
+lower relaxation may be less efficient but has no such local accuracy loss.
+
+\subsubsection*{D3. Convergence monitoring}
+
+\paragraph{What is different.} coupledFoam logs one line per outer
+iteration with every control quantity (CFL, line-search factor, cuts,
+residuals, inner tolerance, linear iterations, set sizes, rollbacks), and
+optionally JSON diagnostics down to single multigrid levels. With force
+coefficients it also reports the window mean and RMS, and it has an
+optional stop rule on a stationary mean. The commercial codes offer
+flexible residual and report monitors and stopping criteria in their GUI;
+they expose far less of the solver's internal state.
+
+\paragraph{Why it matters for you.} For wake-dominated cars the residuals
+of \emph{no} steady solver fall to machine zero, and the forces keep
+swinging slightly. The project therefore judges such cases by averaged
+forces over a window (D-042), which is also what careful commercial users
+do. The built-in window statistics save you a post-processing step.
+
+\subsubsection*{E1. Rotating wheels (MRF) and sliding interfaces}
+
+\paragraph{What is different.} coupledFoam puts the MRF rotation term into
+the $3\times3$ momentum part of the block, i.e.\ implicitly, whereas
+\code{simpleFoam} adds it as an explicit source (Section~\ref{sec:turb}).
+The implicit form is the natural one for a coupled solver
+\cite{Mangani2014b}; how Fluent and STAR-CCM+ treat it internally is
+\cmpnpd. On the other hand, coupledFoam couples \code{cyclic} and
+\code{cyclicAMI} patches \emph{explicitly} (lagged by one outer iteration),
+where \code{simpleFoam} couples AMI implicitly inside its linear solvers.
+
+\paragraph{Better or worse, and when.} Implicit MRF should help
+convergence around fast-spinning wheels; this is only checked by an
+informational test so far. Explicit AMI coupling slows convergence across
+such interfaces; for your current F1 setup (MRF wheels, no AMI) that does
+not apply. If you ever use rotating meshes with AMI in a steady run,
+\code{simpleFoam} or a commercial code is the safer choice until implicit
+AMI coupling (Phase~2) exists.
+
+\subsubsection*{E2. Scope: steady, incompressible, RANS only}
+
+\paragraph{The honest difference.} The commercial solvers and HELYX-Coupled
+cover transient, compressible, heat transfer, multiphase and scale-resolving
+(DES/LES) flows in the same solver family. coupledFoam does exactly one
+thing: steady incompressible RANS. For a transient or DES run you stay with
+\code{pimpleFoam} (or a commercial code). This narrow scope is deliberate:
+it keeps the code small enough to be understood, tested and changed in a
+short time.
+
+\subsubsection*{F1. Speed, maturity, cost and transparency}
+
+\paragraph{Speed: what has been measured.} Only against \code{simpleFoam},
+on the project's test cases, on a shared machine
+(Section~\ref{sec:speedtests}). Wall-clock speed-ups so far: about
+\cfnum{SpeedWallTZeroReOneZeroZero}$\times$ on the cavity at $Re=100$,
+\cfnum{SpeedWallTOne}$\times$ on T1, \cfnum{SpeedWallTTwo}$\times$ on T2
+(a lower bound, because \code{simpleFoam} did not converge there), and on the
+coarse motorbike T4a \cfnum{SpeedWallCfTFoura}\,s instead of
+\cfnum{SpeedWallSfTFoura}\,s (\cfnum{SpeedCpuhCfTFoura} instead of
+\cfnum{SpeedCpuhSfTFoura} CPU-hours). On T3 coupledFoam does not converge
+(limit cycle) and is slower. The finer T4b and the Ahmed body T5 are the
+cases closest to your car, and their results are the ones to watch.
+
+\paragraph{Speed: what the vendors say.} HELYX: 2--10$\times$ faster than
+segregated~\cite{cmp-HelyxCoupled}; STAR-CCM+: automatic CFL 2.4$\times$ faster
+than its own previous coupled settings on a vehicle case, and SIMPLEC up
+to about 40\,\% faster than SIMPLE in its segregated
+solver~\cite{cmp-StarEffortless2020,cmp-StarSIMPLEC2023}; Fluent: coupled
+convergence ``significantly improves'' over segregated at 1.5--2 times the
+memory~\cite{cmp-Fluent12TG}. These numbers cannot be compared with each
+other or with ours: different cases, baselines, hardware and stopping
+criteria. What they do show is that the industry consensus agrees with
+the premise of this project: for steady RANS, a well-built coupled solver
+beats a segregated one in wall-clock time, at a memory price.
+
+\paragraph{Maturity.} This is the biggest difference and it favours the
+commercial codes by far. STAR-CCM+ and Fluent have been validated for
+decades on industrial cases, including motorsport; HELYX-Coupled is used
+in F1 according to its vendor. coupledFoam is a research code with a test
+suite of six case families and a list of open problems (the T3 limit
+cycle, linear-solve degradation at moderate CFL on the fine snappy mesh,
+run-to-run differences on several ranks).
+
+\paragraph{Cost and transparency.} Here coupledFoam and \code{simpleFoam}
+win: no licence cost, the full source, and, for coupledFoam, a written
+record of every design decision with its evidence. When coupledFoam does
+something odd, you can find out why; with a closed code you depend on
+vendor support.
+
+\begin{pitfall}{do not mix solvers in one comparison}
+  If you compare an F1 variant run in coupledFoam with a baseline run in
+  another code (or even in \code{simpleFoam} with different schemes), part
+  of the difference comes from the solver's discretisation and
+  stabilisation terms, not from the geometry change. Run both variants
+  in the same solver with the same settings, and compare averaged forces.
+\end{pitfall}
+
+% -----------------------------------------------------------------------------
+\subsection{Other solvers you may meet}\label{sec:cmp-others}
+
+\begin{description}
+\item[SU2] (open source) solves incompressible flow with a
+  density-based coupled approach (a generalised artificial compressibility
+  with preconditioning) on vertex-based unstructured
+  grids~\cite{cmp-Economon2020}. Mainly used in aerospace and for adjoint
+  design optimisation; not a common choice for race-car aerodynamics.
+\item[ICSFoam] (open source, OpenFOAM library) targets implicitly coupled,
+  mainly density-based simulation of high-speed flows~\cite{Oliani2023}.
+\item[The Mangani--Darwish coupled OpenFOAM solver] covers steady,
+  rotating-frame and transient (ALE) incompressible
+  flows~\cite{Mangani2014a,Mangani2014b,Mangani2017}; background in the
+  textbook of Moukalled, Mangani and Darwish~\cite{cmp-Moukalled2016}.
+\end{description}
+Cadence (Numeca) Omnis, Code\_Saturne and others are not compared here,
+because we could not collect solid public information on their coupled
+steady-state solvers within this work.
+
+% -----------------------------------------------------------------------------
+\begin{cmpf1box}{What this means for your F1 cases}
+\begin{itemize}
+\item \textbf{Same family as the tools the teams use.} coupledFoam is a
+  pressure-based, block-coupled, pseudo-transient solver, the same
+  design family as Fluent's pressure-based coupled solver (which also uses
+  a coupled AMG with an ILU smoother) and, as far as its public
+  description goes (pressure-based, block-coupled, local pseudo-time
+  step), HELYX-Coupled. You are not using an exotic method, but a young
+  implementation of a standard one.
+\item \textbf{What should be better than simpleFoam.} Fewer
+  outer iterations, no relaxation factors to tune, and so far shorter
+  wall-clock times on the test cases that converge (T0, T1, T2, T4a).
+  The averaged forces of T4a settle within far fewer iterations than
+  \code{simpleFoam} needs (D-042).
+\item \textbf{What is not yet as good as a commercial code.} Robustness of
+  the linear solver on large, stretched snappy meshes; strongly separated
+  flows can limit-cycle (T3); memory is higher than \code{simpleFoam}'s;
+  validation is limited to the project's test cases.
+\item \textbf{What you gain over a commercial code.} Your existing
+  OpenFOAM case, mesh, boundary conditions, SST model and function
+  objects run unchanged; the code is free and fully transparent; every
+  run tells you in the log what the solver is doing.
+\item \textbf{Practical advice.} Use coupledFoam on your steady MRF
+  half-car runs next to \code{simpleFoam}, judge by averaged forces over
+  a window, watch the CFL, the line-search factor and the remediation
+  set sizes in the \code{CF|} line (Section~\ref{sec:f1}), and keep
+  \code{simpleFoam} (or your commercial tool) as the reference until T4b
+  and T5 have passed.
+\end{itemize}
+\end{cmpf1box}
