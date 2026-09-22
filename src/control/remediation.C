@@ -31,6 +31,10 @@ Foam::remediation::remediation
     aspectThreshold_(coupledDefaults::aspectThreshold),
     staticBeta_(coupledDefaults::staticBeta),
     staticCflFactor_(coupledDefaults::staticCflFactor),
+    mildEnabled_(coupledDefaults::mildEnabled),
+    mildBeta_(coupledDefaults::mildBeta),
+    mildCflFactor_(coupledDefaults::mildCflFactor),
+    mildMask_(0),
     dynamicEnabled_(coupledDefaults::dynamicEnabled),
     cU_(coupledDefaults::cU),
     cp_(coupledDefaults::cp),
@@ -44,6 +48,7 @@ Foam::remediation::remediation
     warnFraction_(coupledDefaults::warnFraction),
     warnInterval_(coupledDefaults::warnInterval),
     isStatic_(mesh.nCells(), false),
+    isMild_(mesh.nCells(), false),
     age_(mesh.nCells(), -1),
     entries_(mesh.nCells(), 0),
     nSticky_(0),
@@ -51,6 +56,7 @@ Foam::remediation::remediation
     nRamping_(0),
     pending_(mesh.nCells(), false),
     nStatic_(0),
+    nMild_(0),
     nDynamic_(0),
     dynamicVersion_(0),
     zonalEnabled_(coupledDefaults::zonalEnabled),
@@ -73,6 +79,38 @@ Foam::remediation::remediation
     staticCflFactor_ = s.getOrDefault<scalar>("cflFactor", staticCflFactor_);
     criteria_ = staticCriteria::settings(s);                     // C1
     criteriaBits_.resize(mesh_.nCells(), 0);
+
+    // Mild tier (D-061)
+    const dictionary& m = r.subOrEmptyDict("mild");
+    mildEnabled_ = m.getOrDefault<bool>("enabled", mildEnabled_);
+    mildBeta_ = m.getOrDefault<scalar>("beta", mildBeta_);
+    mildCflFactor_ = m.getOrDefault<scalar>("cflFactor", mildCflFactor_);
+    // Negated comparisons also reject non-finite input
+    if (!(mildBeta_ >= 0 && mildBeta_ <= 1))
+    {
+        FatalIOErrorInFunction(m)
+            << "remediation.mild.beta must be in [0, 1], got " << mildBeta_
+            << exit(FatalIOError);
+    }
+    if (!(mildCflFactor_ > 0 && mildCflFactor_ <= 1))
+    {
+        FatalIOErrorInFunction(m)
+            << "remediation.mild.cflFactor must be in (0, 1], got "
+            << mildCflFactor_ << exit(FatalIOError);
+    }
+    mildMask_ =
+        (
+            m.getOrDefault<bool>("wallStarved", coupledDefaults::mildWallStarved)
+          ? label(staticCriteria::bitWallStarved) : label(0)
+        )
+      | (
+            m.getOrDefault<bool>("procAMI", coupledDefaults::mildProcAMI)
+          ? label(staticCriteria::bitProcAMI) : label(0)
+        )
+      | (
+            m.getOrDefault<bool>("volumeJump", coupledDefaults::mildVolumeJump)
+          ? label(staticCriteria::bitVolumeJump) : label(0)
+        );
 
     const dictionary& d = r.subOrEmptyDict("dynamic");
     dynamicEnabled_ = d.getOrDefault<bool>("enabled", dynamicEnabled_);
@@ -505,7 +543,9 @@ void Foam::remediation::applyDeferredZonal()
 void Foam::remediation::buildStatic()
 {
     isStatic_ = false;
+    isMild_ = false;
     nStatic_ = 0;
+    nMild_ = 0;
     criteriaBits_ = 0;
 
     if (!staticEnabled_)
@@ -589,8 +629,42 @@ void Foam::remediation::buildStatic()
     }
 
     // Amendment C1: topological criteria (staticCriteria.H), OR-ed
+    const boolList isQuality(isStatic_);        // 8.1 membership (D-061)
     const staticCriteria::counts nC1 =
         staticCriteria::apply(mesh_, criteria_, criteriaBits_, isStatic_);
+
+    // Mild tier (D-061): a cell that only a mild topological criterion
+    // marked is selected in advance, not observed to misbehave. It leaves
+    // the static set and gets the mild treatment (beta mild.beta, CFL
+    // mild.cflFactor, no forced gradient limiter, no non-orthogonal
+    // limiter). Quality cells and cells with a non-mild criterion keep the
+    // full treatment.
+    if (mildEnabled_ && mildMask_)
+    {
+        const label fullMask =
+            (
+                label(staticCriteria::bitWallStarved)
+              | label(staticCriteria::bitProcAMI)
+              | label(staticCriteria::bitVolumeJump)
+            ) & ~mildMask_;
+
+        forAll(isStatic_, celli)
+        {
+            const label bits = criteriaBits_[celli];
+            if
+            (
+                !isQuality[celli]
+             && (bits & mildMask_)
+             && !(bits & fullMask)
+            )
+            {
+                isStatic_[celli] = false;
+                isMild_[celli] = true;
+                ++nMild_;
+            }
+        }
+        reduce(nMild_, sumOp<label>());
+    }
 
     forAll(isStatic_, celli)
     {
@@ -609,7 +683,9 @@ void Foam::remediation::buildStatic()
         << " %); faces nonOrth>" << nonOrthThreshold_ << "deg: " << nOrtho
         << ", skew>" << skewThreshold_ << ": " << nSkew
         << ", volRatio>" << volRatioThreshold_ << ": " << nVol
-        << "; cells aspect>" << aspectThreshold_ << ": " << nAspect << endl;
+        << "; cells aspect>" << aspectThreshold_ << ": " << nAspect
+        << "; mild set " << nMild_ << " cells (beta " << mildBeta_
+        << ", cflFactor " << mildCflFactor_ << ")" << endl;
     staticCriteria::report
     (
         criteria_,
@@ -783,6 +859,10 @@ Foam::tmp<Foam::scalarField> Foam::remediation::beta
         {
             b[celli] = min(b[celli], staticBeta_);
         }
+        else if (isMild_[celli])
+        {
+            b[celli] = min(b[celli], mildBeta_);          // D-061
+        }
         if (age_[celli] >= 0)
         {
             b[celli] = 0;
@@ -814,6 +894,10 @@ Foam::tmp<Foam::scalarField> Foam::remediation::cflFactor() const
         if (isStatic_[celli])
         {
             f[celli] = min(f[celli], staticCflFactor_);
+        }
+        else if (isMild_[celli])
+        {
+            f[celli] = min(f[celli], mildCflFactor_);     // D-061
         }
         if (age_[celli] >= 0)
         {
@@ -918,20 +1002,24 @@ void Foam::remediation::write(const word& instance) const
         calculatedFvPatchScalarField::typeName
     );
 
-    labelHashSet stat, dyn;
+    labelHashSet stat, dyn, mild;
     forAll(flag, celli)
     {
         const bool s = isStatic_[celli];
         const bool d = age_[celli] >= 0;
-        // Bits OR-ed (C1): 1 static, 2 dynamic, 4/8/16 static criteria
+        const bool m = isMild_[celli];
+        // Bits OR-ed (C1): 1 static, 2 dynamic, 4/8/16 static criteria,
+        // 32 mild tier (D-061)
         flag[celli] = scalar
         (
             (s ? label(staticCriteria::bitStatic) : 0)
           | (d ? label(staticCriteria::bitDynamic) : 0)
+          | (m ? label(staticCriteria::bitMild) : 0)
           | criteriaBits_[celli]
         );
         if (s) stat.insert(celli);
         if (d) dyn.insert(celli);
+        if (m) mild.insert(celli);
     }
     // Written through the file handler: regIOobject::writeObject would
     // redirect a non-time instance (<n>_lastValid) to the current time
@@ -945,6 +1033,10 @@ void Foam::remediation::write(const word& instance) const
     cellSet cd(mesh_, "remediationDynamic", dyn);
     cd.instance() = instance;
     sentinel::writeInstance(cd);
+
+    cellSet cm(mesh_, "remediationMild", mild);          // D-061
+    cm.instance() = instance;
+    sentinel::writeInstance(cm);
 
     if (zonalEnabled_)
     {

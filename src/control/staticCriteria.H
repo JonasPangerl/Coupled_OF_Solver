@@ -68,7 +68,8 @@ enum flagBits : label
     bitDynamic = 2,
     bitWallStarved = 4,
     bitProcAMI = 8,
-    bitVolumeJump = 16
+    bitVolumeJump = 16,
+    bitMild = 32                 // mild tier (D-061), not in the static set
 };
 
 

@@ -383,13 +383,31 @@ constexpr label diagTopLimited = 20;
 // C1: topological static criteria, coupled.remediation.static. The
 // nonOrthThreshold default stays at 85 (D-047/D-051); 65 and 60 are
 // benchmark variants only.
-constexpr bool wallStarvedEnabled = true;        // coupledFoam switch
+constexpr bool wallStarvedEnabled = false;       // off by default (user,
+// D-061): on T4a the 12 wallStarved cells sit on the body surface, where
+// the forces are integrated; with the full static treatment they moved Cl
+// by -18 %. The criterion stays available (remediation.static.wallStarved
+// yes) and is then handled by the mild tier below.
 constexpr label maxWallInternalFaces = 2;
 constexpr bool procAMIEnabled = true;            // keyword procAMI
 constexpr bool volumeJumpEnabled = true;         // coupledFoam switch
 constexpr doubleScalar volJumpThreshold = 0.98;  // volume ratio > 50
 // C6: write-time diagnostic fields, coupled.diagnosticFields
 constexpr bool diagnosticFieldsEnabled = true;
+// Mild remediation tier (coupled.remediation.mild, D-061): a cell that is
+// selected in advance - by a topological criterion (wallStarved, procAMI)
+// or by zonal factors - is not a misbehaving cell. It gets a shorter local
+// step only: full convection scheme, no forced gradient limiter and no
+// non-orthogonal limiter. Cells that actually misbehave (the 8.1 quality
+// criteria and the dynamic set) keep the full treatment. Measured on T4a:
+// 12 wallStarved cells on the body under the full treatment move Cl by
+// -18 % (0.063 vs 0.077 simpleFoam); with the mild tier they do not.
+constexpr bool mildEnabled = true;
+constexpr doubleScalar mildBeta = 1;             // full convection scheme
+constexpr doubleScalar mildCflFactor = 0.5;      // half the local step
+constexpr bool mildWallStarved = true;           // criteria in the mild tier
+constexpr bool mildProcAMI = true;
+constexpr bool mildVolumeJump = false;           // a real quality defect
 // ---------------------------------------------------------------------------
 
 // Misc (spec 9.1, 10)

@@ -58,13 +58,28 @@ Description
     multiply. The multipliers apply on top of the static/dynamic rules
     (dynamic cells keep beta = 0). Unknown names are a FatalIOError.
 
+    Mild tier (8.1, D-061). A cell that only a mild topological criterion
+    marked (remediation.mild.criteria: wallStarved and procAMI by default,
+    volumeJump not) is selected in advance, not observed to misbehave. It
+    leaves the static set and gets the mild treatment instead: beta =
+    mild.beta (1 = full convection scheme), CFL factor mild.cflFactor, and
+    neither the forced gradient limiter nor the non-orthogonal limiter of
+    the static set (it is not passed to coupledAssembler::setStaticCells).
+    A cell that a quality criterion also marked keeps the full treatment,
+    and so does any cell in the dynamic set. Zonal factors (8.3) are mild
+    by construction: they are multipliers the user chooses.
+    \verbatim
+    mild { enabled yes; beta 1.0; cflFactor 0.5;
+           wallStarved yes; procAMI yes; volumeJump no; }
+    \endverbatim
+
     Amendment C1: topological static criteria wallStarved, procAMI and
     volumeJump (staticCriteria.H) join the static set; C5: built-in named
     sets _wallCells ... _remediationStatic in zonal.zones (zonalSets.H).
 
     Output: cellSets remediationStatic, remediationDynamic and the
     volScalarField remediationFlag (bits OR-ed: 1 static, 2 dynamic,
-    4 wallStarved, 8 procAMI, 16 volumeJump; C1);
+    4 wallStarved, 8 procAMI, 16 volumeJump; C1; 32 mild, D-061);
     with zonal factors enabled additionally the volScalarField
     zonalCflFactor.
 
@@ -108,6 +123,14 @@ class remediation
         //- Per-cell C1 bits (4 wallStarved, 8 procAMI, 16 volumeJump)
         labelList criteriaBits_;
 
+        // Mild tier (D-061)
+        bool mildEnabled_;
+        scalar mildBeta_;
+        scalar mildCflFactor_;
+
+        //- C1 bits whose cells get the mild treatment
+        label mildMask_;
+
         // Dynamic controls
         bool dynamicEnabled_;
         scalar cU_;
@@ -126,6 +149,9 @@ class remediation
 
             //- Static membership
             boolList isStatic_;
+
+            //- Mild membership (D-061); disjoint from isStatic_
+            boolList isMild_;
 
             //- Dynamic age per cell: -1 not in the set, else iterations
             //  since the cell was last marked
@@ -150,6 +176,7 @@ class remediation
 
             //- Global counts
             label nStatic_;
+            label nMild_;
             label nDynamic_;
 
             //- Incremented whenever the dynamic-set membership changes
@@ -258,6 +285,8 @@ public:
 
         const boolList& isStatic() const noexcept { return isStatic_; }
         label nStatic() const noexcept { return nStatic_; }
+        const boolList& isMild() const noexcept { return isMild_; }
+        label nMild() const noexcept { return nMild_; }
         label nDynamic() const noexcept { return nDynamic_; }
         label nSticky() const noexcept { return nSticky_; }
         label nRamping() const noexcept { return nRamping_; }
