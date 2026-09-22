@@ -35,6 +35,14 @@ skipped entirely (never read a case
 while a solver writes it). A missing coupledFoam panel is drawn as a grey
 "pending" panel, so the figure layout stays the same when the data arrive.
 
+Staleness guard (TASK 6, --commit SHA, --allow-stale): the coupledFoam
+directory is read only if its provenance.json (tests/cflib/provenance.py)
+names the target commit; otherwise its panels are drawn as pending, as
+with --reference-only. Every written PNG is recorded in
+<out>/render_provenance.json (coupledFoam run, its commit, whether
+coupledFoam data are in the image), which bench/make_report.py uses to
+drop stale renders when pvbatch is not run.
+
 Reproducibility: camera positions, slice planes and colour ranges are
 fixed below (VIEW, RANGES) and relative to the body bounding box; the same
 colour range is used for both solvers. Nothing depends on the data range.
@@ -62,6 +70,10 @@ vtkLogger.SetStderrVerbosity(vtkLogger.VERBOSITY_ERROR)
 
 REPO = Path(__file__).resolve().parents[1]
 RUN = REPO / "run"
+sys.path.insert(0, str(REPO / "tests"))
+from cflib import provenance  # noqa: E402
+
+RENDER_PROVENANCE = "render_provenance.json"
 
 CASES = {
     "T4a": dict(cf="T4a_np10", sf="ref_T4a_np10", title="T4a motorBike (354k cells)"),
@@ -457,26 +469,50 @@ def fig_delta(name, dl: Src, out: Path):
 # driver
 # --------------------------------------------------------------------------- #
 
+def run_commit(case: Path) -> str | None:
+    """Commit of a run from its provenance.json; "-dirty" if any start in
+    it was dirty or the starts span several commits."""
+    prov = provenance.read(case)
+    if not prov:
+        return None
+    starts = (prov.get("previous") or []) + [prov]
+    c = prov.get("gitCommit")
+    if (any(x.get("dirty") for x in starts)
+            or len({x.get("gitCommit") for x in starts}) > 1):
+        c = f"{c}-dirty"
+    return c
+
+
 def render_case(name: str, cfg: dict, out: Path, busy_minutes: float,
-                reference_only: bool = False) -> None:
+                reference_only: bool = False,
+                guard: "provenance.Guard | None" = None) -> dict:
+    """Renders one case; returns {"cfRun", "cfCommit", "cfUsed"} for the
+    render provenance."""
     sfd, cfd = RUN / cfg["sf"], RUN / cfg["cf"]
+    used = {"cfRun": cfg["cf"], "cfCommit": run_commit(cfd), "cfUsed": False}
+    if (not reference_only and guard is not None and cfd.is_dir()
+            and not guard.check_run(cfd)):
+        notes.append(f"{name}: run/{cfg['cf']} is not from commit "
+                     f"{guard.target[:7]} (found {used['cfCommit']}), "
+                     "coupledFoam panels pending")
+        reference_only = True
     if reference_only:
         # never touch the coupledFoam directory (e.g. while it runs): its
         # panels are drawn as pending
         cfd = RUN / f"__not_read__{cfg['cf']}"
     if not sfd.is_dir():
         notes.append(f"{name}: run/{cfg['sf']} missing, skipped")
-        return
+        return used
     if is_busy(sfd, busy_minutes) or (cfd.is_dir() and is_busy(cfd, busy_minutes)):
         # a live run (or its reference continuation) may start writing the
         # other directory at any moment: leave the whole case alone
         notes.append(f"{name}: run/{cfg['sf']} or run/{cfg['cf']} is being "
                      "written, case skipped (previous renders kept)")
-        return
+        return used
     t_sf = times_with(sfd, ("U", "p"))
     if not t_sf:
         notes.append(f"{name}: no simpleFoam result time, skipped")
-        return
+        return used
     body = body_patches(sfd)
     uinf = u_inf(sfd)
     sf = Src(sfd, t_sf[-1], ["U", "p"], body, uinf)
@@ -488,6 +524,7 @@ def render_case(name: str, cfg: dict, out: Path, busy_minutes: float,
     t_cf = times_with(cfd, ("U", "p")) if cf_ok else []
     if t_cf:
         cf = Src(cfd, t_cf[-1], ["U", "p"], body, uinf)
+        used["cfUsed"] = True
         print(f"{name}: coupledFoam t={t_cf[-1]:g}", flush=True)
     elif cf_ok:
         notes.append(f"{name}: no coupledFoam result yet, panels pending")
@@ -513,6 +550,7 @@ def render_case(name: str, cfg: dict, out: Path, busy_minutes: float,
     else:
         notes.append(f"{name}: delta fields (coupledFieldCompare) missing, "
                      "delta figure skipped")
+    return used
 
 
 def main(argv: list[str]) -> int:
@@ -523,18 +561,40 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--reference-only", action="store_true",
                     help="render only the simpleFoam reference; the "
                     "coupledFoam directory is not read (pending panels)")
+    ap.add_argument("--commit", default="HEAD",
+                    help="staleness guard: target commit (default HEAD)")
+    ap.add_argument("--allow-stale", action="store_true",
+                    help="read coupledFoam runs of any commit")
     a = ap.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
+    guard = None
+    if not a.allow_stale:
+        guard = provenance.Guard(provenance.git_resolve(a.commit) or a.commit)
+    pf = out / RENDER_PROVENANCE
+    try:
+        rprov = json.loads(pf.read_text()) if pf.exists() else {}
+    except json.JSONDecodeError:
+        rprov = {}
     for name in a.cases:
         if name not in CASES:
             notes.append(f"unknown case {name}")
             continue
+        t_case = time.time() - 1.0
         try:
-            render_case(name, CASES[name], out, a.busy_minutes,
-                        a.reference_only)
+            used = render_case(name, CASES[name], out, a.busy_minutes,
+                               a.reference_only, guard)
         except Exception as e:  # noqa: BLE001 - one broken case must not stop the others
             notes.append(f"{name}: render failed: {type(e).__name__}: {e}")
+            used = None
+        for png in out.glob(f"render_{name}_*.png"):
+            if png.stat().st_mtime >= t_case and used is not None:
+                rec = dict(used)
+                if png.name.endswith("_geometry.png"):
+                    rec["cfUsed"] = False
+                rec["date"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                rprov[png.name] = rec
+    pf.write_text(json.dumps(rprov, indent=1, sort_keys=True) + "\n")
     (out / "render_fields_notes.json").write_text(json.dumps(notes, indent=1))
     # pvbatch buffers python output in its own stream, which os._exit below
     # would drop: write the summary straight to the file descriptor

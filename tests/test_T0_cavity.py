@@ -12,7 +12,7 @@ import pytest
 
 from cflib import case as cfcase
 from cflib import env as cfenv
-from cflib import logs, post, results
+from cflib import logs, post, refcase, results
 
 MAX_ITERS = 300
 R_TARGET = 1e-8
@@ -89,12 +89,14 @@ def test_T0(foam, re, nprocs):
         "fpeTrap": fpe_trap, "fpeEnabled": "trapFpe" in text,
         "nClampedMax": n_clamped,
         "rollbacks": summ.get("rollbacks"),
-        "wallSeconds": summ.get("wallSeconds"),
+        "nPseudoInverse": summ.get("nPseudoInverse", 0),
+        # wall-clock AND CPU-hours of both solvers (solver loop only)
+        **refcase.coupled_timing(summ, timing),
         "timingAllrun": timing,
         "peakRSS_MB_sum": summ.get("peakRSS_MB_sum"),
         "reference": {"solver": "simpleFoam", "iterations": ref_log["iterations"],
                       "convergedAt": ref_log["convergedAt"],
-                      "wallSeconds": ref_log["wall"]},
+                      **refcase.native_timing(ref / "log.simpleFoam", 1)},
         "history": {k: [r.get(k) for r in rows]
                     for k in ("R", "CFL", "omega", "cuts", "linIters", "tIter",
                               "tWall", "eta", "rho")},
@@ -117,6 +119,7 @@ def test_T0(foam, re, nprocs):
         rc == 0 and it_conv is not None and it_conv <= MAX_ITERS
         and du < TOL_PROFILE and dv < TOL_PROFILE
         and not fpe_trap and n_clamped == 0
+        and rec["nPseudoInverse"] == 0
         and rec.get("crossRank_u", 0) < TOL_CROSS
         and rec.get("crossRank_v", 0) < TOL_CROSS
     )
@@ -126,6 +129,8 @@ def test_T0(foam, re, nprocs):
     assert rc == 0, "coupledFoam failed"
     assert not fpe_trap, "FPE trap"
     assert n_clamped == 0, "clamped coefficients"
+    assert rec["nPseudoInverse"] == 0, \
+        f"Rhie-Chow pseudo-inverse used {rec['nPseudoInverse']} times (C2)"
     assert it_conv is not None and it_conv <= MAX_ITERS, \
         f"R < {R_TARGET} not reached in {MAX_ITERS} iterations (final {rec['finalR']})"
     assert du < TOL_PROFILE and dv < TOL_PROFILE, (du, dv)

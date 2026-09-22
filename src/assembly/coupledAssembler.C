@@ -57,7 +57,7 @@ Foam::coupledAssembler::coupledAssembler
                 coupledDefaults::staticNonOrthLimiter
             )
     ),
-    rc_(mesh),
+    rc_(mesh, coupledDict),
     mrfPtr_(mrfPtr),
     sfdChi_(0),
     sfdUbarPtr_(nullptr),
@@ -512,7 +512,28 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
 
     // --- Rhie-Chow D, D_f, explicit face term q
     const doubleScalar tr0 = (timing_ ? diagnostics::clock() : 0);
-    rc_.updateD(abar_, p);
+    if (rc_.tensorial())
+    {
+        // C2: 3x3 momentum diagonal block after PTC (incl. MRF Coriolis,
+        // excl. the pressure column), double
+        tensorField Amom(nCells);
+        for (label celli = 0; celli < nCells; ++celli)
+        {
+            tensor& a = Amom[celli];
+            for (label r = 0; r < blockP; ++r)
+            {
+                for (label c = 0; c < blockP; ++c)
+                {
+                    a[r*blockP + c] = Dd_[di(celli, r, c)];
+                }
+            }
+        }
+        rc_.updateD(abar_, Amom, p);
+    }
+    else
+    {
+        rc_.updateD(abar_, p);
+    }
     rc_.updateExplicit(p, noc_);
     const doubleScalar tr1 = (timing_ ? diagnostics::clock() : 0);
 

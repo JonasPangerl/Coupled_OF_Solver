@@ -87,6 +87,11 @@ coupled
     startupUpwindIters  50;
     nonOrthLimiter      0.5;
 
+    rhieChow
+    {
+        tensorial       yes;    // D = V A^-1 (3x3), D_f = n.D_f.n (amendment C2, D-053); no: scalar V/abar
+    }
+
     ptc
     {
         cflStrategy     mRDM;

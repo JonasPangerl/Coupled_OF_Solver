@@ -1298,3 +1298,136 @@ The user considers 5000 simpleFoam iterations unrealistic for practice
 W = 1000. The budget is extended on the user's request if the reference
 does not become stationary. coupledFoam stays at 800. The T4a and T4b
 references keep their completed runs (3000 and 4000 iterations).
+
+## D-048 - Start-up control: hybrid beta ramp (user decision, 2026-09-22)
+
+Default startupMode hybrid:
+- Upwind (beta 0) first, then a linear ramp of beta from 0 to 1 over 20
+  iterations (startupRampLength). The ramp starts at iteration 10
+  (startupRampStart) at the latest, or earlier once R/R1 < startupSwitchR
+  (1e-2). Beta therefore reaches 1 by iteration 30 at the latest.
+- The delay while R still drops fast (startupRampStartMax > 10) and the
+  stagnation trigger (startupStagnationTrigger) are OFF by default: both
+  measured worse.
+- A developed or mapped start is detected when max(rU, rp) of
+  iteration 1 is below startupDevelopedTol 1e-2 with a non-uniform field;
+  beta is then 1 from iteration 1. This avoids first-order upwind on
+  mapped solutions, where the relative residual never drops (user
+  concern).
+- startupMode upwind reproduces the old behaviour bit-identically;
+  startupMode none sets beta 1 from iteration 1. Restart continues the
+  ramp state.
+
+Evidence on T1 serial (iterations to R < 1e-5):
+
+| variant | iterations | wall |
+|---|---|---|
+| old upwind jump at 50 | 290 | 26.0 s |
+| plain ramp 10 -> 30 | 348 | 36.2 s |
+| delayed ramp | 375 | 41.1 s |
+| stagnation-triggered ramp | fired at iteration 7, missed R < 1e-5 in 400 | - |
+
+T0 Re1000 np4 did not converge within 300 iterations with the ramp in
+one run; that count is chaotic (FABLE item 1). The final choice between
+the ramp and the upwind jump follows the T4a comparison (pending); the
+user keeps the ramp as the default meanwhile.
+
+## D-049 - Block ILU0 pivot-growth guard (T4b collapse root cause)
+
+Root cause of the T4b linear-solve collapse at outer iteration 65, proven
+by A/B on the exact failing system:
+- On a few pressure/continuity rows, mostly on GAMG level 1, the
+  ILU-modified 4x4 diagonal block loses its weight. Its inverse grows up
+  to 223x the inverse of the original block.
+- The damped smoother then amplifies the residual by 1e3-1e5 per call,
+  FGMRES stagnates, and CFL cuts cannot help because the pressure
+  couplings cause it.
+
+Guard: when the modified inverse exceeds pivotGrowthLimit (default 20)
+times the inverse of the original block, the cell falls back to the
+original block. The number of fallbacks is logged as nPivFb (CF| line)
+and pivotFallbacks (summary JSON).
+
+Why 20 and not 5: with 5, T2 replaced 7-10 % of its pivots (1.94 M
+fallbacks), needed 25 instead of 12 linear iterations per solve and 60
+CFL cuts instead of 1, and ran 3x longer. From 20 upward T2 is bitwise
+unchanged, and the degenerate T4b pivots (growth 31-223) are still
+caught.
+
+A/B on the failing T4b system: 7 FGMRES iterations with the guard
+instead of 3 x 400 failed. T4a with the guard: PASS.
+
+## D-050 - Uref from the non-coupled boundary values
+
+Uref (lineSearch::setReference) was max |U| over the field, including
+the potential-flow peak: 176.5 m/s on T4b and 85.9 on T4a, against
+20 m/s inflow. That effectively disabled the D-044 dynamic set on T4
+(nDyn was always 0) and loosened the line search, the local limit and
+the sentinel.
+
+Now: coupled.Uref boundary (default) = the maximum over the non-coupled
+boundary values; field = the old behaviour; or an explicit value.
+Result on T4a: Uref 20.17 m/s, and nDyn > 0 (2523 cells at iteration 1,
+then 250-330). T1 and T2 are bitwise unchanged.
+
+Also fixed: the abort fields now land in `<iter>_lastValid` through
+explicit writes. Before, v2606 redirected the write into the current
+time directory. Checked serial and np4.
+
+## D-053 - Tensorial Rhie-Chow diffusivity (amendment C2)
+
+coupled.rhieChow.tensorial (default yes):
+- D_P = V_P A_P^-1, computed in double from the 3x3 momentum diagonal
+  block after PTC, including MRF Coriolis.
+- Singular blocks (|det A| < 1e-12 |tr A/3|^3) fall back to a Jacobi-SVD
+  pseudo-inverse (singular values <= 1e-6 sigma_max are dropped). Their
+  count nPseudoInverse fails T0-T3 if it is above 0.
+- D_f = n . interp(D) . n enters g_f and q_f unchanged (D-035). The scalar
+  D = V/abar remains the row-scaling reference.
+- tensorial no reproduces the previous scalar path exactly.
+
+Measured on T0-T4a:
+- D is isotropic except in cells at slip/symmetry patches: 0-0.14 % of
+  the cells, anisotropy <= 1.4 %.
+- Accuracy is unchanged, and the cost is 1-2 % of wall time.
+- It is expected to matter on MRF cases (rotating F1 wheels) and at
+  slip/symmetry patches.
+- Kept as the spec default; revisit after the E-rcScalar benchmark on
+  T4b/T5.
+
+C4: `agglomerator algebraicPair` is the amendment-C name for
+agglomerationWeights pressure (the p-p block magnitudes). Giving it
+together with a different explicit agglomerationWeights is an error.
+The default follows the E-algPair benchmark on T5.
+
+## D-054 - Amendment C1/C5/C6 (static topological criteria, built-in zones, diagnostic fields)
+
+C1 - static topological criteria (src/control/staticCriteria), OR-ed
+into the static set:
+- wallStarved: 3D only; a wall cell with at most 2 internal faces
+  (internal, processor and cyclic faces count; cyclicAMI faces do not, so
+  the set does not depend on the decomposition).
+- procAMI: a cell with both a processor face and a cyclicAMI face (this
+  one depends on the decomposition by construction).
+- volumeJump: volume ratio > 50 across an internal, processor or cyclic
+  face.
+
+remediationFlag bits: 1 static, 2 dynamic, 4 wallStarved, 8 procAMI,
+16 volumeJump. All criteria are on by default. nonOrthThreshold stays
+85 (D-047/D-051).
+
+Measured: T0-T3 add 0 cells and give identical results. T4a adds 12
+wallStarved cells (static set 2655 -> 2667, 0.75 %), the same on 1 and
+4 ranks. With volRatioThreshold 30, volumeJump adds no cells but keeps
+its own bit and count.
+
+C5: built-in names in zonal.zones (_wallCells, _procCells, _amiCells,
+_procAMICells, _wallStarved, _remediationStatic; literal names only).
+Factors of overlapping entries multiply (D-027). Regex patch sets
+already worked.
+
+C6: localDt, localCFL, cflFactorEff and betaEff (those of the last
+assembled trial step) are written at every write time and into
+<iter>_lastValid on abort, as extrapolatedCalculated fields
+(diagnosticFields.enabled, default yes). USFD follows once SFD (C3) is
+merged.

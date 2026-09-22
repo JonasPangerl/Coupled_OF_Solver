@@ -46,11 +46,13 @@ def test_T3(foam, model, nprocs):
         rec["rc"] == 0 and not rec["fpeTrap"]
         and rec["CdRelDiff"] < TOL_COEFF and rec["ClRelDiff"] < TOL_COEFF
         and rec["nDynFinal"] == 0
+        and rec["nPseudoInverse"] == 0
     )
     rec["pass"] = passed
     results.write("tests", name, rec)
 
     assert rec["rc"] == 0 and not rec["fpeTrap"]
+    assert rec["nPseudoInverse"] == 0, rec["nPseudoInverse"]  # C2
     assert rec["CdRelDiff"] < TOL_COEFF, (cd, cd_ref)
     assert rec["ClRelDiff"] < TOL_COEFF, (cl, cl_ref)
     assert rec["nDynFinal"] == 0, rec["nDynFinal"]
