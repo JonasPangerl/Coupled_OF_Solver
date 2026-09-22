@@ -1570,3 +1570,27 @@ Notes on the table:
 
 Defaults: all opt-in. Fable's WIP default stickyAfter 3 is reverted to 0.
 The T3 template uses implicit yes together with SFD (D-052).
+
+## D-058 - SFD default never off; T3 template with SFD; T3 tolerance 5 % (user, 2026-09-22)
+
+The user took three decisions on the evidence of D-052/D-055 (branch
+osc-memory, merged):
+
+1. **SFD never switches off by default.** coupled.sfd.deactivateBelowR
+   defaults to 0 (coupledDefaults::sfdDeactivateBelowR). With the spec
+   value of 1e-4, SFD switched off at iteration 39 of T3-SST (R drops
+   below 1e-4 briefly during the start-up) and the limit cycle returned.
+   Keeping SFD on is harmless: the forcing -chi*(U - Ubar) vanishes at
+   convergence (|U - Ubar| = 1.1e-6 Uref measured), so the converged
+   solution is unbiased. SFD itself stays OFF by default and is enabled
+   per case.
+2. **The T3 template keeps the implicit local-limit estimate and SFD
+   enabled.** Both turbulence models then converge without dynamic-set
+   cells: SST in 628 iterations, Cd +0.4 % and Cl -2.8 % vs simpleFoam;
+   GEKO about +-6 %. This is how a user would set up such a case.
+   T3 has several steady branches in coupledFoam (attached and stalled),
+   and simpleFoam's heavy relaxation lands on a different branch, so the
+   remaining offsets reflect the near-stall physics of this case (D-055).
+3. **T3 Cd/Cl tolerance 2 % -> 5 %** (tests/test_T3_airFoil.py; history:
+   0.5 % spec -> 2 % D-046 -> 5 % D-058). User-approved relaxation, not an
+   agent loosening.

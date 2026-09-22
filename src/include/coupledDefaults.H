@@ -222,7 +222,7 @@ constexpr doubleScalar sfdLref = 1.0;
 // SFD-off after nHold iterations below (spec value; on T3 the normalised R
 // drops below 1e-4 during the start-up ramp and the limit cycle returns after
 // SFD-off: the case templates use 0 = never, D-052)
-constexpr doubleScalar sfdDeactivateBelowR = 1e-4;
+constexpr doubleScalar sfdDeactivateBelowR = 0;   // never off (user, D-058; spec 1e-4 switched SFD off during the T3 start-up)
 // Ubar = U whenever the Anderson history is flushed (C3); no = keep the
 // filter state (variant)
 constexpr bool sfdResetOnFlush = true;
