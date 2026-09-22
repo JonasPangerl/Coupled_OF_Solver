@@ -212,3 +212,16 @@ wall-clock per iteration is fixed.
 - Items 2b: T0 np1+np4 Re100/Re1000 all PASS on the merged build.
 - Item 3: clean rebuild done for the merged build; an Allwmake relink
   guard stays a nice-to-have.
+
+### 4a. OPUS_TASKS section 0 result - T4b conservative run (2026-09-22 07:58)
+
+run/T4b_conservative (V / geometric / nFinestSweeps 2 / coarsest 200 /
+ILU0 / restart 30 / CFLmax 100, np10, 1.70 M cells) was stopped by the
+lead at outer iteration 113 (not aborted): healthy up to ~iter 100 (2-17
+linear its, 4-11 s/iter), then at CFL ~31 the solve degraded to 59
+linear its and 33 s/iter while R stayed at ~1e-2 (0.0095-0.0177 over
+iters 20-113). nLocLim 150-800 cells, rho 0.65-1.37. Extrapolated cost
+for the 1500-iteration budget: ~13 h - not viable. Conclusion for
+TASK 1: the conservative set also loses robustness as CFL grows on the
+snappy mesh, so the TASK-1 grid must include the T4 regime at CFL >= 30
+(T4a dumps at iters 20/40/50, CFL 500, cover it). Case dir kept.
