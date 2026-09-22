@@ -830,6 +830,7 @@ def precision_fields(name: str, cfg: str, case: Path, rec: dict) -> dict:
     rec["spGeometry"] = info.get("status")
     rec["spHarness"] = {k: info.get(k) for k in (
         "bboxCentreDP", "shiftedEntries", "unclassifiedVectors", "reasons",
+        "gateOverridden",
         "wallSecondsDPMesh", "wallSecondsPrepare")}
     dps = dp_counterpart(name, cfg)
     rec["dpCounterpart"] = {"config": SP_BASE[cfg],

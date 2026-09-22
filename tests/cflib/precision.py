@@ -237,13 +237,23 @@ def checkmesh_diff(dp: dict, sp: dict) -> list[dict]:
             + [{"check": k, "only": "dp"} for k in sorted(a - b)])
 
 
+def gate_overrides() -> list[str]:
+    """CF_SP_GATE_OVERRIDE: comma-separated substrings of failed-check kinds
+    that are reported but do not fail the D5.3 gate. Default empty (the
+    gate as specified); an override is a user decision and is recorded
+    (spGeometry "ok-overridden", gateOverridden)."""
+    return [s.strip() for s in os.environ.get("CF_SP_GATE_OVERRIDE",
+                                              "").split(",") if s.strip()]
+
+
 def gate(dp: dict, sp: dict) -> tuple[bool, list[str]]:
     """D5.3: no SP-only failed check, 0 negative-volume cells and 0
-    incorrectly oriented faces in SP."""
+    incorrectly oriented faces in SP. SP-only checks matching
+    gate_overrides() are not counted (see gate_overridden)."""
     why = []
     if sp.get("fatal") or sp.get("bbox") is None:
         why.append("SP checkMesh did not complete")
-    only_sp = [d["check"] for d in checkmesh_diff(dp, sp) if d["only"] == "sp"]
+    only_sp = [c for c in gate_overridden(dp, sp, invert=True)]
     if only_sp:
         why.append(f"SP-only failed checks: {only_sp}")
     if sp.get("negativeVolumeCells", 0):
@@ -251,6 +261,15 @@ def gate(dp: dict, sp: dict) -> tuple[bool, list[str]]:
     if sp.get("incorrectlyOrientedFaces", 0):
         why.append(f"{sp['incorrectlyOrientedFaces']} incorrectly oriented faces")
     return not why, why
+
+
+def gate_overridden(dp: dict, sp: dict, invert: bool = False) -> list[str]:
+    """SP-only failed-check kinds that match CF_SP_GATE_OVERRIDE (invert:
+    those that do not match)."""
+    ov = gate_overrides()
+    only_sp = [d["check"] for d in checkmesh_diff(dp, sp) if d["only"] == "sp"]
+    hit = [c for c in only_sp if any(o in c for o in ov)]
+    return [c for c in only_sp if c not in hit] if invert else hit
 
 
 # --------------------------------------------------------------------------- #
@@ -532,10 +551,14 @@ def _prepare(case: Path, args: list[str]) -> dict:
                 f.unlink()
             p.rmdir()
     ok, why = gate(dp, sp)
+    overridden = gate_overridden(dp, sp)
     info.update({
         "prepared": True,
-        "status": "ok" if ok else SP_GEOMETRY_FAIL,
+        "status": (SP_GEOMETRY_FAIL if not ok
+                   else "ok-overridden" if overridden else "ok"),
         "reasons": why,
+        "gateOverride": gate_overrides(),
+        "gateOverridden": overridden,
         "nProcsMesh": nprocs,
         "shift": shift,
         "bboxCentreDP": [-s for s in shift],
@@ -597,7 +620,8 @@ def annotate(rec: dict, case: Path, metrics: dict | None = None,
     rec["spGeometry"] = info.get("status")
     rec["spHarness"] = {k: info.get(k) for k in (
         "bboxCentreDP", "shiftedEntries", "unclassifiedVectors",
-        "wallSecondsDPMesh", "wallSecondsPrepare", "reasons")}
+        "wallSecondsDPMesh", "wallSecondsPrepare", "reasons",
+        "gateOverridden")}
     rec["spHarness"]["checkMeshFailedDP"] = (info.get("checkMeshDP") or {}).get("failed")
     rec["spHarness"]["checkMeshFailedSP"] = (info.get("checkMeshSP") or {}).get("failed")
 
