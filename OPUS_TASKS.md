@@ -347,3 +347,125 @@ T5 test inherits via imports; make_report.py + both papers updated):
 - run/exp_re1000 and run/exp_linsolver must STAY
   (bench/exploratory_numbers.py reads them). Other run/exp_*, chaos_*,
   dbg* dirs may be deleted once their DECISIONS entries are written.
+
+## TASK 5 - Deep diagnostics logging (user request, 2026-09-22 ~08:15)
+
+User (translated): "I want the option of a mega-verbose output in the
+solver log so every single step can be logged, including all sub-steps
+and computations, so that you can analyse everything later and tune
+parameters depending on the state the simulation is in - at the start
+or end of the run, and depending on current convergence."
+
+Priority: after TASK 1 and TASK 2 are green; implement it while the
+long TASK-4 background runs (T5 reference, scaling) occupy the machine.
+Exception: the per-patch BC-flip counter (5.4 level 3, item f) may be
+pulled forward if the TASK-3 probes fail, since it directly tests the
+freestream-chatter hypothesis.
+
+### 5.1 Control and files
+
+- New dictionary block `coupled.diagnostics`:
+  `level` 0|1|2|3 (default 0), `echo` yes|no (default no),
+  `maxBytes` (default 2 GiB per rank, new constant
+  coupledDefaults::diagMaxBytes; when exceeded, write one final
+  truncation record and stop logging, never abort the run).
+- Output: `<case>/diagnostics/diag.rank<N>.jsonl` - one self-contained
+  JSON object per line (JSON Lines), full precision (max_digits10),
+  flushed once per outer iteration. The human log (log.coupledFoam and
+  its CF| lines) stays EXACTLY as it is; `echo yes` additionally prints
+  the level-1 record pretty-printed into the log.
+- Implementation: new class `src/io/diagnostics.{H,C}` following the
+  jsonWriter/runInfo patterns; modules receive a pointer/reference
+  (null object pattern at level 0). HARD RULE: at level 0 no strings
+  are built, no fields gathered, no collectives added - guard at the
+  call site (`if (diag.active(2)) { ... }`). All new keywords/constants
+  in coupledDefaults.H.
+
+### 5.2 Phase classification (logged at every level >= 1)
+
+Field `phase`, computed each outer iteration from existing quantities,
+exact rules in this order:
+1. "startup"    if beta < 1 (deferred-correction ramp / upwind phase)
+2. "stalled"    if R has not decreased in the last 50 iterations
+                (compare against min(R) of that window)
+3. "asymptotic" if R <= 100 * convergence.residualTol (when
+                residualTol > 0) OR the Cd/Cl window criterion is
+                within 10x of its tolerance
+4. "ramp"       otherwise
+This field is the hook for later state-dependent parameter tuning
+(gamgAutoTune or a successor will consume it; nothing auto-tunes in
+this task - autoTune stays off per D-039).
+
+### 5.3 Record contents, level 1 (one record per outer iteration)
+
+All of: iter, phase, wallTime, and
+- residuals: R, rU, rp, R1, normFactor, linear initial/final residual,
+  linear its, converged flag, rho; continuity: max and sum |cell mass
+  error| from the flux update.
+- controls: CFL (value + the local-dt distribution min/median/max and
+  count at the local limit), PTC strategy + hold counter + growth
+  factor applied this iteration, eta with the raw Eisenstat-Walker
+  value and which safeguard clipped it, omega and line-search cuts +
+  trial list summary, sentinel checks/rollbacks, remediation
+  nStat/nDyn + version counter, Anderson status/m/gamma norm/flush
+  reason (if any), beta.
+- turbulence: initial/final residuals of the k and omega solves,
+  bounding event counts (k, omega), nNutCapped, nClamped.
+- timings: tAsm split (stage1 momentum ops, stage2 continuity/scaling,
+  boundary coupling, Rhie-Chow), tSolve split (preconditioner setup,
+  preconditioner applications, Krylov vector ops), tTurb, tDiag (the
+  cost of the diagnostics themselves), tIter, tWall.
+- GAMG: nLevels, cellsPerLevel, ranksPerLevel, C_op, and a
+  reagglomeration/setup event flag - full hierarchy only when it
+  changed, else `hierarchy: "unchanged"`.
+- memory: current and peak RSS of this rank (getrusage, cheap).
+
+### 5.4 Additional content, levels 2 and 3
+
+Level 2 (per linear solve):
+- a. per-Krylov-iteration preconditioned residual array; at every
+  FGMRES restart the true (double) residual as well.
+- b. per preconditioner application: per-level residual norm before
+  and after smoothing (down and up legs), coarse-level solver its and
+  final residual, K-cycle inner GCR steps and acceptance test values.
+- c. rhoOpt (the scale-free measure from Test-blockSystem/D-039) for
+  the FIRST application of each solve.
+Level 3 (per sub-operation; expensive, for short diagnostic runs):
+- d. per smoother sweep residual norms; per-level operator stats on
+  setup (rows, off-diagonal dominance min/median).
+- e. per line-search trial: alpha, number of physicality violations by
+  type.
+- f. per-patch BC state counters: for every mixed/freestream patch the
+  number of faces that switched inflow/outflow since the previous
+  iteration (this is the T3 chatter probe).
+- g. Anderson internals: QR condition estimate, per-column |gamma|,
+  maxAlpha clip events.
+Document per level which extra parallel reductions it introduces;
+level 1 must add none beyond values already reduced today.
+
+### 5.5 Analysis companion + test
+
+- `bench/diag_tools.py`: `load(case) -> pandas.DataFrame` (level-1
+  records; per-rank files merged, master preferred for global fields),
+  `linear_history(case, iter)` for level-2 arrays, and three canned
+  matplotlib figures: (1) R/CFL/eta/rho vs iteration with phase
+  bands, (2) per-level GAMG residual-reduction heatmap over
+  iterations, (3) stacked time breakdown. Vector PDF output alongside
+  the report figures.
+- New quick test `tests/test_diagnostics.py` (NOT heavy): T0 Re100,
+  maxIter 20, level 3, np1 and np4: every line of every
+  diag.rank*.jsonl parses as JSON; the level-1 required keys above are
+  present; tDiag is recorded; with level 0 the diagnostics/ directory
+  is not created.
+
+### 5.6 Acceptance
+
+- T0 Re100 np1 wall time: level 0 within +-5 % of the pre-TASK-5
+  build (three runs each, compare medians); level 1 overhead <= 2 %;
+  level 2 overhead <= 15 % (document the measured numbers).
+- Unit battery and pytest T0 unchanged (level 0 default everywhere; no
+  case template gets a diagnostics block by default).
+- DECISIONS entry D-045: design, field list reference, overhead
+  numbers, file sizes per level measured on T0 (level 3) and T1
+  (level 2). README section "Diagnostics" with two usage examples
+  (turn it on for a case; load and plot in python).
