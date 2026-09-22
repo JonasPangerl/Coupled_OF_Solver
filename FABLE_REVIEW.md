@@ -225,3 +225,21 @@ for the 1500-iteration budget: ~13 h - not viable. Conclusion for
 TASK 1: the conservative set also loses robustness as CFL grows on the
 snappy mesh, so the TASK-1 grid must include the T4 regime at CFL >= 30
 (T4a dumps at iters 20/40/50, CFL 500, cover it). Case dir kept.
+
+### 4b. TASK 1 acceptance (D-043 + addendum + D-044, 2026-09-22 ~10:00)
+
+Unit battery all PASS (Test-blockGAMG V/F/W/K np1+np4, blockMatrix,
+blockFGMRES, block4Ops, doubleReduce, precision, kernelBandwidth gates).
+
+| test | result |
+|---|---|
+| T0 Re100 np1 / np4 | PASS, 57 / 57 its, 5.7 / 5.7 s |
+| T0 Re1000 np1 / np4 | PASS, 111 / 257 its, 26 / 71 s (chaotic count, item 1) |
+| T1 np1 / np4 | FAIL (400-it budget): final R 2.7e-6 / 4.3e-6 vs 1e-6; dp within 0.057 % of simpleFoam; ~26 s for 400 its |
+| T2 np1 | FAIL: no B4 abort any more (1000 its), final R 8.9e-6; xr within 0.68 % vs the 0.5 % tolerance |
+
+Open (not loosened): the T1 400-iteration budget and the T2 0.5 % xr
+tolerance are spec thresholds; both runs are physically close but the
+outer-iteration convergence rate near R ~1e-5 is the limit. Also: the
+test JSONs for T0-T2 carry wallSeconds but no cpuHours (the solver
+summary JSON has them) - reporting gap to close in tests/cflib.
