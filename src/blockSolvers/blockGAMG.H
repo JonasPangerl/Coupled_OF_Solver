@@ -460,6 +460,10 @@ public:
         //- Guarded pivots summed over all levels at the last update (rank)
         label nSingularDiag() const;
 
+        //- Smoother pivot fallbacks (blockILU0 safeguard, D-049) summed
+        //  over all levels at the last update (rank)
+        label nPivotFallback() const;
+
         //- Coarsest-level iterations of the last cycle
         label nCoarsestIters() const noexcept { return nCoarsestIters_; }
 
