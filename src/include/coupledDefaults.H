@@ -151,8 +151,8 @@ constexpr doubleScalar staticCflFactor = 0.5;
 
 // Remediation, dynamic (spec 8.2)
 constexpr bool dynamicEnabled = true;
-constexpr doubleScalar cU = 2;
-constexpr doubleScalar cp = 5;
+constexpr doubleScalar cU = 4;    // local U 2-3x U_inf under wings (D-044)
+constexpr doubleScalar cp = 15;   // = cU^2-1: Cp down to -15 (D-044)
 constexpr doubleScalar cSpike = 0.5;
 constexpr label nLayers = 1;
 constexpr label nQuietIters = 20;

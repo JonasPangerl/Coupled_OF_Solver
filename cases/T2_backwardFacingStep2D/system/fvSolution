@@ -35,17 +35,18 @@ solvers
         blockGAMG
         {
             agglomerator          faceAreaPair;
-            agglomerationWeights  combined;   // matrix-based (D-039)
+            agglomerationWeights  combined;   // matrix-based (D-039, D-043)
             reagglomerateInterval 50;         // D-039
             mergeLevels           2;
-            nCellsInCoarsestLevel 20;   // D-039
-            cycleType             K;
+            nCellsInCoarsestLevel 200;   // D-043
+            cycleType             V;   // grid winner (D-043)
             kCycleThreshold       0.25;
             kCycleMaxSteps        2;
             smoother              blockILU0;  // block GS keeps CFL at 1-2 (D-028, D-038)
+            smootherRelaxation    0.5;   // damped ILU0 (D-043 + addendum: 0.7 aborts T2 at CFL 500)
             nPreSweeps            1;
             nPostSweeps           2;
-            nFinestSweeps         1;    // ILU0 diverges with more (D-039)
+            nFinestSweeps         2;   // D-043
             coarsestSolver        blockBiCGStab;
             coarsestTolerance     1e-3;
             coarsestMaxIter       50;
@@ -134,8 +135,8 @@ coupled
         dynamic
         {
             enabled             yes;
-            cU                  2;
-            cp                  5;
+            cU                  4;      // local U up to 2-3x U_inf under wings (D-044)
+            cp                  15;     // = cU^2-1: Cp down to -15 (suction peaks -7..-8, D-044)
             cSpike              0.5;
             nLayers             1;
             nQuietIters         20;

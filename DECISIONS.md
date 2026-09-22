@@ -721,3 +721,130 @@ max(2 % relative, 0.01 absolute) of the reference. Time to
 convergence uses the first stationary window. T0-T3 criteria are
 unchanged. This is a user-approved criterion change, not an agent
 loosening.
+
+## D-043 - Robust linear-solver defaults: damped ILU0 V cycle (TASK 1, 2026-09-22)
+
+Problem: the D-039 settings (K cycle, combined weights, nFinestSweeps 1,
+nCellsInCoarsestLevel 20) were tuned on T1 only. They caused B4 aborts on
+T2, T3 and T4a. On the serial T4a mesh they are not even admissible: the
+K-cycle coarsening-ratio rule r_l >= 3 (6.3.1) rejects every mergeLevels
+2..4 with coarsest 20 (last-level ratio 2.09 -> FatalError). The
+conservative set (V / geometric / 2 sweeps / coarsest 200) also degraded
+on T4b at CFL ~30 (FABLE_REVIEW 4a).
+
+Method (OPUS_TASKS TASK 1a-1c, applied mechanically):
+- Linear systems dumped from:
+  - T1: iterations 300 and 450 (CFL 500).
+  - T2: iterations 400 and 800.
+  - T3-SST: iterations 30 and 100. The run aborted via B4 at 125, so
+    the last two existing dumps were used.
+  - T4a serial: iterations 40 and 50. This dump run used the V cycle
+    because the D-039 K/c20 set is inadmissible there, so these dumps
+    sit at CFL 17/21, not 500.
+- 12 variants solved by Test-blockSystem with eta = 0.1.
+- PASS = converged to a 0.1 reduction within 30 FGMRES iterations AND
+  rhoOpt <= 0.9.
+- Table cells: its/rhoOpt; x = fail. Logs: run/robust_*.log. JSON:
+  results/exploratory/task1_grid.json.
+
+| variant | T1-300 | T1-450 | T2-400 | T2-800 | T3-30 | T3-100 | T4a-40 | T4a-50 | sum t1 [s] | all pass |
+|---|---|---|---|---|---|---|---|---|---|---|
+| V_geo_f2_c200 | 200/1.00 x | 200/1.00 x | 3/0.14 | 400/1.00 x | 55/0.93 x | 23/0.97 x | 12/0.46 | 5/0.46 | 20.92 | no |
+| V_comb_f2_c200 | 11/1.00 x | 10/0.96 x | 2/0.17 | 400/1.00 x | 20/0.96 x | 30/0.87 | 8/0.41 | 5/0.47 | 15.31 | no |
+| V_comb_f1_c200 | 7/0.85 | 6/0.58 | 3/0.34 | 15/0.95 x | 58/0.80 x | 23/0.67 | 15/0.70 | 54/0.75 x | 18.00 | no |
+| V_comb_f1_c20 | 7/0.83 | 6/0.56 | 7/0.35 | 11/0.96 x | 58/0.80 x | 23/0.67 | 46/0.70 x | 400/0.77 x | 92.13 | no |
+| V_geo_f1_c200 | 200/0.99 x | 200/0.96 x | 3/0.28 | 17/0.93 x | 400/0.70 x | 400/0.79 x | 22/0.71 | 27/0.71 | 24.22 | no |
+| K_comb_f1_c20 | 8/0.42 | 6/0.33 | 18/0.43 | 12/0.28 | 62/0.80 x | 26/0.67 | FATAL | FATAL | 1.14 | no |
+| K_comb_f1_c200 | 12/0.46 | 9/0.46 | 3/0.33 | 25/0.29 | 400/0.92 x | 400/0.94 x | 40/0.73 x | 74/0.77 x | 33.47 | no |
+| K_geo_f2_c200 | 144/1.00 x | 119/0.99 x | 2/0.13 | 400/0.95 x | 400/0.98 x | 400/0.99 x | 12/0.43 | 7/0.47 | 28.82 | no |
+| K_comb_f2_c200 | 26/0.98 x | 20/0.93 x | 2/0.14 | 400/1.00 x | 400/0.99 x | 27/0.99 x | 11/0.44 | 7/0.49 | 26.52 | no |
+| GS_control | 200/1.00 x | 200/1.00 x | 400/1.00 x | 400/1.00 x | 400/1.00 x | 400/1.00 x | 400/0.84 x | 400/0.81 x | 180.52 | no |
+| V_comb_f2_c200_r07 | 4/0.59 | 2/0.26 | 2/0.19 | 7/0.39 | 3/0.60 | 3/0.65 | 7/0.43 | 4/0.45 | 6.60 | YES |
+| V_comb_f2_c200_r05 | 3/0.32 | 3/0.26 | 2/0.29 | 2/0.28 | 3/0.35 | 3/0.34 | 10/0.59 | 6/0.62 | 7.09 | YES |
+
+No undamped variant passes all dumps: the T3 start-up dump at CFL 40
+defeats all of them. TASK 1d was therefore executed:
+- New keyword blockGAMG.smootherRelaxation for blockILU0 and
+  blockGaussSeidel: x += relax*(smoothed - x) per sweep.
+- Default coupledDefaults::smootherRelaxation = 1, the bit-identical
+  undamped path; values are validated to lie in (0, 1].
+
+Both damped variants pass every dump. By the selection rule (smallest
+summed wall time) the winner is V_comb_f2_c200_r07.
+
+Defaults applied to T1-T5 (T0 untouched):
+- Changed: cycleType V, agglomerationWeights combined, nFinestSweeps 2,
+  nCellsInCoarsestLevel 200, smoother blockILU0, smootherRelaxation 0.7.
+- Unchanged: autoTune no, reagglomerateInterval 50, restart 30, linear
+  tolerance, maxIter 400.
+
+Interpretation:
+- The undamped point-block ILU0 over-corrects on the non-dominant
+  saddle-point rows (run/robust_*_dominance.log):
+  - continuity row: offU/d up to 30-34 on T2/T3
+  - momentum row: offP/d up to 15 on T1
+- Damping restores smoothing without the second-sweep divergence that
+  D-039 observed.
+- The V cycle avoids the K-cycle ratio-rule failure on snappy meshes.
+
+## D-044 - Dynamic-set thresholds cU 2 -> 4, cp 5 -> 15 (user, 2026-09-22)
+
+The user (F1 aerodynamics) pointed out that the spec 8.2 defaults mark
+physically correct cells.
+
+Definitions (lineSearch::setReference):
+- U_ref = max |U| over the field and the non-coupled boundaries, which is
+  essentially the free stream.
+- p_ref = 0.5 U_ref^2.
+
+What the old defaults mean:
+- cU = 2: |U| > 2 U_inf. Under wings with a strong suction peak the
+  local speed reaches 2-3 U_inf.
+- cp = 5: Cp < -5. The user has seen suction peaks of Cp -7 to -8.
+
+Consequence: exactly the cells that produce the downforce were put into
+the dynamic set. There they get:
+- beta = 0 (first-order upwind)
+- a local CFL factor of 0.1
+- increment clipping
+This is a silent loss of accuracy where it matters most.
+
+New defaults, consistent through Bernoulli (|U| = cU U_inf gives
+Cp = 1 - cU^2):
+- cU = 4, which covers 2-3 U_inf with margin.
+- cp = cU^2 - 1 = 15, which covers Cp down to -8 with margin.
+
+These stay well below the sentinel (divergence) limits of 10 U_ref and
+50 p_ref (sentinelUFactor, sentinelPFactor), so real blow-ups are still
+caught first by the dynamic set and then by the rollback. cSpike (0.5,
+the jump to the neighbour mean) is unchanged.
+
+Applied to coupledDefaults.H and to the case templates T1-T5. T0 keeps
+its validated explicit values 2 / 5 (lid-driven cavity, |U| <= 1, where
+the thresholds never bind).
+
+### D-043 addendum - smootherRelaxation 0.5 instead of 0.7 (same day)
+
+Acceptance check 1f on T2 (pytest, D-043 settings): B4 abort at outer
+iteration 296 (CFL 500, R 3.7e-4). The T2 grid dumps above came from the
+D-039 trajectory and reached only CFL 9 / 47, so the CFL-500 regime was
+not covered. New dumps run/dump_T2b iter 285 / 293 (CFL 500): no
+variant passes the 1c rule there (preconditioner amplifies the residual,
+||Az-r||^2/||r||^2 ~ 408 for r05; worst cells distributed over the wake,
+top-10 share 12 %). Note: dump_T2b was created from the D-043 template,
+so every variant without an explicit smootherRelaxation inherited 0.7 on
+those two dumps (V_comb_f2_c200 == r07 there).
+Decisive full-run probe (T2, 1000 outer its, serial, run/exp_T2_*):
+
+| variant | wall | end R | B4 |
+|---|---|---|---|
+| D-043 winner (relax 0.7) | - | - | abort at 296 |
+| relax 0.7 + CFLmax 100 | 418 s | 2.5e-5 | none |
+| relax 0.5 | 259 s | 8.9e-6 | none |
+| damped GS 0.7, V/geometric/f2/c200 | 157 s | 2.9e-5 | none |
+
+relax 0.5 passed all eight original dumps as well (sum 7.09 s vs 6.60 s
+for 0.7). Chosen default for T1-T5: smootherRelaxation 0.5 (lowest R,
+no abort). The CFL-500 preconditioner weakness on T2 (and the T4b
+degradation at CFL ~30 with the undamped set) stays open in
+FABLE_REVIEW item 4.
