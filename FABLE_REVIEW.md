@@ -301,3 +301,33 @@ window-mean criterion would hide it (and still fails: Cd 0.125 vs
 premise and reverted before commit. Next steps as in 4c (freestream
 BC switching, k bounding every iteration, level-3 diagnostics patch
 switch counter now available on main).
+
+### 6. Open after D-056/D-057 (start-fix, 2026-09-22 evening)
+
+- T4a Cl shift since amendment C: every T4a run on main 05f7467 and later
+  (R0 boundary, R1 field, R2 pivot 5, fieldCapped, exclude, pytest T4a on
+  the merged build) has a stationary Cl of 0.060-0.065 vs the reference
+  0.0768 (limit 0.01 absolute) - the Cl check FAILS, all other checks pass
+  (Cd within 1.0-2.1 %, field RMS 0.006 / 0.001). The runs before the
+  amendment-C merge (t4b-fix builds: T4a_np10, T4a_hybridPlain_fix2,
+  T4a_np10_fix) gave Cl 0.078-0.080 with the same start-up settings.
+  Suspects: C2 tensorial Rhie-Chow (coupled.rhieChow.tensorial) or the 12
+  C1 wallStarved static cells (beta 0 at the wall). Isolation runs
+  prepared but not run (lead: converge): T4a with
+  coupled.rhieChow.tensorial no, and with
+  coupled.remediation.static.wallStarved no.
+- Restart is not exact on T3 (serial): a 50 + 50 split differs from the
+  100-iteration run from the first restarted iteration on (rU 0.0218 vs
+  0.0208, linear iterations 3 vs 1), for SST and GEKO, split at 40 too;
+  identical before and after D-056 (bitwise), so not caused by it.
+  test_restart[T3-SST] fails its 1e-5 tolerance (merged build with SFD:
+  relative 2.0e-4 Cd, 5.1e-4 Cl; before the SFD merge 1.3 / 1.6).
+  test_restart[T1] passes.
+- test_blockGAMG_cycles (B9 ordering K <= W <= V: V 11, F 8, W 7, K 11)
+  fails identically on main's recorded result; not touched here.
+- T4b Cd is 2.04 % above the simpleFoam reference, tolerance 2 %
+  (0.0082 vs 0.0080 absolute) - the only failing check of the T4b run
+  (D-057). Worth one more look before the final re-run: the reference
+  itself is a 4000 + 2000-iteration simpleFoam run whose own window
+  drift is not zero.
+- T3-GEKO still fails its criterion (pre-existing, main's record too).

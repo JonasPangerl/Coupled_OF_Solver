@@ -1614,3 +1614,130 @@ strong scaling on T4b (serial run several hours). The user asked for about
   simpleFoam comparison uses the simpleFoam references of the T4/T5 tests
   (run/ref_*, same system simpleFoam and tutorial settings, unchanged by
   coupledFoam commits), which the final re-run keeps.
+
+## D-056 - Rollback restores k, omega, nut verbatim (G-lookup crash, 2026-09-22)
+
+Symptom: T4b np10 (main 05f7467) aborted after iteration 5 on all ranks
+with "failed lookup of kOmegaSST:G"; the same FATAL in the osc T3
+experiments (fresh starts and restarts, kOmegaSST and GEKO).
+
+Root cause: sentinel::restore() (the rollback of spec 9.3) called
+omega.correctBoundaryConditions() outside turbulence->correct(). The
+native omegaWallFunctionFvPatchScalarField::updateCoeffs() (and
+epsilonWallFunction) looks up the production field <model>:G, which
+kOmegaSST, GEKO and kEpsilon register only temporarily inside correct().
+Every rollback of a wall-function case therefore crashed; the log shows
+no "sentinel rollback" line because the message is printed after
+restore(). Checked and NOT involved: bound() in applyBounds (v2606
+bound.C assigns the boundary values and evaluates only coupled patches -
+T4a/T4b bound omega every run without a crash), the restart read path
+(fields are read, the model's validate() only corrects nut; the osc
+restart crashes happen after the first linear solve and before the
+turbulence solve, i.e. at the first sentinel check), nut wall functions
+(no G lookup), diagnosticFields, lastValid writes (copies, no evaluate).
+
+Fix: store() keeps the boundary values of k, omega and nut as well;
+restore() assigns internal and boundary values with a forced assignment
+(==), no updateCoeffs()/evaluate(). The stored values are those the model
+itself evaluated at the end of the previous accepted iteration, so the
+restored state is exactly that state (processor patches included, all
+ranks restore together). U and p keep correctBoundaryConditions().
+
+Verification: T3-SST forced rollback (sentinel.UFactor 1.2): crash at
+the first rollback (iteration 11) before, controlled rollbacks after
+(recoveries, then the 9.3 abort with <n>_lastValid when the limit stays
+violated). On the merged build (SFD + implicit local limit): T3-SST and
+T3-GEKO forced-rollback runs and restart-with-rollback runs - no G
+failure. The restart round trip itself is bitwise identical between the
+fixed and the unfixed build; it is not exact run-to-run on T3 (open
+point, pre-existing, FABLE_REVIEW 6).
+
+## D-057 - Potential-flow start: start-up references (2026-09-22)
+
+Symptom: with Uref from the boundary (D-050) T4a and T4b iterated at
+CFL 1 with omega = omegaMin (0.1) and 3 CFL cuts in every iteration of
+the start (T4a 22-25 iterations, CFL 500 only at iteration ~480; T4b
+every iteration until the D-056 crash). Evidence (T4a, diagnostics level
+3 and field analysis of the potentialFoam start):
+- The line search is PRESSURE-limited: rank 0 counted ~300 cells over
+  fp pref against ~20 over fU Uref, and omega hardly depends on CFL
+  (0.039 at CFL 5, 0.035 at CFL 1): the pressure has no pseudo-time term,
+  so CFL cuts cannot reduce dp. max |dp| ~ 14 pref per step vs the
+  allowance fp pref = 0.5 pref.
+- The cells that demand it are the singular potential-flow peaks: 6 of
+  the 7 cells with |dp| > 10 pref (per unit omega) have |U0| > 3 U_inf;
+  the largest |dU| (3-7 U_inf) sit at |U0| = 2.8-4.3 U_inf. The potential
+  start has 18 cells above 3 U_inf on T4a (peak 4.3), 165 on T4b (peak
+  8.75, p down to -36 pref); the developed simpleFoam fields have max
+  |U| 1.5 U_inf (T4a).
+- A CFL cut at CFLmin repeated the identical solve (3 solves per
+  iteration, 2.3-2.6 s instead of 0.7 s on T4a).
+
+Variants (keywords, constants in coupledDefaults.H):
+- (a) coupled.potentialClip f: clip |U| of the potential start to f Uref,
+  p shifted by the lost dynamic head. T4a with f = 3 (18 cells) stays
+  crippled (omegaMin 25 iterations, CFL 5.9 at 150); on T4b (f = 4, 33
+  cells) it worsens the first steps (omega 0.25 instead of 0.55). Default
+  0 (off).
+- (b) coupled.startupReference ramp: Uref and Ustep blend from Ufield0
+  (max |U| of the initial field) to their frozen values along the beta
+  ramp. T4a 150 its: CFL 500 at 100, no cut.
+- (c) coupled.startupReference exclude: while the start-up runs (beta < 1,
+  i.e. at most 30 iterations, D-048) and only if Ufield0 exceeds the step
+  scale: step scale Ufield0, no dynamic-set marking (rollback marking
+  stays). T4a 150 its: CFL 500 at 100; T4b 60 its: no cut, CFL 321 at 60,
+  R 1.24e-2 (best of all T4b screens).
+- coupled.UrefStep reference | fieldCapped | field | <value> (+
+  UrefStepCap, default cU = 4): the step scale of the whole run
+  (line search, offending cells, local CFL limit), separate from the
+  classification Uref (dynamic set, clipping, sentinel, Anderson norm,
+  SFD). fieldCapped = max(Uref, min(Ufield0, 4 Uref)). T4a 800 its:
+  stationary at 500 (CFL 500 at 97); T4b 60 its: omega < omegaMin at
+  iteration 7 (cap binding at the 8.75 U_inf peaks) -> 2 cuts + hold ->
+  CFL stalls at 6.6-9.5 (R 1.26e-2); uncapped field: no cut, CFL 237.
+- A cut at CFLmin is no longer repeated (hold as before, one solve).
+
+Decision (default): startupReference exclude, UrefStep reference,
+potentialClip 0. Reasons: it removes the crippled start on T4a and T4b,
+touches only the start-up of starts whose initial field exceeds the
+reference (a no-op on T0-T3: Ufield0 <= Uref there), and leaves D-044 and
+D-050 untouched in the developed solution (dynamic set cU 4 U_inf / cp 15
+pref / cSpike 0.5 U_inf, sentinel 10 U_inf, line search fU/fp against
+U_inf). fieldCapped is kept as an option (faster developed phase is not
+proven: T4a 500 vs 450 stationarity; it fails the T4b start alone).
+
+Results T4a np10, 800 iterations, D-042 criterion (W = 400; "under
+load": osc serial jobs and my serial regression ran alongside, the wall
+and CPU numbers are validation, not the timing comparison):
+
+| run (build) | Uref / step / start-up | CFL 500 at | stationary at | wall / CPU-h to stationarity | total wall / CPU-h | Cd / Cl |
+|---|---|---|---|---|---|---|
+| R0 (main + D-056) | boundary / reference / none | 482 | 600 | 605 s / 1.68 | 789 s / 2.19 | 0.4004 / 0.0630 |
+| R1 | field (all) | 75 | 450 | 521 s / 1.45 | 927 s / 2.57 | 0.4046 / 0.0645 |
+| R2 | field + pivotGrowthLimit 5 | 88 | 450 | 526 s / 1.46 | 921 s / 2.56 | 0.4032 / 0.0645 |
+| S (unbound, heavy load) | boundary / fieldCapped / none | 97 | 500 | (1032 s / 2.87) | (1418 s / 3.94) | 0.4005 / 0.0604 |
+| pytest T4a (merged, default) | boundary / reference / exclude | 87 | 450 | 401 s / 1.11 | 712 s / 1.98 | 0.4026 / 0.0630 |
+| earlier T4a_np10_fix (before amendment C) | field, pivot 5, delayed ramp | 76 | 450 | 422 s / 1.17 | 756 s / 2.10 | 0.4032 / 0.0794 |
+
+simpleFoam reference: stationary at 1550, 783 s / 2.17 CPU-h; Cd 0.3964,
+Cl 0.0768. Decomposition of the 25 % (lead): the D-050 step limits cost
+150 iterations to stationarity (R0 600 vs R1 450); the pivot limit 5 vs
+20 has no effect (R1/R2 450/450, 521/526 s); the remaining wall-clock gap
+of R1 vs the earlier fix run at the same 450 iterations is per-iteration
+cost (1.16 vs 0.95 s/it: machine load and/or amendment C, not isolated).
+The default recovers it (450 iterations, 401 s).
+
+T4b np10 (1.70 M cells, pytest, merged build, default): the run that
+aborted after 5 iterations on main now runs its full 800-iteration
+budget without abort and without a single rollback. Start: omega
+0.73-1 from iteration 1, no CFL cut, CFL 500 from iteration ~100, R 8e-3
+in the plateau (main: CFL 1, omega 0.1, 3 cuts and nDyn 8031-8351 in
+every iteration, 10 s/iteration, then the D-056 crash). D-042 evaluation
+(W = 400): stationary at 450, Cd 0.4078 vs 0.3996 (+2.04 %, tolerance
+2 % - marginal FAIL by 0.0002 absolute), Cl 0.0655 vs 0.0657 (PASS),
+mean-field RMS |dUMean|/U_inf 0.0061 and |dpMean|/p_ref 0.0011 (limit
+0.02 each), static set 0.49 %, rollbacks 0. Wall and CPU under load (osc
+serial jobs and the serial regression ran alongside; NOT the final
+timing measurement): 3757 s / 10.44 CPU-h for 800 iterations, 2117 s /
+5.88 CPU-h to stationarity against the cached simpleFoam reference
+5942 s / 16.50 CPU-h - speed-up 2.81 wall and 2.81 CPU.
