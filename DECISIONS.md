@@ -1762,3 +1762,37 @@ earlier iteration from which they consider it converged. Decision details:
 - The pass/fail of the tests is NOT changed; it keeps the automatic
   criteria. Table `convergence_choice` lists automatic and user points side
   by side; the load plots mark the user point with a solid line.
+
+## D-062 - Amendment D (full single precision) adopted with deviations (user, 2026-09-22)
+
+The user supplied amendment set D (SPEC_amendment_D.md, verbatim) and asked
+for SP to be built and tested against the maximum precision available.
+
+- Reference precision is **DP** (the read-only system v2606 DP build this
+  project is based on; the block linear solver is float internally, D-001).
+  "SPDP" in the amendment reads DP here. No SPDP build for now.
+- SP build: private `~/OpenFOAM-v2606-SP` from the local
+  `openfoam2606-source` package, `WM_PRECISION_OPTION=SP`, compiler flags
+  **identical to the system DP build** (unmodified linux64Gcc rules,
+  `c++OPT = -O3`) instead of `-march=native`, so that SP-vs-DP timings are
+  fair; the system build cannot be rebuilt with other flags.
+- No SP-Debug build: FPE trapping (FOAM_SIGFPE) works in Opt builds, as in
+  all project tests.
+- Meshes are generated in DP; SP is a solve-only mode (D5.1, D12).
+
+## D-063 - Scope of the next full test campaign (user, 2026-09-22)
+
+- Everything is re-run thoroughly up to and including T4a (coarse
+  motorBike). T4b only after T4a looks good. **T5 (Ahmed body) is not run
+  for now.**
+- Benchmarks mostly on the light cases (T1, T2, T3); few runs on T4b. Not
+  every case gets every configuration; the detailed variants (precision,
+  E variants) only on a few cases.
+- SP is compared against DP on a few cases.
+- The report shows flow-field **delta** plots (coupledFoam minus
+  simpleFoam) for the motorbike, not only absolute fields.
+- The pre-selected remediation cells get per-category settings (mesh
+  quality, bad mesh, processor boundaries, wall boundaries), each
+  switchable and tunable in the case dictionaries (D-061 follow-up).
+- Every setting that may need changing must be a run-time keyword, not a
+  compile-time constant.
