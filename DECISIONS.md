@@ -1853,3 +1853,45 @@ FAIL). On the wake cases coupledFoam is therefore SLOWER than simpleFoam
 to a stationary 400-iteration window mean (0.4-0.6x) with the present
 settings; the earlier 2-2.8x came from the window rule. The report must
 state this.
+
+### 2. Benchmark configurations redefined (review C2)
+
+Problem: since D-043 every template runs a V-cycle with autoTune off. C
+(the template), E (sets V + autoTune no) and H (sets autoTune no only) were
+the same run on T1-T5, labelled "K with controller", "fixed V" and "fixed
+K". E-sfd on T3 set sfd.enabled yes, which the T3 template already has
+(D-058). On T1, A and B are identical: the pitzDaily tutorial is SIMPLEC
+with p unrelaxed and U, k, omega 0.9, which is B.
+
+New definitions (bench/run_bench.py COUPLED_CONFIGS, E_VARIANTS,
+CONFIG_SCOPE):
+
+| config | solver | settings on top of the template | scope |
+|---|---|---|---|
+| A | simpleFoam | tutorial settings (T3: consistent no) | T1, T2, T3-SST, T3-GEKO, T4a |
+| B | simpleFoam | SIMPLEC, p 1 / U 0.9 / .* 0.9 | T2, T3-SST, T3-GEKO, T4a (T1: == A) |
+| C | coupledFoam | none: V-cycle, autoTune off (D-043), adaptive relTol | T1, T2, T3-SST, T3-GEKO, T4a, T4b |
+| D | coupledFoam | preconditioner blockDiagonal | T1, T2, T3-SST, T3-GEKO |
+| F | coupledFoam | adaptiveRelTol no (B10) | T1, T3-SST |
+| G | coupledFoam | anderson on (B10) | T1, T3-SST |
+| H | coupledFoam | cycleType K, autoTune no: the fixed K-cycle; H vs C is the cycle comparison | T1, T2, T3-SST, T3-GEKO, T4a |
+| H-tune | coupledFoam | cycleType K, autoTune yes: the pre-D-043 default controller; H-tune vs H isolates it | T1, T2 |
+| E-rcScalar | coupledFoam | C + rhieChow.tensorial no | T2 |
+| E-algPair | coupledFoam | C + agglomerator algebraicPair, weights pressure | T2 |
+| E-eta07 | coupledFoam | C + etaMax 0.7, minIter 2 | T2 |
+| E-noSFD | coupledFoam | C + sfd.enabled no (was E-sfd, a no-op) | T3-SST, T3-GEKO |
+| E-nonOrth60 / 65 | coupledFoam | C + static nonOrthThreshold 60 / 65 | none (only the snappyHexMesh meshes have such cells; --no-scope) |
+
+- E is no longer a configuration; "E" on the command line is an alias of
+  C (with a note). The E-* variants are variants of the defaults C (the
+  names are kept from amendment C7).
+- Scope follows D-063: T4a only A, B, C, H; T4b only C; T5 none; the heavy
+  cases run one repeat (MAX_REPEATS, D-059) unless --no-scope.
+- b10_evaluate compares every coupledFoam configuration with C; H-tune also
+  with H (dWall_X_vs_H). The E-vs-H and X-vs-E columns are gone.
+- HARNESS_VERSION 4: every configuration hash changes, earlier benchmark
+  records are stale.
+- tests/test_harness.py reads the templates (tests/cflib/foamdict.py, no
+  OpenFOAM needed) and checks that the configurations in the scope of every
+  case differ in the settings the solver actually uses
+  (run_bench.effective_settings) and in their hashes.

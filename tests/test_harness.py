@@ -111,3 +111,64 @@ def test_config_hash_depends_on_case_window(monkeypatch):
     h0 = run_bench.config_hash("T4a", "C")
     monkeypatch.setitem(run_bench.CASES["T4a"], "statWindow", 500)
     assert run_bench.config_hash("T4a", "C") != h0
+
+
+# --------------------------------------------------------------------------- #
+# C2: every benchmark configuration is a distinct run (D-068)
+# --------------------------------------------------------------------------- #
+
+def _in_scope(case):
+    return [c for c in run_bench.CONFIGS if run_bench.in_scope(case, c)]
+
+
+@pytest.mark.parametrize("case", sorted(run_bench.CASES))
+def test_configurations_distinct(case):
+    """All configurations in the scope of a case differ in the settings the
+    solver actually uses (template + sets), and in their config hash."""
+    cfgs = _in_scope(case)
+    eff = {c: run_bench.effective_settings(case, c) for c in cfgs}
+    for i, a in enumerate(cfgs):
+        for b in cfgs[i + 1:]:
+            assert eff[a] != eff[b], f"{case}: {a} and {b} are the same run"
+    hashes = {run_bench.config_hash(case, c) for c in cfgs}
+    assert len(hashes) == len(cfgs)
+
+
+def test_configuration_semantics():
+    """H is a fixed K-cycle, H-tune the K-cycle with the controller, C the
+    template (V-cycle, autoTune off, D-043) on every case."""
+    for case in run_bench.CASES:
+        c = run_bench.effective_settings(case, "C")["solvers.coupled"]["blockGAMG"]
+        h = run_bench.effective_settings(case, "H")["solvers.coupled"]["blockGAMG"]
+        ht = run_bench.effective_settings(case, "H-tune")["solvers.coupled"]["blockGAMG"]
+        assert (c["cycleType"], c["autoTune"]) == ("V", False), case
+        assert (h["cycleType"], h["autoTune"]) == ("K", False), case
+        assert (ht["cycleType"], ht["autoTune"]) == ("K", True), case
+
+
+def test_t1_native_configurations_identical():
+    """T1: the pitzDaily tutorial is SIMPLEC with p unrelaxed and U, k,
+    omega 0.9, i.e. configuration B: B is out of the T1 scope."""
+    assert (run_bench.effective_settings("T1", "A")
+            == run_bench.effective_settings("T1", "B"))
+    assert not run_bench.in_scope("T1", "B")
+
+
+def test_t3_sfd_variant_is_not_a_noop():
+    for case in ("T3-SST", "T3-GEKO"):
+        c = run_bench.effective_settings(case, "C")["coupled"]["sfd"]["enabled"]
+        v = run_bench.effective_settings(case, "E-noSFD")["coupled"]["sfd"]["enabled"]
+        assert c is True and v is False
+
+
+def test_scope_d063():
+    assert set(_in_scope("T4a")) == {"A", "B", "C", "H"}
+    assert _in_scope("T4b") == ["C"]
+    assert _in_scope("T5") == []
+    assert run_bench.MAX_REPEATS["T4a"] == run_bench.MAX_REPEATS["T4b"] == 1
+
+
+def test_alias_e_is_c():
+    cfgs, notes = run_bench.resolve_configs(["C", "E", "H"])
+    assert cfgs == ["C", "H"] and notes
+    assert "E" not in run_bench.CONFIGS

@@ -24,39 +24,52 @@ value (keys *_perRun in the records). The mean fields (fieldAverage
 function object of the T4/T5 controlDict) are averaged over the same
 window: set_field_average_start sets its timeStart to n - W + 1.
 
-Configurations (DECISIONS.md D-025, amendment B10):
+Configurations (DECISIONS.md D-025, amendment B10, redefined in D-068;
+every configuration is a distinct run on every case of its scope, which
+tests/test_harness.py checks against the templates):
     A  simpleFoam, the tutorial's solver settings and relaxation factors.
        Per-case overrides where the test case differs from the tutorial:
        T3 (airFoil2D tutorial): plain SIMPLE (consistent no), p 0.3,
        U / turbulence 0.7. T5 has no tutorial: A = the motorBike tutorial
        settings (SIMPLEC, U 0.9, k/omega 0.7), as in T4.
-    B  simpleFoam SIMPLEC, consistent yes, relaxation p 1.0 / U 0.9 / k,omega 0.9
-    C  coupledFoam defaults (K-cycle, autoTune on, adaptive relTol)
-    D  coupledFoam with preconditioner blockDiagonal (isolates the AMG gain)
-    E  coupledFoam with a fixed V-cycle: cycleType V, autoTune no (autoTune
-       would promote V -> F -> W). B10 scope: T2, T4b, T5.
-    F  coupledFoam with adaptiveRelTol no (isolates Eisenstat-Walker).
-       B10 scope: T1, T3-SST.
-    G  coupledFoam with anderson enabled. B10 scope: T1, T3-SST.
-    H  coupledFoam with autoTune no (fixed K-cycle, fixed nPostSweeps): the
-       clean reference for E, which differs from C also by the controller.
-       Same scope as E.
-    E variants (amendment C7): configuration E plus one change each,
-    compared with C (and E) in the B10 table. Scope in CONFIG_SCOPE:
-       E-rcScalar   coupled.rhieChow.tensorial no (scalar D, C2). T2, T4b, T5
-       E-nonOrth60  remediation.static.nonOrthThreshold 60 (C1). T4a, T4b, T5
+    B  simpleFoam SIMPLEC, consistent yes, relaxation p 1.0 / U 0.9 / k,omega 0.9.
+       Not on T1: the pitzDaily tutorial IS this setting (SIMPLEC, p
+       unrelaxed, U and turbulence 0.9), so B == A there.
+    C  coupledFoam, the case template as it is: since D-043 a V-cycle with
+       autoTune off, adaptive relTol (Eisenstat-Walker).
+    D  C with preconditioner blockDiagonal (isolates the AMG gain)
+    F  C with adaptiveRelTol no (isolates Eisenstat-Walker). B10: T1, T3-SST.
+    G  C with anderson enabled. B10: T1, T3-SST.
+    H  C with a fixed K-cycle: cycleType K, autoTune no. H vs C is the
+       cycle comparison of B10 (K vs V, controller off in both).
+    H-tune  C with the K-cycle and the autoTune controller (cycleType K,
+       autoTune yes): the pre-D-043 default; H-tune vs H isolates the
+       controller.
+    E  no longer a configuration: the old E (fixed V-cycle, autoTune no) is
+       identical to C since D-043. "E" is accepted on the command line as an
+       alias of C (CONFIG_ALIASES).
+    E variants (amendment C7): C plus one change each (the name is kept
+    from the time E was the V-cycle variant), compared with C in the B10
+    table:
+       E-rcScalar   coupled.rhieChow.tensorial no (scalar D, C2)
+       E-nonOrth60  remediation.static.nonOrthThreshold 60 (C1)
        E-nonOrth65  remediation.static.nonOrthThreshold 65 (C1 value; the
-                    default stays 85, D-047/D-051). T4a, T4b, T5
+                    default stays 85, D-047/D-051)
        E-algPair    blockGAMG agglomerator algebraicPair (C4; the templates'
                     agglomerationWeights combined is replaced by pressure,
-                    which algebraicPair means). T4a, T4b, T5
-       E-sfd        coupled.sfd.enabled yes (C3, T3 only). T3-SST, T3-GEKO
+                    which algebraicPair means)
+       E-noSFD      coupled.sfd.enabled no: the T3 template enables SFD
+                    (D-058), so the variant is SFD OFF (was E-sfd = "SFD on",
+                    a no-op on T3)
        E-eta07      etaMax 0.7 with minIter 2 ("solve loosely, iterate
-                    often"). T2, T4b, T5
-    T4a is in the scope of the heavy-case variants because every change is
-    tried on T4a before T4b (user rule, 2026-09-22).
-Configurations with a scope run only on the cases of their scope unless
---no-scope is given.
+                    often")
+Scope (CONFIG_SCOPE, D-063): most configurations on the light cases T1,
+T2, T3-SST, T3-GEKO; T4a only A, B, C, H; T4b only C; T5 none. The heavy
+cases run one repeat (MAX_REPEATS, D-059). E-nonOrth60/65 change only the
+static remediation of badly non-orthogonal cells, which exist on the
+snappyHexMesh meshes only; with the heavy cases restricted by D-063 their
+scope is empty (run them with --no-scope). --no-scope runs every
+requested configuration on every requested case with --repeats repeats.
 
 Timing. Every rank of every application started through the case's runApp
 hook runs under bench/rank_wrapper.sh (/usr/bin/time -v). For coupledFoam
@@ -144,38 +157,73 @@ CASES = {
            "oscillatory": True, "statWindow": 400},
 }
 
-# Amendment C7: variants of configuration E, one change each (foamDictionary
-# sets on top of E; missing sub-dictionaries are created by
-# cflib.case.set_entry)
+GAMG = "solvers.coupled.blockGAMG"
+
+# coupledFoam configurations (D-068): fvSolution sets on top of the case
+# template (missing sub-dictionaries are created by cflib.case.set_entry).
+# C is the template itself: since D-043 every template runs a V-cycle with
+# autoTune off.
+COUPLED_CONFIGS = {
+    "C": {},
+    "D": {"solvers.coupled.preconditioner": "blockDiagonal"},
+    "F": {"solvers.coupled.adaptiveRelTol": "no"},
+    "G": {"coupled.anderson.enabled": "yes"},
+    # fixed K-cycle: the B10 cycle comparison against C (V-cycle)
+    "H": {f"{GAMG}.cycleType": "K", f"{GAMG}.autoTune": "no"},
+    # K-cycle with the autoTune controller: the pre-D-043 default
+    "H-tune": {f"{GAMG}.cycleType": "K", f"{GAMG}.autoTune": "yes"},
+}
+
+# Amendment C7: variants of the defaults C, one change each (named E-* since
+# they were variants of the then-distinct V-cycle configuration E)
 E_VARIANTS = {
     "E-rcScalar": {"coupled.rhieChow.tensorial": "no"},
     "E-nonOrth60": {"coupled.remediation.static.nonOrthThreshold": 60},
     "E-nonOrth65": {"coupled.remediation.static.nonOrthThreshold": 65},
-    "E-algPair": {"solvers.coupled.blockGAMG.agglomerator": "algebraicPair",
-                  "solvers.coupled.blockGAMG.agglomerationWeights":
-                  "pressure"},
-    "E-sfd": {"coupled.sfd.enabled": "yes"},
+    "E-algPair": {f"{GAMG}.agglomerator": "algebraicPair",
+                  f"{GAMG}.agglomerationWeights": "pressure"},
+    # the T3 template enables SFD (D-058): the variant switches it OFF
+    "E-noSFD": {"coupled.sfd.enabled": "no"},
     "E-eta07": {"solvers.coupled.etaMax": 0.7,
                 "solvers.coupled.minIter": 2},
 }
 
-CONFIGS = ("A", "B", "C", "D", "E", "F", "G", "H") + tuple(E_VARIANTS)
+CONFIGS = ("A", "B") + tuple(COUPLED_CONFIGS) + tuple(E_VARIANTS)
 NATIVE_CONFIGS = frozenset({"A", "B"})
+# Names accepted on the command line for a configuration of another name:
+# the old E (fixed V-cycle, autoTune no) is the template default C since
+# D-043
+CONFIG_ALIASES = {"E": "C"}
 
-# B10 case scoping (default when E, F, G, H are requested)
+LIGHT_CASES = frozenset({"T1", "T2", "T3-SST", "T3-GEKO"})
+
+# Case scope of every configuration (D-063: most configurations on the light
+# cases; T4a only A, B, C, H; T4b only C; T5 none). --no-scope overrides.
 CONFIG_SCOPE = {
-    "E": frozenset({"T2", "T4b", "T5"}),
-    "F": frozenset({"T1", "T3-SST"}),
-    "G": frozenset({"T1", "T3-SST"}),
-    "H": frozenset({"T2", "T4b", "T5"}),
-    # C7 E variants (C1/C4 name T4b/T5; C3 names T3)
-    "E-rcScalar": frozenset({"T2", "T4b", "T5"}),
-    "E-nonOrth60": frozenset({"T4a", "T4b", "T5"}),
-    "E-nonOrth65": frozenset({"T4a", "T4b", "T5"}),
-    "E-algPair": frozenset({"T4a", "T4b", "T5"}),
-    "E-sfd": frozenset({"T3-SST", "T3-GEKO"}),
-    "E-eta07": frozenset({"T2", "T4b", "T5"}),
+    "A": LIGHT_CASES | {"T4a"},
+    # T1: B == A (the pitzDaily tutorial is SIMPLEC with p unrelaxed and
+    # U, k, omega 0.9), so B would repeat A
+    "B": frozenset({"T2", "T3-SST", "T3-GEKO", "T4a"}),
+    "C": LIGHT_CASES | {"T4a", "T4b"},
+    "D": LIGHT_CASES,
+    "F": frozenset({"T1", "T3-SST"}),          # B10
+    "G": frozenset({"T1", "T3-SST"}),          # B10
+    "H": LIGHT_CASES | {"T4a"},
+    "H-tune": frozenset({"T1", "T2"}),
+    # D-063: the detailed variants on a few cases only (T2 was in the C7
+    # scope of all of them; the heavy cases are restricted)
+    "E-rcScalar": frozenset({"T2"}),
+    # static remediation thresholds: only the snappyHexMesh meshes have such
+    # cells, and D-063 restricts the heavy cases
+    "E-nonOrth60": frozenset(),
+    "E-nonOrth65": frozenset(),
+    "E-algPair": frozenset({"T2"}),
+    "E-noSFD": frozenset({"T3-SST", "T3-GEKO"}),   # SFD is on only in T3
+    "E-eta07": frozenset({"T2"}),
 }
+
+# Repeats of the heavy cases (D-059: one); the light cases use --repeats
+MAX_REPEATS = {"T4a": 1, "T4b": 1, "T5": 1}
 
 # Per-case overrides of a configuration (foamDictionary sets).
 # A must be the tutorial settings: the airFoil2D tutorial is plain SIMPLE
@@ -233,7 +281,8 @@ B10_MAX_SLOWDOWN = 0.05
 B10_MONITOR_TOL = 1e-4
 
 # Bump when the harness changes how a run is set up or evaluated
-HARNESS_VERSION = 3
+# (4: D-068 - common wake window, configurations redefined, failed runs)
+HARNESS_VERSION = 4
 
 RELAX_B = """// Benchmark configuration B: SIMPLEC, p 1.0 / U 0.9 / k,omega 0.9
 relaxationFactors
@@ -254,13 +303,28 @@ relaxationFactors
 def solver_of(cfg: str) -> str:
     if cfg not in CONFIGS:
         raise ValueError(f"unknown configuration {cfg!r} "
-                         f"(known: {','.join(CONFIGS)})")
+                         f"(known: {','.join(CONFIGS)}; aliases: "
+                         f"{', '.join(f'{a}={b}' for a, b in CONFIG_ALIASES.items())})")
     return "simpleFoam" if cfg in NATIVE_CONFIGS else "coupledFoam"
 
 
 def in_scope(name: str, cfg: str) -> bool:
     scope = CONFIG_SCOPE.get(cfg)
     return scope is None or name in scope
+
+
+def resolve_configs(cfgs: list[str]) -> tuple[list[str], list[str]]:
+    """Configuration names with aliases replaced (E -> C), duplicates
+    removed in order; returns (names, notes about the aliases)."""
+    out, notes = [], []
+    for c in cfgs:
+        if c in CONFIG_ALIASES:
+            notes.append(f"configuration {c} is an alias of "
+                         f"{CONFIG_ALIASES[c]} (D-068: identical since D-043)")
+            c = CONFIG_ALIASES[c]
+        if c not in out:
+            out.append(c)
+    return out, notes
 
 
 def config_sets(cfg: str, spec: dict, name: str | None = None
@@ -283,21 +347,8 @@ def config_sets(cfg: str, spec: dict, name: str | None = None
             "coupled.convergence.residualTol": 0,
             "coupled.convergence.forceCoeffsWindow": 10 * n,
         }
-        if cfg == "D":
-            fv["solvers.coupled.preconditioner"] = "blockDiagonal"
-            # the K-cycle needs FGMRES; blockDiagonal is a fixed operator
-        if cfg == "E" or cfg in E_VARIANTS:
-            # fixed V-cycle: autoTune would promote V -> F -> W (6.3.5)
-            fv["solvers.coupled.blockGAMG.cycleType"] = "V"
-            fv["solvers.coupled.blockGAMG.autoTune"] = "no"
+        fv.update(COUPLED_CONFIGS.get(cfg, {}))
         fv.update(E_VARIANTS.get(cfg, {}))
-        if cfg == "F":
-            fv["solvers.coupled.adaptiveRelTol"] = "no"
-        if cfg == "G":
-            fv["coupled.anderson.enabled"] = "yes"
-        if cfg == "H":
-            # fixed K-cycle reference for E
-            fv["solvers.coupled.blockGAMG.autoTune"] = "no"
         sets["system/fvSolution"] = fv
     for fname, entries in CASE_OVERRIDES.get((name, cfg), {}).items():
         sets.setdefault(fname, {}).update(entries)
@@ -324,6 +375,38 @@ def config_hash(name: str, cfg: str) -> str:
                                                      name)
     blob = json.dumps(d, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()[:12]
+
+
+def effective_settings(name: str, cfg: str) -> dict:
+    """The normalised solver settings a run of (case, configuration)
+    actually uses: the template dictionaries with the configuration's sets
+    applied (tests/cflib/foamdict, no OpenFOAM needed). coupledFoam: the
+    solvers.coupled and coupled dictionaries of fvSolution; simpleFoam:
+    SIMPLE.consistent, the relaxation factors (p unrelaxed = 1) and the
+    potentialFoam start. Two configurations with equal effective settings
+    on a case are the same run (review C2)."""
+    from cflib import foamdict  # noqa: PLC0415
+    spec = CASES[name]
+    tdir = cfcase.CASES / spec["template"] / "system"
+    solver, sets, files = config_sets(cfg, spec, name)
+    fvs = foamdict.read(tdir / "fvSolution")
+    for entry, value in sets.get("system/fvSolution", {}).items():
+        foamdict.set_dotted(fvs, entry, str(value))
+    if solver == "coupledFoam":
+        eff = {"solvers.coupled": foamdict.get(fvs, "solvers.coupled", {}),
+               "coupled": foamdict.get(fvs, "coupled", {})}
+    else:
+        text = (files.get("system/relaxation.simpleFoam")
+                or (tdir / "relaxation.simpleFoam").read_text())
+        relax = foamdict.parse(text).get("relaxationFactors", {})
+        fields = dict(relax.get("fields") or {})
+        fields.setdefault("p", "1")          # no factor: p is not relaxed
+        eff = {"consistent": foamdict.get(fvs, "SIMPLE.consistent", "no"),
+               "fields": fields, "equations": dict(relax.get("equations")
+                                                   or {}),
+               "potentialStart": str(cfg == "A"
+                                     and name in NATIVE_POTENTIAL_CASES)}
+    return {"solver": solver, **foamdict.normalise(eff)}
 
 
 def is_current(rec: dict) -> bool:
@@ -1040,18 +1123,21 @@ def _rel(a, b):
 
 
 def b10_evaluate(table: list[dict]) -> list[dict]:
-    """Amendment B10 comparisons against configuration C, wall and CPU-hours.
+    """Amendment B10 comparisons against configuration C, wall and CPU-hours
+    (configurations of D-068).
 
-    C vs E (V-cycle), C vs H (fixed K; H vs E is the clean cycle
-    comparison), C vs G (Anderson): deltas only, B10 gives no threshold.
-    C vs F (fixed relTol): pass if adaptive C is at most 5 % slower than F
+    H vs C: fixed K-cycle vs the default V-cycle (controller off in both):
+    the cycle comparison. H-tune vs C, and vs H (dWall_X_vs_H): the autoTune
+    controller. D (blockDiagonal), G (Anderson) and the E-* variants (one
+    change of the defaults each) vs C: deltas only, B10 gives no threshold.
+    F vs C (fixed relTol): pass if adaptive C is at most 5 % slower than F
     in wall time AND in CPU-hours, and the monitored quantity (Cd for force
     cases, dp for T1/T2) at the end of the fixed budget agrees to 1e-4
     (relative). Deltas are X/C - 1 (positive: X slower than C)."""
     by = {(t["case"], t["config"]): t for t in table}
     out = []
     for (case, cfg), t in sorted(by.items()):
-        if cfg not in ("E", "F", "G", "H") and cfg not in E_VARIANTS:
+        if cfg in NATIVE_CONFIGS or cfg == "C" or cfg not in CONFIGS:
             continue
         ref_cfg = "C"
         c = by.get((case, ref_cfg))
@@ -1095,20 +1181,14 @@ def b10_evaluate(table: list[dict]) -> list[dict]:
             row["criterion"] = "none (B10: report the delta)"
             row["pass"] = None
             row["status"] = "reported"
-        if cfg == "E":
+        if cfg == "H-tune":
+            # the controller alone: H-tune vs the fixed K-cycle H
             h = by.get((case, "H"))
             if h:
-                row["dWall_E_vs_H"] = _rel(t["wall_median"], h["wall_median"])
-                row["dCpu_E_vs_H"] = _rel(t["cpuh_median"], h["cpuh_median"])
-            row["cycleTypeFinal"] = t.get("cycleTypeFinal")
-        if cfg in E_VARIANTS:
-            # C7: the variant against plain E isolates its one change
-            e = by.get((case, "E"))
-            if e:
-                row["dWall_X_vs_E"] = _rel(t["wall_median"], e["wall_median"])
-                row["dCpu_X_vs_E"] = _rel(t["cpuh_median"], e["cpuh_median"])
-                row["iters_E"] = e["iters_median"]
-            row["cycleTypeFinal"] = t.get("cycleTypeFinal")
+                row["dWall_X_vs_H"] = _rel(t["wall_median"], h["wall_median"])
+                row["dCpu_X_vs_H"] = _rel(t["cpuh_median"], h["cpuh_median"])
+                row["iters_H"] = h["iters_median"]
+        row["cycleTypeFinal"] = t.get("cycleTypeFinal")
         out.append(row)
     return out
 
@@ -1150,8 +1230,8 @@ B10_FIELDS = [
     "case", "config", "reference", "status", "pass", "criterion",
     "wall_X", "wall_C", "dWall_X_vs_C", "cpuh_X", "cpuh_C", "dCpu_X_vs_C",
     "slowdownWall_C_vs_F", "slowdownCpu_C_vs_F", "monitor", "monitorRelDiff",
-    "dWall_E_vs_H", "dCpu_E_vs_H", "dWall_X_vs_E", "dCpu_X_vs_E",
-    "cycleTypeFinal", "iters_X", "iters_C", "iters_E"]
+    "dWall_X_vs_H", "dCpu_X_vs_H",
+    "cycleTypeFinal", "iters_X", "iters_C", "iters_H"]
 
 
 def summarise(names: list[str], cfgs: list[str]) -> Path:
@@ -1183,11 +1263,16 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cases", default="T1,T2,T3-SST,T3-GEKO")
     ap.add_argument("--configs", default=",".join(CONFIGS),
-                    help="E, F, G, H and the C7 E variants run only on "
-                         "their scope (see --no-scope)")
+                    help="every configuration runs only on the cases of "
+                         "its scope (CONFIG_SCOPE, D-063; see --no-scope); "
+                         "E is an alias of C")
     ap.add_argument("--no-scope", action="store_true",
-                    help="run E/F/G/H/E-* on every requested case")
-    ap.add_argument("--repeats", type=int, default=3)
+                    help="run every requested configuration on every "
+                         "requested case, with --repeats repeats also on "
+                         "the heavy cases")
+    ap.add_argument("--repeats", type=int, default=3,
+                    help="repeats (heavy cases: at most MAX_REPEATS, "
+                         "D-059, unless --no-scope)")
     ap.add_argument("--np", type=int, default=0,
                     help="ranks (0: the case default)")
     ap.add_argument("--force", action="store_true", help="rerun existing")
@@ -1200,21 +1285,28 @@ def main() -> int:
         for k, v in CASES.items():
             cf = [c for c in CONFIGS if in_scope(k, c)]
             print(f"{k:8s} {v['template']:26s} np={v['np']} "
-                  f"monitor={v['monitor']} configs={','.join(cf)}")
+                  f"monitor={v['monitor']} "
+                  f"repeats<={MAX_REPEATS.get(k, a.repeats)} "
+                  f"configs={','.join(cf) or '-'}")
         return 0
     names = [n for n in a.cases.split(",") if n]
-    cfgs = [c for c in a.configs.split(",") if c]
+    cfgs, alias_notes = resolve_configs([c for c in a.configs.split(",") if c])
+    for s in alias_notes:
+        print(s)
     for n in names:
         if n not in CASES:
             ap.error(f"unknown case {n!r} (known: {','.join(CASES)})")
     for c in cfgs:
         if c not in CONFIGS:
-            ap.error(f"unknown configuration {c!r} (known: {','.join(CONFIGS)})")
+            ap.error(f"unknown configuration {c!r} (known: {','.join(CONFIGS)}"
+                     f"; aliases {CONFIG_ALIASES})")
     if not a.summary_only:
         cfenv.foam_env()
         for name in names:
             nprocs = a.np or CASES[name]["np"]
-            for run in range(1, a.repeats + 1):
+            repeats = (a.repeats if a.no_scope
+                       else min(a.repeats, MAX_REPEATS.get(name, a.repeats)))
+            for run in range(1, repeats + 1):
                 for cfg in cfgs:
                     if not a.no_scope and not in_scope(name, cfg):
                         continue
