@@ -185,6 +185,12 @@ constexpr doubleScalar nutMaxFactor = 1e8;
 constexpr label forceCoeffsWindow = 100;
 constexpr doubleScalar forceCoeffsTol = 0.002;
 constexpr doubleScalar residualTol = 1e-6;
+// Stationary-mean (drift) rule of the force coefficients (D-045 b, the rule
+// of D-042): off by default (tolerance 0); absolute floor of the allowed
+// half-window mean drift. The statistics window forceCoeffsRmsWindow
+// defaults to forceCoeffsWindow.
+constexpr doubleScalar forceCoeffsDriftTol = 0;
+constexpr doubleScalar forceCoeffsDriftAbs = 0.005;
 
 // Anderson acceleration (amendment B5)
 constexpr bool andersonEnabled = false;
@@ -209,6 +215,10 @@ constexpr label diagLevel = 0;                   // 0 = off
 constexpr label diagMaxLevel = 3;
 constexpr bool diagEcho = false;
 constexpr std::int64_t diagMaxBytes = 2147483648LL;  // 2 GiB per rank
+// Up-leg GAMG level norms at level 2: "first" preconditioner application of
+// each linear solve only (they cost two extra residuals per level visit),
+// or "all"; level 3 always logs all (D-045)
+constexpr const char* diagUpLeg = "first";
 // Phase classification (TASK 5.2)
 constexpr label diagStallWindow = 50;            // "stalled": no new min R
 constexpr doubleScalar diagAsymptoticResidualFactor = 100;  // R <= 100*tol

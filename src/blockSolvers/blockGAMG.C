@@ -1695,6 +1695,37 @@ void Foam::blockGAMG::smoothLogged
 }
 
 
+void Foam::blockGAMG::residualSums
+(
+    const label l,
+    const blockScalarUList& x,
+    const blockScalarUList& b,
+    reduceScalar& bb,
+    reduceScalar& rr
+) const
+{
+    const blockLduMatrix4& A = matrixLevel(l);
+    blockScalarList& r = r_[l];
+    A.Amul(r, x);
+
+    const label n = A.nRows();
+    blockScalar* __restrict__ rPtr = r.data();
+    const blockScalar* __restrict__ bPtr = b.cdata();
+    reduceScalar sb = 0;
+    reduceScalar sr = 0;
+    #pragma omp simd reduction(+:sb, sr)
+    for (label i = 0; i < n; ++i)
+    {
+        const blockScalar ri = bPtr[i] - rPtr[i];
+        rPtr[i] = ri;
+        sb += toDouble(bPtr[i])*toDouble(bPtr[i]);
+        sr += toDouble(ri)*toDouble(ri);
+    }
+    bb = sb;
+    rr = sr;
+}
+
+
 Foam::doubleScalar Foam::blockGAMG::residualNorm
 (
     const label l,
@@ -1703,11 +1734,12 @@ Foam::doubleScalar Foam::blockGAMG::residualNorm
 ) const
 {
     const doubleScalar t0 = diagnostics::clock();
-    const blockLduMatrix4& A = matrixLevel(l);
-    A.residual(r_[l], x, b);
-    const doubleScalar nrm = doubleReduce::norm2(r_[l], A.comm());
+    reduceScalar s2[2] = {0, 0};
+    residualSums(l, x, b, s2[0], s2[1]);
+    const reduceScalar rr =
+        doubleReduce::parSum(s2[1], matrixLevel(l).comm());
     diag_->addDiagTime(diagnostics::clock() - t0);
-    return nrm;
+    return std::sqrt(rr);
 }
 
 
@@ -1839,21 +1871,22 @@ void Foam::blockGAMG::cycle
         }
     }
 
-    A.residual(r_[l], x, b);
-
     if (d2)
     {
-        // ||b|| (x = 0 before smoothing) and ||r|| after, one reduction
+        // The residual of the cycle with ||b|| (x = 0 before smoothing) and
+        // ||r|| in the same pass, one reduction; r_[l] is bit-identical to
+        // A.residual. Only the reduction counts as diagnostics time.
+        reduceScalar s2[2] = {0, 0};
+        residualSums(l, x, b, s2[0], s2[1]);
         const doubleScalar t0 = diagnostics::clock();
-        reduceScalar s2[2] =
-        {
-            doubleReduce::localSumSqr(b),
-            doubleReduce::localSumSqr(r_[l])
-        };
         doubleReduce::parSum(s2, 2, A.comm());
         preBefore = std::sqrt(s2[0]);
         preAfter = std::sqrt(s2[1]);
         diag_->addDiagTime(diagnostics::clock() - t0);
+    }
+    else
+    {
+        A.residual(r_[l], x, b);
     }
 
     // Collective within the group if level l+1 is processor-agglomerated
@@ -1935,8 +1968,11 @@ void Foam::blockGAMG::cycle
         prolongAdd(l, ec, x);
     }
 
-    // r_[l] is free from here on (scratch of the diagnostics norms)
-    const doubleScalar postBefore = (d2 ? residualNorm(l, x, b) : 0);
+    // r_[l] is free from here on (scratch of the diagnostics norms). The
+    // up-leg norms cost two residuals: first application of a solve only
+    // unless upLeg all or level 3 (diagnostics::upLeg)
+    const bool dUp = d2 && diag_->upLeg();
+    const doubleScalar postBefore = (dUp ? residualNorm(l, x, b) : 0);
 
     if (nPost > 0)
     {
@@ -1954,14 +1990,18 @@ void Foam::blockGAMG::cycle
     {
         const doubleScalar postAfter =
         (
-            postSweeps.size()
-          ? postSweeps.last()
-          : (nPost > 0 ? residualNorm(l, x, b) : postBefore)
+            !dUp
+          ? 0
+          : (
+                postSweeps.size()
+              ? postSweeps.last()
+              : (nPost > 0 ? residualNorm(l, x, b) : postBefore)
+            )
         );
         const doubleScalar t0 = diagnostics::clock();
         diag_->levelVisit
         (
-            l, preBefore, preAfter, postBefore, postAfter,
+            l, preBefore, preAfter, dUp, postBefore, postAfter,
             preSweeps, postSweeps
         );
         diag_->addDiagTime(diagnostics::clock() - t0);

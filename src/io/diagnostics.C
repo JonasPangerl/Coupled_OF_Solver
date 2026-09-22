@@ -356,6 +356,7 @@ Foam::diagnostics::diagnostics(const dictionary& coupledDict)
     level_(coupledDefaults::diagLevel),
     echo_(coupledDefaults::diagEcho),
     maxBytes_(coupledDefaults::diagMaxBytes),
+    upLegAll_(false),
     file_(),
     os_(),
     bytes_(0),
@@ -384,6 +385,14 @@ Foam::diagnostics::diagnostics(const dictionary& coupledDict)
     echo_ = d.getOrDefault<bool>("echo", coupledDefaults::diagEcho);
     maxBytes_ =
         d.getOrDefault<std::int64_t>("maxBytes", coupledDefaults::diagMaxBytes);
+    const word upLeg(d.getOrDefault<word>("upLeg", coupledDefaults::diagUpLeg));
+    if (upLeg != "first" && upLeg != "all")
+    {
+        FatalIOErrorInFunction(d)
+            << "coupled.diagnostics.upLeg must be first or all, not " << upLeg
+            << exit(FatalIOError);
+    }
+    upLegAll_ = (upLeg == "all");
 
     if (level_ < 0 || level_ > coupledDefaults::diagMaxLevel)
     {
@@ -572,6 +581,7 @@ void Foam::diagnostics::levelVisit
     const label l,
     const doubleScalar preBefore,
     const doubleScalar preAfter,
+    const bool up,
     const doubleScalar postBefore,
     const doubleScalar postAfter,
     const UList<doubleScalar>& preSweeps,
@@ -589,11 +599,18 @@ void Foam::diagnostics::levelVisit
     diagJson::appendNumber(s, preBefore);
     s += ',';
     diagJson::appendNumber(s, preAfter);
-    s += "],\"post\":[";
-    diagJson::appendNumber(s, postBefore);
-    s += ',';
-    diagJson::appendNumber(s, postAfter);
-    s += ']';
+    if (up)
+    {
+        s += "],\"post\":[";
+        diagJson::appendNumber(s, postBefore);
+        s += ',';
+        diagJson::appendNumber(s, postAfter);
+        s += ']';
+    }
+    else
+    {
+        s += "],\"post\":null";
+    }
 
     auto list = [&s](const char* k, const UList<doubleScalar>& v)
     {

@@ -72,20 +72,23 @@ def _get(rec: dict, path: str):
     return cur
 
 
-def _set_diag(case, level: int) -> None:
+def _set(case, entry: str, value) -> None:
+    """foamDictionary -disableFunctionEntries -set on system/fvSolution"""
     subprocess.run(
-        ["foamDictionary", "-disableFunctionEntries", "-entry",
-         "coupled/diagnostics", "-set", f"{{ level {level}; }}",
-         "system/fvSolution"],
+        ["foamDictionary", "-disableFunctionEntries", "-entry", entry,
+         "-set", str(value), "system/fvSolution"],
         cwd=case, check=True, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
 
 
+def _set_diag(case, level: int) -> None:
+    _set(case, "coupled/diagnostics", f"{{ level {level}; }}")
+
+
 def _run(name: str, nprocs: int, level: int | None):
-    case = cfcase.prepare("T0_cavity", name, {
-        "system/fvSolution": {"coupled.maxIter": MAX_ITERS},
-    })
+    case = cfcase.prepare("T0_cavity", name)
+    _set(case, "coupled/maxIter", MAX_ITERS)
     if level is not None:
         _set_diag(case, level)
     rc = cfcase.allrun(case, ["-solver", "coupledFoam", "-Re", "100",
@@ -195,3 +198,84 @@ def test_diagnostics(foam, nprocs):
     results.write("tests", f"diagnostics_np{nprocs}", rec)
     if nprocs == 1:
         assert same, "diagnostics changed the solver trajectory (CF| lines)"
+
+
+# * * * * * * * * * * Force-coefficient window statistics * * * * * * * * * //
+# (D-045 b: window mean/RMS on the CF| line, in the diagnostics record and in
+# summary.json; optional drift stop rule, off by default)
+
+FORCE_ITERS = 30
+RESTART_ITERS = 5
+
+
+@pytest.mark.unit
+def test_convergence_monitor_unit(foam, tmp_path):
+    """Synthetic sequences: RMS 0 / drift 0 exactly for a constant, RMS of
+    a sinusoid, drift rule on/off, ramp, restart round trip."""
+    out = tmp_path / "cm.json"
+    rc = cfenv.run(["Test-convergenceMonitor", "-json", str(out)],
+                   cwd=tmp_path, log=tmp_path / "cm.log")
+    data = json.loads(out.read_text()) if out.exists() else {}
+    data["rc"] = rc
+    results.write("tests", "Test-convergenceMonitor", data)
+    assert rc == 0 and data.get("pass"), (tmp_path / "cm.log").read_text()
+
+
+@pytest.mark.case
+def test_force_stats(foam):
+    """T3 airFoil2D (kOmegaSST, forceCoeffs), np1, 30 iterations and a
+    restart to 35: CdMean/CdRms/ClMean/ClRms on every CF| line (appended
+    after Cl), the forces block in the diagnostics record, forceStats and
+    forceHistory in summary.json; the window continues across the
+    restart."""
+    case = cfcase.prepare("T3_airFoil2D", "diag_T3_forces")
+    _set(case, "coupled/maxIter", FORCE_ITERS)
+    _set_diag(case, 1)
+    args = ["-solver", "coupledFoam", "-turbulence", "kOmegaSST", "-np", "1"]
+    rc = cfcase.allrun(case, args, fpe=True, extra_env={"CF_MPI_BIND": "none"})
+    assert rc == 0, "coupledFoam failed"
+
+    rows = logs.parse_cf(case / "log.coupledFoam")
+    assert len(rows) == FORCE_ITERS
+    # The forceCoeffs result of iteration k is first available to the
+    # monitor in iteration k+1: rows with Cd carry the statistics
+    rows = [r for r in rows if "Cd" in r]
+    assert len(rows) >= FORCE_ITERS - 1
+    keys = ["CdMean", "CdRms", "ClMean", "ClRms"]
+    for r in rows:
+        for k in keys:
+            assert isinstance(r.get(k), (int, float)), (k, r)
+        assert r["CdRms"] >= 0 and r["ClRms"] >= 0
+    # appended at the end: the existing fields keep their order
+    line = [ln for ln in (case / "log.coupledFoam").read_text().splitlines()
+            if ln.startswith("CF|")][-1]
+    toks = [t.split("=")[0] for t in line.split()[1:]]
+    assert toks.index("Cl") < toks.index("CdMean") and toks[-1].endswith("Rms")
+
+    summ = logs.coupled_summary(case)
+    fs, fh = summ.get("forceStats"), summ.get("forceHistory")
+    assert fs and fh, "summary.json without forceStats/forceHistory"
+    assert fs["driftEnabled"] is False
+    assert len(fh["iter"]) == len(rows) == len(fh["CdMean"]) == len(fh["ClRms"])
+    assert abs(fs["Cd"]["mean"] - rows[-1]["CdMean"]) <= 1e-5 * abs(fs["Cd"]["mean"])
+
+    recs = [r for r in diag_tools.records(case)[0] if r["forces"]]
+    n_samples = [r["forces"]["Cd"]["n"] for r in recs]
+    assert n_samples == list(range(1, len(rows) + 1)), n_samples
+
+    # restart: the statistics window continues (restored samples + new)
+    _set(case, "coupled/maxIter", FORCE_ITERS + RESTART_ITERS)
+    rc2 = cfcase.allrun(case, args + ["-restart"], fpe=True,
+                        extra_env={"CF_MPI_BIND": "none"})
+    assert rc2 == 0, "restart failed"
+    recs = diag_tools.records(case)[0]
+    first = [r for r in recs if r["iter"] == FORCE_ITERS + 1][0]
+    n_restart = first["forces"]["Cd"]["n"]
+    # all samples of the first part were restored, plus the new one
+    ok = n_restart == n_samples[-1] + 1
+    results.write("tests", "diagnostics_force_stats", {
+        "rows": len(rows), "finalForceStats": fs,
+        "nBeforeRestart": n_samples[-1], "nAfterRestart": n_restart,
+        "pass": ok,
+    })
+    assert ok, (n_samples[-1], n_restart)

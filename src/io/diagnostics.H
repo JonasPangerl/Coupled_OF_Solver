@@ -16,6 +16,9 @@ Description
         maxBytes  bytes per rank  (default 2 GiB; when exceeded one final
                                    truncation record is written and logging
                                    stops, the run continues)
+        upLeg     first | all     (default first: level-2 up-leg GAMG norms
+                                   on the first preconditioner application
+                                   of each solve only; level 3: all)
 
     Output (level >= 1): <case>/diagnostics/diag.rank<N>.jsonl, one JSON
     object per line (JSON Lines), numbers with max_digits10, flushed once per
@@ -28,8 +31,11 @@ Description
            timings, GAMG hierarchy, memory, phase)
         2  + per linear solve: Krylov residual history, true residual at
            every restart, per preconditioner application the per-level
-           residual norms (down and up legs), coarsest-level its/residual,
-           K-cycle GCR values, rhoOpt of the first application
+           residual norms of the down leg (before/after pre-smoothing) and,
+           for the first application of each solve (upLeg first, default)
+           or all (upLeg all), of the up leg (before/after post-smoothing),
+           coarsest-level its/residual, K-cycle GCR values, rhoOpt of the
+           first application
         3  + per smoother sweep residual norms, per-level operator stats on
            set-up, line-search trial violations, per-patch inflow/outflow
            flips, Anderson internals
@@ -159,6 +165,10 @@ class diagnostics
         bool echo_;
         std::int64_t maxBytes_;
 
+        //- Up-leg level norms on every application (else the first of
+        //  each solve only; level 3: always every application)
+        bool upLegAll_;
+
         //- Output file of this rank
         fileName file_;
         std::ofstream os_;
@@ -244,6 +254,13 @@ public:
         label level() const noexcept { return level_; }
         bool active(const label l) const noexcept { return level_ >= l; }
         bool echo() const noexcept { return echo_; }
+
+        //- Log the up-leg (post-smoothing) level norms in the current
+        //  preconditioner application
+        bool upLeg() const noexcept
+        {
+            return level_ >= 3 || upLegAll_ || nApps_ == 0;
+        }
         bool truncated() const noexcept { return truncated_; }
         const fileName& file() const noexcept { return file_; }
 
@@ -305,13 +322,14 @@ public:
 
             //- One visit of level l in a cycle: residual norm before and
             //  after pre-smoothing (down leg), before and after
-            //  post-smoothing (up leg); per-sweep norms (level 3, may be
-            //  empty)
+            //  post-smoothing (up leg, if up: see upLeg()); per-sweep norms
+            //  (level 3, may be empty)
             void levelVisit
             (
                 const label l,
                 const doubleScalar preBefore,
                 const doubleScalar preAfter,
+                const bool up,
                 const doubleScalar postBefore,
                 const doubleScalar postAfter,
                 const UList<doubleScalar>& preSweeps,

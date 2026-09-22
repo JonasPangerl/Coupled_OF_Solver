@@ -381,6 +381,18 @@ private:
             DynamicList<doubleScalar>& norms
         ) const;
 
+        //- r_[l] = b - A_l x (the same float operations as
+        //  blockLduMatrix4::residual) and, in the same pass, the local sums
+        //  of squares of b and r (diagnostics; no reduction)
+        void residualSums
+        (
+            const label l,
+            const blockScalarUList& x,
+            const blockScalarUList& b,
+            reduceScalar& bb,
+            reduceScalar& rr
+        ) const;
+
         //- Residual norm ||b - A_l x|| via the scratch r_[l] (collective
         //  on the level communicator; diagnostics only)
         doubleScalar residualNorm

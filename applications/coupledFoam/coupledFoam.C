@@ -61,6 +61,7 @@ Description
 #include "SolverPerformance.H"
 #include "Pair.H"
 #include <algorithm>
+#include <limits>
 #include <vector>
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
@@ -446,6 +447,14 @@ int main(int argc, char *argv[])
 
     auto stateDict = [&]() -> dictionary
     {
+        // Entries are formatted with IOstream::defaultPrecision() when they
+        // are created (6 digits by default): round-trip precision here, or
+        // the restart scalars (CFL, R1, Uref, ...) are quantised before
+        // coupledState writes them with max_digits10 (D-034, D-045)
+        const unsigned oldPrecision = IOstream::defaultPrecision
+        (
+            std::numeric_limits<doubleScalar>::max_digits10
+        );
         dictionary st;
         st.set("iter", iter);
         st.set("startupDone", startupDone);
@@ -463,6 +472,7 @@ int main(int argc, char *argv[])
         }
         // Anderson history deliberately not part of the state (D-026)
         st.set("refinementHistory", labelList());
+        IOstream::defaultPrecision(oldPrecision);
         return st;
     };
 
@@ -511,6 +521,12 @@ int main(int argc, char *argv[])
         }
         return nCapped;
     };
+
+    // Force-coefficient window statistics per iteration (summary.json)
+    DynamicList<label> forceHistIter;
+    List<DynamicList<doubleScalar>> forceHistMean(3);
+    List<DynamicList<doubleScalar>> forceHistRms(3);
+    List<DynamicList<doubleScalar>> forceHistDrift(3);
 
     label nCflCutsTotal = 0;
     label linFails = 0;
@@ -1052,6 +1068,19 @@ int main(int argc, char *argv[])
         if (conv.haveForces())
         {
             Info<< " Cd=" << conv.Cd() << " Cl=" << conv.Cl();
+            // Window mean and RMS fluctuation (D-045 b), appended at the end
+            // so that existing parsers of the CF| line keep working
+            forceHistIter.append(iter);
+            for (label ci = 0; ci < conv.nCoeffs(); ++ci)
+            {
+                const convergenceMonitor::coeffStats st = conv.stats(ci);
+                const char* cn = convergenceMonitor::coeffName(ci);
+                Info<< ' ' << cn << "Mean=" << st.mean
+                    << ' ' << cn << "Rms=" << st.rms;
+                forceHistMean[ci].append(st.mean);
+                forceHistRms[ci].append(st.rms);
+                forceHistDrift[ci].append(st.drift);
+            }
         }
         Info<< endl;
 
@@ -1185,6 +1214,30 @@ int main(int argc, char *argv[])
             j.add("nNutCapped", nNutCapped);
             j.add("nClamped", nClamped);
             j.endObject();
+
+            if (conv.haveForces())
+            {
+                j.beginObject("forces");
+                j.add("window", conv.rmsWindow());
+                j.add("driftEnabled", conv.driftEnabled());
+                j.add("driftConverged", conv.driftConverged());
+                for (label ci = 0; ci < conv.nCoeffs(); ++ci)
+                {
+                    const convergenceMonitor::coeffStats st = conv.stats(ci);
+                    j.beginObject(convergenceMonitor::coeffName(ci));
+                    j.add("last", doubleScalar(conv.last(ci)));
+                    j.add("mean", doubleScalar(st.mean));
+                    j.add("rms", doubleScalar(st.rms));
+                    j.add("drift", doubleScalar(st.drift));
+                    j.add("n", st.n);
+                    j.endObject();
+                }
+                j.endObject();
+            }
+            else
+            {
+                j.addNull("forces");
+            }
 
             {
                 const coupledAssembler::timings& at = assembler.times();
@@ -1344,7 +1397,9 @@ int main(int argc, char *argv[])
         {
             converged = true;
             Info<< "coupledFoam: converged at iteration " << iter
-                << " (R " << R << ")" << endl;
+                << " (R " << R << ")"
+                << (conv.driftConverged() ? ", force-coefficient drift rule" : "")
+                << endl;
             // As native solvers: write, end, and let runTime.loop() run the
             // function objects for the final state
             runTime.writeAndEnd();
@@ -1411,6 +1466,39 @@ int main(int argc, char *argv[])
         {
             j.add("Cd", conv.Cd());
             j.add("Cl", conv.Cl());
+
+            // Window statistics (D-045 b): final values and histories
+            diagJson fs;
+            fs.beginObject();
+            fs.add("window", conv.rmsWindow());
+            fs.add("driftEnabled", conv.driftEnabled());
+            fs.add("driftConverged", conv.driftConverged());
+            for (label ci = 0; ci < conv.nCoeffs(); ++ci)
+            {
+                const convergenceMonitor::coeffStats st = conv.stats(ci);
+                fs.beginObject(convergenceMonitor::coeffName(ci));
+                fs.add("last", doubleScalar(conv.last(ci)));
+                fs.add("mean", doubleScalar(st.mean));
+                fs.add("rms", doubleScalar(st.rms));
+                fs.add("drift", doubleScalar(st.drift));
+                fs.add("n", st.n);
+                fs.endObject();
+            }
+            fs.endObject();
+            j.addRaw("forceStats", fs.str());
+
+            diagJson fh;
+            fh.beginObject();
+            fh.addList("iter", forceHistIter);
+            for (label ci = 0; ci < conv.nCoeffs(); ++ci)
+            {
+                const std::string cn(convergenceMonitor::coeffName(ci));
+                fh.addList((cn + "Mean").c_str(), forceHistMean[ci]);
+                fh.addList((cn + "Rms").c_str(), forceHistRms[ci]);
+                fh.addList((cn + "Drift").c_str(), forceHistDrift[ci]);
+            }
+            fh.endObject();
+            j.addRaw("forceHistory", fh.str());
         }
         if (tuner)
         {

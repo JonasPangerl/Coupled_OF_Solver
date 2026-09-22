@@ -204,7 +204,8 @@ def level_reduction(case, rank: int = 0) -> pd.DataFrame:
     """Iteration x level: geometric mean over all visits of the level in
     all preconditioner applications of the iteration of
     ||r after post-smoothing|| / ||b|| (the reduction the cycle achieved on
-    that level). Needs level >= 2."""
+    that level). Needs level >= 2; with upLeg first (default) only the
+    first application of each solve carries the up leg."""
     rows = {}
     for r in records(case).get(rank, []):
         if "linear" not in r:
@@ -213,6 +214,8 @@ def level_reduction(case, rank: int = 0) -> pd.DataFrame:
         for s in r["linear"]:
             for app in s["precon"]:
                 for v in app["levels"]:
+                    if not v.get("post"):
+                        continue    # up leg not logged (upLeg first)
                     b, a = v["pre"][0], v["post"][1]
                     if b and a is not None and b > 0 and a > 0:
                         acc.setdefault(v["l"], []).append(math.log10(a / b))
