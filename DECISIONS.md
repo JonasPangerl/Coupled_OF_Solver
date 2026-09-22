@@ -1796,3 +1796,87 @@ for SP to be built and tested against the maximum precision available.
   switchable and tunable in the case dictionaries (D-061 follow-up).
 - Every setting that may need changing must be a run-time keyword, not a
   compile-time constant.
+
+## D-069 - Solver-source review fixes F1-F10, F12 and FABLE 5 (branch solver-fix, 2026-09-22)
+
+A read-only review of src/ and coupledFoam (main 6acc150) found the defects
+below; each is fixed in its own commit on branch solver-fix. Tests at 1 rank
+unless stated, machine shared (load 20-32), so wall/CPU numbers are
+validation, not benchmark timings.
+
+| item | change | effect |
+|---|---|---|
+| F1 | `p.boundaryFieldRef().updateCoeffs()` before every assembleMomentum and before the restart phi check (as the native fvMatrix constructor for U) | mixed p conditions (freestreamPressure, inletOutlet) had their constructor valueFraction (zeroGradient) in the first assembly of every start and restart, and the flux update evaluated p_b with a valueFraction different from the solved row. Only T3 has a mixed p. |
+| F2 | `turbulence->validate()` on fresh starts only | nut of iteration 1 is the model's nut, not 0/nut; restarts keep the nut of the file (exactness) |
+| F3 | sentinel store/restore/check/lastValid for every turbulence field (registered AUTO_WRITE volScalarFields except p, or `sentinel.turbulenceFields`) | epsilon, nuTilda, ReThetat, gammaInt were ignored |
+| F4 | restart state carries the GAMG agglomeration (face weights of the matrix-weighted agglomeration, `gamgAggWeights`, and `gamgUpdates`), `linFails`, `consecutiveRollbacks`, `dynamicPending` | the restarted run rebuilt the hierarchy from another matrix on a shifted schedule |
+| F5 | restart files agreed over all ranks (`coupledState::presentOnAllRanks`, FatalError if the ranks disagree) | partial time directories gave rank-dependent collectives (hang) |
+| F6 | rollback restores the U and p boundary values verbatim | the far-field state after a rollback was neither n-1 nor the rejected step |
+| F7 | startupDone follows the D-048 probe decision; sfd.begin() not while probing | diagnostics/EW flag of iteration 1 only (SFD could not start early: begin() ran before the probe) |
+| F8 | residual == 0 is converged (blockSolver::converged) | zero right-hand side gave 0/0 in BiCGStab and inf*0 in (F)GMRES |
+| F9 | NaN coefficients counted (toBlock overload, warning); K-cycle/scaleCorrection coefficients narrowed with non-finite -> 0 and clamp 1e30 | NaN passed the clamp uncounted; |a| > FLT_MAX became inf |
+| F10 | blockGMRES/blockBiCGStab reject scaleCorrection (FatalIOError), an iterative coarsest level (FatalError, opt-out `blockGAMG.allowVariableCoarsest yes`) and the K cycle (also as autoTune promotion) | variable preconditioner with a non-flexible Krylov method |
+| F12 | FGMRES/GMRES work vectors kept across solves; ILU0 uses the caller's residual scratch; sentinel extrema in one allreduce | no per-solve allocation of 2m+1 vectors |
+| FABLE 5 | Allrun exports `SCOTCH_PTHREAD_NUMBER=1`; dumpLinearSystem works per rank in parallel | Scotch 7.0.4 decomposed differently run to run |
+
+Choices:
+- F4: the review's cheapest option (re-agglomerate after every write) would
+  not make a restart exact against a continuous run that did not write at
+  the split point (test_restart). Storing the face weights of the current
+  agglomeration (one double per internal face and rank, written only at
+  write times, no extra agglomeration) reproduces the hierarchy exactly.
+  Missing keys (older states) fall back to the old behaviour. The Anderson
+  history stays outside the state (D-026).
+- F3: the automatic list is every registered AUTO_WRITE volScalarField except
+  p at sentinel construction (after the turbulence model). applyBounds is
+  unchanged: the native kEpsilon/SA models bound epsilon/nuTilda themselves.
+- F10: Test-blockGAMG sets allowVariableCoarsest for its non-FGMRES runs so
+  that the unit test measures the V/F/W cycles with blockBiCGStab as before.
+- F9: the 1e-30 pivot guard of the block inverses is not changed (SP, D3).
+- F12: the CFL-cut retrial re-assembly (optional) is not cached.
+
+Evidence (commit messages carry the details):
+
+| test | main 6acc150 (same machine, tonight) | solver-fix |
+|---|---|---|
+| T0 Re100 / Re1000 np1 | 65 / 99 its (recorded) | 65 / 99 its, pass |
+| T1 np1 | pass, R 3.28e-6 at 400, dp -0.057 % | pass, R 4.47e-6 at 400 (F2), dp -0.057 % |
+| T2 np1 | pass (recorded: R 8.9e-6, xr +0.685 %) | pass, R 6.4e-6 at 1000, xr +0.683 % |
+| T3-SST np1 | pass, 611 its, Cd +0.14 %, Cl -2.42 % | pass, 555 its, Cd 0.09107 (+0.38 %), Cl 0.2472 (-2.18 %) |
+| T3-GEKO np1 | fail, 482 its, Cd +5.97 %, Cl -5.95 % | fail, 486 its, stalled branch: Cd 0.0786 (+129 %), Cl 0.206 (-75 %) |
+| test_restart[T3-SST] | fail, rel. 2.0e-4 / 5.1e-4 (FABLE 6) | PASS, Cd/Cl rel. diff 0.0 / 0.0 (bitwise), 555 = 555 its |
+| test_restart[T1] | pass, 1.4e-7 | pass, 0.0 |
+| T1 np4 restart 100 + 60 vs 160 | - | bitwise identical final state (deterministic decomposition) |
+| T0 np4, 3 runs | 63/70/73 its, all different | Re100 66/66/66, Re1000 236/236/236, identical histories |
+| coupledState missing on one rank (np4) | hang risk | FatalError on all ranks, no hang |
+| T3 kEpsilon / SA, sentinel.UFactor 1.3 | epsilon/nuTilda not restored | "(epsilon k nut)" / "(nuTilda nut)" detected; rollbacks followed by accepted iterations, then the forced-limit abort with <n>_lastValid incl. epsilon (as D-056) |
+| F10 configurations (T0) | accepted silently | GMRES + iterative coarsest / + scaleCorrection rejected with the messages; FGMRES, dense coarsest and the opt-out run |
+| unit (block4Ops, blockMatrix, blockGAMG np1/np4) | pass | pass; test_blockGAMG_cycles fails as on main (V 11, F 8, W 7, K 11) |
+
+T3 per-step effect: F1 alone gave T3-SST 573 its, Cd +0.44 %, Cl -2.28 %,
+restart rel. diff 1.2e-5 / 5.7e-5; F2 then 555 its (above); F4 made the
+restart exact. T3-GEKO moves to the stalled branch with F1 (T3 is
+multi-stable in coupledFoam, D-052/D-055); it failed the 5 % criterion
+before as well. Probe with sfd.startIter 300 on the fixed build: converged
+at iteration 300 (before SFD starts) on the attached branch, Cd 0.0302
+(-12 %), Cl 0.953 (+14 %) - neither branch is within 5 % of simpleFoam
+(Cd 0.0343, Cl 0.838). Open; no template change made.
+
+F12 timings (T1 np1, base and solver-fix interleaved on one pinned CPU, 3
+pairs of 400 iterations): 155.0/138.0/145.8 vs 151.2/134.2/156.3 ms per
+iteration, wall = CPU, 0.0150-0.0174 CPU-h per run: no difference beyond
+the +-7 % load noise. Unpinned concurrent pairs: T1 170/157 vs 172/165
+ms/it; T3-SST 113/108 vs 122/116 ms/it but 555 instead of 611 iterations,
+total 64-68 s vs 66-69 s wall, 0.0180-0.0189 vs 0.0184-0.0193 CPU-h. The
+removed allocations are below the noise on these meshes.
+
+T4a (np10, 800 its, CF_MPI_BIND=none, coupled.remediation.static.wallStarved
+no per D-061, harness run_solver with the D-042 evaluation, cached mesh of
+main, build of 8ec0223; the later FABLE 5 commit only changes the dump
+condition and the Allrun, neither used by this run): stationary at 450, window means
+Cd 0.4009 (+1.12 % vs simpleFoam 0.3964, std 0.0023), Cl 0.0767 (-0.0001
+absolute vs 0.0768, std 0.0032); main with wallStarved off gave Cd 0.4010,
+Cl 0.0818. Rollbacks 0, static cells 2655 (0.75 %), final R 7.6e-3 at CFL
+500. Wall 858 s / 2.39 CPU-h for 800 iterations, 513 s / ~1.43 CPU-h to
+stationarity (under load, with another agent's T4a np10 running part of
+the time; not a timing measurement).
