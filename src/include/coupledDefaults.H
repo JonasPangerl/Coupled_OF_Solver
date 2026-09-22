@@ -113,13 +113,18 @@ constexpr doubleScalar startupSwitchR = 1e-2;    // 7.4, D-008
 // delay). Measured on T1 (serial, iterations to R < 1e-5): upwind 290,
 // plain ramp 10 -> 30 348, delayed ramp (start 21) 375, ramp on the
 // stagnation trigger (start 7) not within 400; T0 Re1000 np4 did not
-// converge in 300 iterations with the ramp. The default therefore stays
-// upwind, and the hybrid ramp is not delayed.
-constexpr const char* startupMode = "upwind";    // hybrid | upwind | none
+// converge in 300 iterations with the ramp. User decision (2026-09-22):
+// the default is the hybrid ramp, NOT delayed, and WITHOUT the stagnation
+// trigger (both measured worse); the final ramp-vs-upwind choice follows
+// the T4a comparison (D-048). Cases that need the old behaviour pin
+// startupMode upwind in their fvSolution.
+constexpr const char* startupMode = "hybrid";    // hybrid | upwind | none
 constexpr label startupRampStart = 10;
 constexpr label startupRampLength = 20;
 constexpr label startupRampStartMax = 10;
-// stagnation: R_n > factor*R_(n-W) (less than 10 % reduction in W its)
+// stagnation: R_n > factor*R_(n-W) (less than 10 % reduction in W its);
+// off by default (fired at iteration 7 on T1 and missed R < 1e-5 in 400)
+constexpr bool startupStagnationTrigger = false;
 constexpr doubleScalar startupStagnationFactor = 0.9;
 constexpr label startupStagnationWindow = 5;
 // fast drop (delays the ramp start): R_n < factor*R_(n-W)

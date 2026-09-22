@@ -87,6 +87,7 @@ private:
         label rampStart_;
         label rampLength_;
         label rampStartMax_;
+        bool stagnationTrigger_;
         scalar stagnationFactor_;
         label stagnationWindow_;
         scalar fastFactor_;

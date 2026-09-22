@@ -44,6 +44,11 @@ Foam::startupControl::startupControl
         "startupRampStartMax",
         coupledDefaults::startupRampStartMax
     )),
+    stagnationTrigger_(coupledDict.getOrDefault<bool>
+    (
+        "startupStagnationTrigger",
+        coupledDefaults::startupStagnationTrigger
+    )),
     stagnationFactor_(coupledDict.getOrDefault<scalar>
     (
         "startupStagnationFactor",
@@ -209,7 +214,7 @@ bool Foam::startupControl::update(const label n, const scalar R)
     {
         // Upwind no longer productive: less than a (1 - factor) reduction
         // over the window
-        if (haveWindow && R > stagnationFactor_*Rold)
+        if (stagnationTrigger_ && haveWindow && R > stagnationFactor_*Rold)
         {
             trig = "stagnation";
         }
