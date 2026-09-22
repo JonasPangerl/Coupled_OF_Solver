@@ -444,13 +444,15 @@ void Foam::sentinel::writeLastValid
 void Foam::sentinel::writeState(dictionary& dict) const
 {
     dict.set("nRollbacks", nRollbacks_);
+    // A written iteration can itself be a rollback (D-069 F4)
+    dict.set("consecutiveRollbacks", consecutive_);
 }
 
 
 void Foam::sentinel::readState(const dictionary& dict)
 {
     nRollbacks_ = dict.getOrDefault<label>("nRollbacks", 0);
-    consecutive_ = 0;
+    consecutive_ = dict.getOrDefault<label>("consecutiveRollbacks", 0);
 }
 
 

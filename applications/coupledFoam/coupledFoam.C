@@ -320,6 +320,8 @@ int main(int argc, char *argv[])
     // * * * * * * * * * * * * * * * Restart (10) * * * * * * * * * * * * * //
 
     label iter = 0;
+    // Consecutive linear-solve failures (B4); restart state (D-069 F4)
+    label linFails = 0;
     scalar R1 = -1;
     scalar phiConsistency = -1;
     bool restarted = false;
@@ -347,6 +349,28 @@ int main(int argc, char *argv[])
             if (tuner)
             {
                 tuner->readState(st);
+            }
+            linFails = st.getOrDefault<label>("linFails", 0);
+            {
+                // Block-GAMG: rebuild the written run's matrix-weighted
+                // hierarchy at the first update, same schedule (D-069 F4)
+                const blockGAMGPrecon* gp =
+                    dynamic_cast<const blockGAMGPrecon*>
+                    (
+                        linSolver->preconditioner()
+                    );
+                if (gp && st.found("gamgUpdates"))
+                {
+                    gp->gamg().setRestartAgglomeration
+                    (
+                        st.getOrDefault<scalarField>
+                        (
+                            "gamgAggWeights",
+                            scalarField()
+                        ),
+                        st.get<label>("gamgUpdates")
+                    );
+                }
             }
 
             Info<< "coupledFoam: restart from " << runTime.timeName()
@@ -548,6 +572,30 @@ int main(int argc, char *argv[])
         {
             tuner->writeState(st);
         }
+        // Consecutive B4 failures and the block-GAMG agglomeration: the
+        // matrix-weighted hierarchy in use was built from the matrix of
+        // its last re-agglomeration, which a restart cannot recompute
+        // (D-069 F4)
+        st.set("linFails", linFails);
+        {
+            const blockGAMGPrecon* gp =
+                dynamic_cast<const blockGAMGPrecon*>
+                (
+                    linSolver->preconditioner()
+                );
+            if (gp)
+            {
+                st.set("gamgUpdates", gp->gamg().nUpdates());
+                if (gp->gamg().agglomerationWeights().size())
+                {
+                    st.set
+                    (
+                        "gamgAggWeights",
+                        gp->gamg().agglomerationWeights()
+                    );
+                }
+            }
+        }
         // Anderson history deliberately not part of the state (D-026)
         st.set("refinementHistory", labelList());
         IOstream::defaultPrecision(oldPrecision);
@@ -622,7 +670,6 @@ int main(int argc, char *argv[])
 
     label nCflCutsTotal = 0;
     label nPivotFallbackTotal = 0;
-    label linFails = 0;
     bool converged = false;
     clockTime runTimer;
     scalar lastR = -1;

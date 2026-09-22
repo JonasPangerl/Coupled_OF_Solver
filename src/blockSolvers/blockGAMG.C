@@ -415,7 +415,10 @@ Foam::blockGAMG::blockGAMG
     densePivot_(),
     nCoarsestIters_(0),
     hierarchyVersion_(0),
-    diag_(nullptr)
+    diag_(nullptr),
+    aggWeights0_(),
+    restoredAggWeights_(),
+    restartUpdates_(-1)
 {
     // Effective defaults written back so that the effective-settings print
     // shows every value actually used
@@ -873,9 +876,27 @@ void Foam::blockGAMG::agglomerate()
             {
                 mesh.thisDb().checkOut(const_cast<GAMGAgglomeration*>(old));
             }
+            // Weights of this agglomeration, kept for the restart state; a
+            // restart rebuilds the hierarchy of the continuous run from the
+            // stored weights (D-069 F4)
+            if (m == m0)
+            {
+                const label nFaces = fine_.lduAddr().lowerAddr().size();
+                if (restoredAggWeights_.size() == nFaces)
+                {
+                    aggWeights0_ = restoredAggWeights_;
+                }
+                else
+                {
+                    aggWeights0_ = matrixFaceWeights();
+                }
+            }
             autoPtr<GAMGAgglomeration> p
             (
-                new blockPairAgglomeration(mesh, aggDict, matrixFaceWeights())
+                new blockPairAgglomeration
+                (
+                    mesh, aggDict, tmp<scalarField>(aggWeights0_)
+                )
             );
             aggP = &regIOobject::store(p);
         }
@@ -2210,25 +2231,45 @@ bool Foam::blockGAMG::setCycleType(const cycleKind c) const
 }
 
 
+void Foam::blockGAMG::setRestartAgglomeration
+(
+    const scalarField& weights,
+    const label nUpdates
+) const
+{
+    restoredAggWeights_ = weights;
+    restartUpdates_ = nUpdates;
+}
+
+
 void Foam::blockGAMG::update()
 {
+    // Restart: continue the re-agglomeration schedule of the written run
+    // (D-069 F4)
+    if (restartUpdates_ >= 0)
+    {
+        nUpdates_ = restartUpdates_;
+        restartUpdates_ = -1;
+    }
     ++nUpdates_;
     const bool matrixWeights = (aggWeights_ != "geometric");
-    if
-    (
-        matrixWeights
-     && (
-            !aggFromMatrix_
-         || (reaggInterval_ > 0 && nUpdates_ % reaggInterval_ == 0)
-        )
-    )
+    const bool periodic =
+        (reaggInterval_ > 0 && nUpdates_ % reaggInterval_ == 0);
+    if (matrixWeights && (!aggFromMatrix_ || periodic))
     {
         // First update (the matrix exists only now) or re-agglomeration:
-        // pair agglomeration on the block-matrix weights
+        // pair agglomeration on the block-matrix weights. After a restart
+        // the first build uses the stored weights of the written run,
+        // unless this update is a periodic re-agglomeration anyway.
+        if (periodic)
+        {
+            restoredAggWeights_.clear();
+        }
         clearHierarchy();
         aggPtr_ = nullptr;
         aggFromMatrix_ = true;
         buildHierarchy();
+        restoredAggWeights_.clear();
     }
     else if (!dict_.get<bool>("cacheAgglomeration"))
     {

@@ -1009,6 +1009,18 @@ void Foam::remediation::writeState(dictionary& dict) const
     }
     dict.set("dynamicRampCells", labelList(rampCells));
     dict.set("dynamicRampLeft", labelList(rampLeft));
+
+    // Marks of a rollback or omegaMin step of the written iteration, not
+    // yet applied by updateDynamic (D-069 F4)
+    DynamicList<label> pendingCells;
+    forAll(pending_, celli)
+    {
+        if (pending_[celli])
+        {
+            pendingCells.append(celli);
+        }
+    }
+    dict.set("dynamicPending", labelList(pendingCells));
 }
 
 
@@ -1110,6 +1122,24 @@ void Foam::remediation::readState(const dictionary& dict)
         nRamp += (rampLeft_[celli] > 0);
     }
     nRamping_ = returnReduce(nRamp, sumOp<label>());
+
+    // Pending marks (D-069 F4)
+    pending_ = false;
+    for
+    (
+        const label celli
+      : dict.getOrDefault<labelList>("dynamicPending", labelList())
+    )
+    {
+        if (celli < 0 || celli >= mesh_.nCells())
+        {
+            FatalIOErrorInFunction(dict)
+                << "dynamicPending cell " << celli << " out of range"
+                << " (restart with a different decomposition?)"
+                << exit(FatalIOError);
+        }
+        pending_[celli] = true;
+    }
 }
 
 
