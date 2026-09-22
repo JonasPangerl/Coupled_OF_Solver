@@ -9,7 +9,8 @@ development mesh instead (recorded in the result; spec runs use fine).
 Pass, averaged force criterion for the oscillating wake (D-042 and its
 addendum, user decisions; see test_T4_motorBike.py): both solvers have a
 stationary window mean of Cd and Cl (harness function
-bench/run_bench.py:stationary_mean, W = max(1000, n/2) capped at n, drift
+bench/run_bench.py:stationary_mean, one window W for both solvers,
+run_bench.CASES["T5"]["statWindow"] = 400 (D-068), capped at n, drift
 <= max(1 %, 0.005)); window means within max(2 %, 0.002) (Cd) and
 max(2 %, 0.01) (Cl) of simpleFoam on the same mesh; mean-field deltas
 (coupledFieldCompare) with volume RMS |dUMean|/U_inf and |dpMean|/p_ref
@@ -35,8 +36,9 @@ from cflib import case as cfcase
 from cflib import results
 
 from test_T4_motorBike import (NP, assert_checks, budget_sets, compare,
-                               mean_field_comparison, mesh_dir, reference,
-                               run_solver)
+                               fail_if_failed, mean_field_comparison,
+                               mesh_dir, reference, run_solver,
+                               speedup_record)
 
 TEMPLATE = "T5_ahmed"
 CD_EXP = 0.285
@@ -88,18 +90,22 @@ def test_T5(foam):
     env = ahmed_env()
     mesh = mesh_dir(TEMPLATE, mesh_name, mesh_args, NP, extra_env=env)
 
-    suffix = "" if variant == "fine" else f"_{variant}"
+    # run names shared with the report (run_bench.t5_run_name): T5_np10 on
+    # the fine mesh, T5_coarse_np10 on the coarse one
+    name = run_bench.t5_run_name(NP, variant)
     # wake case: averaged force criterion (D-042)
     osc = run_bench.is_oscillatory("T5")
     ref_case, ref = reference(
-        TEMPLATE, mesh, f"ref_T5{suffix}_np{NP}", mesh_args,
-        budget_sets("simpleFoam", BUDGET["simpleFoam"]), oscillatory=osc)
+        TEMPLATE, mesh, f"ref_{name}", mesh_args,
+        budget_sets("simpleFoam", BUDGET["simpleFoam"]), oscillatory=osc,
+        case_name="T5")
 
-    name = f"T5{suffix}_np{NP}"
     case, rec = run_solver(
         TEMPLATE, mesh, name, "coupledFoam", mesh_args,
         budget_sets("coupledFoam", BUDGET["coupledFoam"]), extra_env=env,
-        oscillatory=osc)
+        oscillatory=osc, case_name="T5")
+    fail_if_failed(name, rec, {"case": "T5", "meshVariant": variant,
+                               "reference": ref})
 
     # mean-field delta comparison (D-042 addendum), as in T4
     field = (mean_field_comparison(case, rec, ref_case, ref, "T5")
@@ -126,6 +132,7 @@ def test_T5(foam):
                          and info["CdExpRelDiff"] <= TOL_EXP
                          and info["CdExpRelDiffRef"] <= TOL_EXP)
     rec.update(cmp)
+    rec.update(speedup_record(ref_case, ref))
     rec.update(info)
     results.write("tests", name, rec)
     assert_checks(cmp, rec, ref)

@@ -381,8 +381,9 @@ compressible
 %
 \cmphead{F. Practicalities}
 typical speed
-  & measured here against simpleFoam: faster on T0, T1, T2, T4a; T3 not
-    converged (Section~\ref{sec:speedtests})
+  & measured here against simpleFoam on the test cases, with the same
+    criterion for both (Section~\ref{sec:speedtests}); motorbike: see
+    Table~\ref{tab:wakespeed}
   & vendor: automatic CFL 2.4$\times$ faster than before on a vehicle case
   & documented: convergence ``significantly improves'' vs segregated;
     memory 1.5--2$\times$
@@ -704,12 +705,11 @@ on the project's test cases, on a shared machine
 far: about \cfnum{SpeedWallTZeroReOneZeroZero}$\times$ on the cavity at
 $Re=100$, \cfnum{SpeedWallTOne}$\times$ on T1 and
 \cfnum{SpeedWallTTwo}$\times$ on T2 (a lower bound, because
-\code{simpleFoam} did not converge there). On the coarse motorbike T4a the
-speed-up against the stored reference is
-\cfnum{WakeSpeedupWallTFoura}$\times$ in wall-clock time
-(Table~\ref{tab:wakespeed}); it depends on the averaging window, which is
-now the same for both solvers (D-068), and the conditions of the stored
-reference run are listed next to it. On T3 with SST coupledFoam can fall
+\code{simpleFoam} did not converge there). On the motorbike, with the
+same averaging window for both solvers (D-068), the comparison with the
+stored reference gives: \cfnum{WakeSpeedNote} (Table~\ref{tab:wakespeed},
+with the conditions of the stored reference run). A time ratio below one
+means that coupledFoam is slower. On T3 with SST coupledFoam can fall
 into a limit cycle. The finer motorbike T4b is the case closest to a car
 in the present campaign (the Ahmed body T5 is deferred, D-063), and its
 result is the one to watch. The standard numbers of vendor reports (cost
@@ -782,11 +782,11 @@ could be collected within this work.
   step), HELYX-Coupled. It is not an exotic method, but a young
   implementation of a standard one.
 \item \textbf{What should be better than simpleFoam.} Fewer outer
-  iterations and no relaxation factors to tune; shorter wall-clock times
-  on the 2D test cases that converge (T0, T1, T2). On the motorbike the
-  result depends on the averaging window and is reported with its
-  conditions (Table~\ref{tab:wakespeed}); it is not yet an established
-  advantage.
+  iterations and no relaxation factors to tune. Whether this turns into
+  shorter wall-clock times is measured case by case with the same
+  criterion for both solvers (Section~\ref{sec:speedtests}); on the
+  motorbike the measured result is given in Table~\ref{tab:wakespeed}. A
+  wall-clock advantage on car-like cases is not established.
 \item \textbf{What is not yet as good as a commercial code.} Robustness of
   the linear solver on large, stretched snappy meshes; strongly separated
   flows can limit-cycle (T3); memory is higher than \code{simpleFoam}'s;

@@ -1527,13 +1527,15 @@ configuration~A on the motorbike runs \code{potentialFoam} before
 \code{simpleFoam}, and its cost is counted as pre-processing of~A; on all
 other cases, and for B everywhere, the native configurations start from the
 initial fields of the case. Configurations D--H isolate single components of
-coupledFoam; F and G run on T1 and T3-SST, H on the cases named in B10.
+coupledFoam; their case scope is given in Table~\ref{tab:configs}.
 Since D-043 the coupledFoam defaults (C) are a V-cycle with the damped block
 ILU(0) smoother and the cycle-efficiency controller off. The configuration
 of amendment B10 that fixed the V-cycle (E: \code{cycleType V},
-\code{autoTune no}) is therefore identical to C and is not run as a separate
-configuration; configuration H sets \code{cycleType K} explicitly (with the
-controller off) and is the only distinct cycle comparison (D-068). The
+\code{autoTune no}) is therefore identical to C and is no longer run;
+configuration H sets \code{cycleType K} explicitly (with the controller
+off) and is the cycle comparison, and H-tune adds the controller to the
+K-cycle, which isolates the controller (D-068). The E-* variants of
+amendment C7 keep their names and change one setting of C each. The
 harness records the final cycle type and post-smoothing count of every
 coupledFoam run, so that a comparison is only reported between runs that
 actually differ.
@@ -1552,25 +1554,30 @@ no T5 entry appears in the results. Strong scaling is measured on T4a
 \centering\small
 \caption{Benchmark configurations (D-025, amendment B10).}
 \label{tab:configs}
-\begin{tabular}{llp{6.4cm}l}
+\begin{tabular}{llp{6.2cm}p{2.6cm}}
 \toprule
- & solver & settings & cases\\
+ & solver & settings & cases (D-063)\\
 \midrule
 A & \code{simpleFoam} & tutorial settings (see text; T3: SIMPLE, $p$ 0.3,
-  $\Uv$, $k$, $\omega$ 0.7) & all\\
+  $\Uv$, $k$, $\omega$ 0.7; motorbike: \code{potentialFoam} start) &
+  T1--T3, T4a\\
 B & \code{simpleFoam} & SIMPLEC, relaxation $p$ 1.0, $\Uv$ 0.9, $k,\omega$ 0.9
-  (tuned native baseline) & all\\
+  (tuned native baseline; identical to A on T1) & T2, T3, T4a\\
 C & coupledFoam & defaults (V-cycle, damped block ILU(0), controller off,
-  Eisenstat--Walker; D-043) & all\\
-D & coupledFoam & block-diagonal preconditioner (isolates the AMG) & all\\
-E & coupledFoam & fixed V-cycle; identical to C since D-043, not run
-  separately (D-068) & --\\
+  Eisenstat--Walker; D-043) & T1--T3, T4a, T4b\\
+D & coupledFoam & block-diagonal preconditioner (isolates the AMG) & T1--T3\\
 F & coupledFoam & fixed relative tolerance, \code{adaptiveRelTol no} &
   T1, T3-SST\\
 G & coupledFoam & Anderson acceleration, \code{anderson.enabled yes} &
   T1, T3-SST\\
 H & coupledFoam & fixed K-cycle, \code{cycleType K}, \code{autoTune no} &
-  T2, T4a, T4b\\
+  T1--T3, T4a\\
+H-tune & coupledFoam & K-cycle with the controller, \code{cycleType K},
+  \code{autoTune yes} (the default before D-043) & T1, T2\\
+E-* & coupledFoam & C with one change each (amendment C7): scalar
+  Rhie--Chow coefficient, static non-orthogonality threshold 60 or
+  $65^\circ$, algebraic pair agglomeration, SFD off, $\eta_{\max}=0.7$ &
+  T2 or T3 (one case each)\\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1670,7 +1677,7 @@ Figure~\ref{fig:benchiters}. Figure~\ref{fig:breakdown} splits the time per
 coupledFoam iteration, and Figure~\ref{fig:memory} compares the measured
 peak memory with the budget of Table~\ref{tab:memory}. The acceptance of the
 B10 variants is evaluated in Table~\ref{tab:btenacc}, with the cycle
-comparison (H against C) in Figure~\ref{fig:benchcycles} and Anderson
+comparison (H and H-tune against C) in Figure~\ref{fig:benchcycles} and Anderson
 acceleration (G) in Figure~\ref{fig:anderson}. The block-GAMG hierarchies
 are listed in Table~\ref{tab:gamglevels}, the Eisenstat--Walker forcing terms
 and preconditioner efficiencies are shown in Figure~\ref{fig:etarho}, and the
@@ -1692,6 +1699,12 @@ and user choice (D-060).}{tab:convchoice}
 window criterion, coupledFoam including its potentialFoam initialisation),
 best native configuration against coupledFoam, as wall-clock time and
 CPU-hours.}{tab:summary}
+
+The fine motorbike T4b is benchmarked with configuration C only (D-059,
+D-063); its comparison with \code{simpleFoam} is the test run against the
+cached reference in Table~\ref{tab:wakespeed}
+(Section~\ref{sec:speedtests}), together with the conditions of that
+reference.
 
 \cffigure{bench_wall}{Wall-clock time to convergence (median of the repeats:
 three on T1--T3, one on the motorbike) per case and
@@ -1718,9 +1731,9 @@ only for the larger cases.}{fig:memory}
 \cftable{b10_acceptance}{Amendment B10: configurations F, G and H against
 C in wall time and CPU-hours; pass/fail for F.}{tab:btenacc}
 
-\cffigure{bench_cycles}{Benchmark cycle comparison: default V-cycle (C)
-against the fixed K-cycle (H), wall time and CPU-hours to convergence. Only
-runs whose recorded cycle types differ are compared.}{fig:benchcycles}
+\cffigure{bench_cycles}{Benchmark cycle comparison: default V-cycle (C),
+fixed K-cycle (H) and K-cycle with autoTune (H-tune), wall time and
+CPU-hours to convergence.}{fig:benchcycles}
 
 \cffigure{anderson}{Anderson acceleration on and off (T1, T3-SST): outer
 iterations, wall time and CPU-hours to convergence.}{fig:anderson}
@@ -1791,10 +1804,16 @@ comparable quantity. Cases whose coupledFoam run is not finished show the
 reference only.}{fig:speedres}
 
 \cffigure{speed_time_to_conv}{Wall-clock time (left) and CPU-hours (right)
-to convergence, simpleFoam and coupledFoam, test records (serial on
-T0--T3, 10 ranks on the motorbike). Numbers: speed-up
-simpleFoam/coupledFoam. Hatched bars: the criterion was not reached, the
-bar is the whole run; $\geq$: lower bound.}{fig:speedconv}
+to convergence, simpleFoam (orange) and coupledFoam (blue), both timed to
+the same criterion: T0--T2 the test's residual target (coupledFoam $R$;
+simpleFoam every initial residual below the same value), T3 the 12.3(ii)
+force window, T4 the first stationary D-042 window mean with one
+400-iteration window for both solvers (D-068). T0--T3 serial, solver time
+only; T4 on 10 MPI ranks, coupledFoam including potentialFoam, against the
+cached simpleFoam reference (run without the tutorial's potentialFoam
+start, timing conditions not recorded). Numbers: speed-up
+simpleFoam/coupledFoam. Hatched: criterion not reached, bar = whole run
+(simpleFoam: lower bound, marked $\geq$).}{fig:speedconv}
 
 \paragraph{Motorbike: coupledFoam against the cached references.} On the
 motorbike the benchmark runs few configurations (D-059, D-063), and the
@@ -1807,7 +1826,11 @@ configuration (the tutorial relaxation, not the better of A and B), it may
 have been started without the tutorial's \code{potentialFoam}
 initialisation, and the machine load during the cached reference runs was
 not recorded. The speed-up with each run's own window (the earlier rule) is
-given as a sensitivity value.
+given as a sensitivity value only; it is not a result, because that rule
+made the earliest possible convergence point of the longer reference run
+depend on its iteration budget. The mean fields of the references, used by
+the field comparison, cover their continuation of 1500 (T4a) or 2000 (T4b)
+iterations. Result: \cfnum{WakeSpeedNote}
 
 \cftable{wake_speedup}{Motorbike speed-up from the test records against
 the cached simpleFoam references.}{tab:wakespeed}

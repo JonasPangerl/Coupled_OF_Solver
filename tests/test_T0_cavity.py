@@ -26,9 +26,11 @@ def _reference(re: int):
     case = cfcase.prepare("T0_cavity", f"ref_T0_Re{re}", reuse=True)
     if not cfcase.solver_ok(case, "simpleFoam"):
         case = cfcase.prepare("T0_cavity", f"ref_T0_Re{re}")
-        assert cfcase.allrun(case, ["-solver", "simpleFoam", "-Re", str(re)],
-                             fpe=False) == 0
-    assert cfcase.solver_ok(case, "simpleFoam")
+        rc = cfcase.allrun(case, ["-solver", "simpleFoam", "-Re", str(re)],
+                           fpe=False)
+        assert rc == 0, cfcase.log_tail(case, "simpleFoam")
+    assert cfcase.solver_ok(case, "simpleFoam"), \
+        cfcase.log_tail(case, "simpleFoam")
     return case
 
 
@@ -65,6 +67,11 @@ def test_T0(foam, re, nprocs):
     rc = cfcase.allrun(case, ["-solver", "coupledFoam", "-Re", str(re),
                               "-np", str(nprocs)], fpe=True)
     timing = cfenv.last_timing.as_dict()
+    # M3: a run without output (e.g. a refused mpirun) fails loudly
+    if rc != 0 and not (case / "log.coupledFoam").exists():
+        raise AssertionError(f"coupledFoam run {name} failed (rc {rc}) "
+                             "without a solver log:\n"
+                             + cfcase.log_tail(case, "coupledFoam"))
     text = (case / "log.coupledFoam").read_text(errors="replace")
     rows = logs.parse_cf(case / "log.coupledFoam")
     summ = logs.coupled_summary(case)
@@ -126,7 +133,8 @@ def test_T0(foam, re, nprocs):
     rec["pass"] = passed
     results.write("tests", name, rec)
 
-    assert rc == 0, "coupledFoam failed"
+    assert rc == 0, ("coupledFoam failed",
+                     cfcase.log_tail(case, "coupledFoam"))
     assert not fpe_trap, "FPE trap"
     assert n_clamped == 0, "clamped coefficients"
     assert rec["nPseudoInverse"] == 0, \

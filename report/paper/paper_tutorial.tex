@@ -2061,10 +2061,12 @@ and boundary conditions:
   with a damped ILU(0) smoother);
 \item[D] coupledFoam with the simple block-diagonal preconditioner instead
   of multigrid (shows what the multigrid is worth);
-\item[H] coupledFoam with the K-cycle instead of the V-cycle on T2 and the
-  motorbike (shows what the cycle choice is worth). A configuration E with
-  a fixed V-cycle was planned as well; since D-043 it is identical to C and
-  is not run separately (D-068).
+\item[H] coupledFoam with the K-cycle instead of the V-cycle on T1--T3 and
+  the coarse motorbike (shows what the cycle choice is worth); H-tune adds
+  the automatic cycle controller on T1 and T2. A configuration E with a
+  fixed V-cycle was planned as well; since D-043 it is identical to C and
+  is no longer run (D-068). The ``E-'' variants change one setting of C
+  each.
 \end{description}
 Not every case gets every contestant in the present campaign (D-063): most
 runs are on the light cases T1--T3, the coarse motorbike T4a gets the full
@@ -2326,7 +2328,11 @@ averaging window. The table also says openly what makes this comparison
 less than ideal: the reference uses one native setting only (the
 tutorial's), it may not have started from a \code{potentialFoam}
 solution, and the load of the machine during the reference run was not
-recorded.\pro{Speed-up measured on the test runs}
+recorded. The table also gives the speed-up that an earlier version of the
+averaging rule produced (a longer window for the longer run); it is shown
+only to make clear how much the result depends on that choice, and it is
+not a result. The measured outcome with the common window:
+\cfnum{WakeSpeedNote}\pro{Speed-up measured on the test runs}
 
 \cftable{wake_speedup}{Motorbike speed-up from the test records against
 the stored simpleFoam references.}{tab:wakespeed}
