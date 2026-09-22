@@ -239,7 +239,7 @@ int main(int argc, char *argv[])
         doubleScalar A3[9], I3[9], P3[9], AI[9];
         for (label i = 0; i < 9; ++i)
         {
-            A3[i] = 2*rnd.sample01<doubleScalar>() - 1;
+            A3[i] = 2*doubleScalar(rnd.sample01<scalar>()) - 1;
         }
         for (label i = 0; i < 3; ++i)
         {
