@@ -1,0 +1,21 @@
+{
+  "_doc": "Iteration from which a run counts as converged (null = automatic criterion). See bench/user_convergence.py.",
+  "T3-GEKO": {
+    "coupledFoam": null,
+    "simpleFoam": null,
+    "_auto coupledFoam (T3_GEKO_np1)": 3000,
+    "_auto simpleFoam": 433
+  },
+  "T3-SST": {
+    "coupledFoam": null,
+    "simpleFoam": null,
+    "_auto coupledFoam (T3_kOmegaSST_np1)": 3000,
+    "_auto simpleFoam": 1450
+  },
+  "T4a": {
+    "coupledFoam": null,
+    "simpleFoam": null,
+    "_auto coupledFoam (T4a_np10)": 450,
+    "_auto simpleFoam": 1550
+  }
+}

@@ -396,8 +396,21 @@ def table_convergence(tests: dict, bench: list[dict], uc: dict) -> None:
     tmpl.write_text(json.dumps(ucv.template(tests, bench), indent=2) + "\n")
     rows = []
 
-    def row(label, solver, r, auto_it):
+    def row(label, solver, r, auto_it, case_dir=None):
         u = r.get("user") or {}
+        missing = ((r.get("wallToConv_s") or r.get("wall_to_conv_s")) is None
+                   or (r.get("Cd") if r.get("Cd") is not None
+                       else r.get("Cd_mean")) is None)
+        if missing and auto_it and case_dir is not None and case_dir.is_dir():
+            # not stored by the record (T3, references): time and the
+            # coefficient means at the automatic point
+            a = ucv.evaluate(case_dir, solver, auto_it, r)
+            r = dict(r)
+            for k, v in (("wallToConv_s", a.get("wall_to_conv_s")),
+                         ("cpuHoursToConv", a.get("cpu_to_conv_h")),
+                         ("Cd", a.get("Cd")), ("Cl", a.get("Cl"))):
+                if r.get(k) is None:
+                    r[k] = v
         used = "user" if u and not u.get("ignored") else "auto"
         rows.append([
             label, solver, fmt(u.get("iterationsRun") or r.get("iterationsRun")
@@ -417,9 +430,10 @@ def table_convergence(tests: dict, bench: list[dict], uc: dict) -> None:
         if ucv.case_key(name) is None:
             continue
         r = tests[name]
-        row(name, "coupledFoam", r, r.get("autoIteration"))
+        row(name, "coupledFoam", r, r.get("autoIteration"), ucv.RUN / name)
         ref = r.get("reference") or {}
-        row(name + " ref", "simpleFoam", ref, ref.get("autoIteration"))
+        row(name + " ref", "simpleFoam", ref, ref.get("autoIteration"),
+            ucv.ref_dir(name))
     for r in sorted(bench, key=lambda d: (d.get("case", ""), d.get("config", ""),
                                           d.get("run", 0))):
         if r.get("case") in ucv.CASES and r.get("convergenceSource") == "user":
@@ -430,7 +444,8 @@ def table_convergence(tests: dict, bench: list[dict], uc: dict) -> None:
         return
     write_table(
         "convergence_choice",
-        ["run", "solver / config", "iterations run", "automatic", "user",
+        ["run", "solver / config", "iterations run",
+         "automatic (criterion or solver stop)", "user",
          "used", "wall to conv. [s]", "CPU-h to conv.", "Cd", "Cl"],
         rows,
         "Convergence point of the force cases: automatic criterion "

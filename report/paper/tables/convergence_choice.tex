@@ -1,0 +1,22 @@
+\begin{table}[tbp]
+\centering
+\small
+\caption{Convergence point of the force cases: automatic criterion (T3: 12.3(ii); T4, T5: D-042 stationary mean) and the iteration named by the user after inspecting the load histories (D-060). With a user iteration N, time and CPU-hours count up to N and Cd, Cl are the means over iterations N to the end of the run.}
+\label{tab:convchoice}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lrrrrrrrrr}
+\toprule
+run & solver / config & iterations run & automatic (criterion or solver stop) & user & used & wall to conv. [s] & CPU-h to conv. & Cd & Cl \\
+\midrule
+T3\_GEKO\_np1 & coupledFoam & 3000 & 3000 & - & auto & 822 & 0.228 & 0.0330 & 0.9137 \\
+T3\_GEKO\_np1 ref & simpleFoam & 20000 & 433 & - & auto & 14 & n/a & 0.0343 & 0.8378 \\
+T3\_kOmegaSST\_np1 & coupledFoam & 3000 & 3000 & - & auto & 684 & 0.19 & -0.0147 & -0.4565 \\
+T3\_kOmegaSST\_np1 ref & simpleFoam & 20000 & 1450 & - & auto & 47 & n/a & 0.0907 & 0.2527 \\
+T4a\_np10 & coupledFoam & 800 & 450 & - & auto & 395 & 1.1 & 0.4051 & 0.0771 \\
+T4a\_np10 ref & simpleFoam & 3000 & 1550 & - & auto & 783 & 2.17 & 0.3964 & 0.0768 \\
+\bottomrule
+\end{tabular}
+}
+\par\smallskip
+{\footnotesize 0 case(s) with user entries. The pass/fail of the tests is unchanged and uses the automatic criteria. Benchmark rows appear only where a user value was given.\par}
+\end{table}

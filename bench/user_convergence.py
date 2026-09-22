@@ -185,9 +185,11 @@ def auto_iteration(rec: dict, case: Path) -> int | None:
         return rec["convergedAt"]
     import run_bench  # noqa: PLC0415
     h = force_hist(case)
-    if not h:
-        return None
-    return run_bench.iters_to_conv({k: v.tolist() for k, v in h.items()})
+    it = (run_bench.iters_to_conv({k: v.tolist() for k, v in h.items()})
+          if h else None)
+    # T3: the solver stops on its own criterion (residual / force window),
+    # so that stop IS the automatic convergence point
+    return it if it is not None else rec.get("iterations")
 
 
 def apply_test(name: str, rec: dict, table: dict) -> dict:
