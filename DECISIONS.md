@@ -1796,3 +1796,60 @@ for SP to be built and tested against the maximum precision available.
   switchable and tunable in the case dictionaries (D-061 follow-up).
 - Every setting that may need changing must be a run-time keyword, not a
   compile-time constant.
+
+## D-068 - Harness fixes of the harness review: common averaging window, distinct benchmark configurations, failed runs, equal criteria (lead, 2026-09-22; to be confirmed by the user)
+
+Source: the read-only review of the test harness and benchmark (findings
+C1, C2, M1-M3, M6, M7, M9 and minor items). Branch harness-fix. Items 1
+and 2 change what the report states; the lead decided them overnight and
+the user confirms or reverts them in the morning.
+
+### 1. One averaging window per wake case (review C1)
+
+Problem: D-042 addendum 2 derived the window from each run's own budget,
+W = max(300, n/2). iters_to_stationary scans from N = W, so the earliest
+possible convergence point of a run was set by its budget: simpleFoam
+(n = 3000 / 4000) could not converge before iteration 1550 / 2050,
+coupledFoam (n = 800) from iteration 400. The wake-case speed-up came from
+this rule, not from the solvers.
+
+Decision: ONE window W per case for both solvers,
+run_bench.CASES[case]["statWindow"] = max(STAT_WINDOW_MIN, coupledFoam
+budget // 2) = 400 on T4a, T4b and T5 (capped at the iterations run).
+stat_window(n, case), stationary_eval(hist, case=...),
+iters_to_stationary(hist, case=...) and field_average_start(n, case)
+take the case (a CASES key or a run name such as T4a_np10 or
+ref_T4a_np10, run_bench.case_of_run); without a case they keep the
+per-run rule (backward compatible). The per-run window stays in the
+records as an informational sensitivity value: W_perRun,
+iters_to_stationary_perRun, stationary_perRun, <q>_mean_perRun and the
+times to it (bench: wall_to_conv_s_perRun / cpu_to_conv_h_perRun; tests:
+wallToConv_s_perRun / cpuHoursToConv_perRun, speedupWall_perRun /
+speedupCpu_perRun). The stationarity drift tolerance and the comparison
+tolerances are unchanged. The reference continuation keeps its per-run
+length (T4a 1500, T4b 2000; default_n_extra), because the existing
+continuations are reused and a longer reference mean field is the better
+estimate; the report must say that the reference mean fields cover that
+continuation while coupledFoam's cover its last 400 iterations.
+
+Recomputed read-only from the existing run directories (same numeric
+criterion; np10; all timings "under load", NOT the final timing
+measurement; coupledFoam including potentialFoam):
+
+| run | window | coupledFoam N / wall / CPU-h | simpleFoam N / wall / CPU-h | speed-up wall / CPU |
+|---|---|---|---|---|
+| T4a, main run/T4a_np10 (13:40) | common W 400 | 600 / 561 s / 1.557 | 450 / 233 s / 0.647 | 0.42 / 0.42 |
+| same | per run (400 / 1500) | 600 / 561 s / 1.557 | 1550 / 783 s / 2.175 | 1.40 / 1.40 |
+| T4a, D-057 default run (cf_start) | common W 400 | 450 / 401 s / 1.113 | 450 / 233 s / 0.647 | 0.58 / 0.58 |
+| same | per run (400 / 1500) | 450 / 401 s / 1.113 | 1550 / 783 s / 2.175 | 1.95 / 1.95 |
+| T4b, D-057 run (cf_start) | common W 400 | 450 / 2117 s / 5.880 | 450 / 1296 s / 3.600 | 0.61 / 0.61 |
+| same | per run (400 / 2000) | 450 / 2117 s / 5.880 | 2050 / 5942 s / 16.504 | 2.81 / 2.81 |
+
+Window means under the common window: ref_T4a Cd 0.39648 / Cl 0.07708
+(per run 0.39640 / 0.07675); ref_T4b Cd 0.40022 / Cl 0.06734 (per run
+0.39962 / 0.06568); T4b coupledFoam Cd 0.40777 / Cl 0.06550, i.e. Cd
++1.89 % (PASS within 2 %; under the per-run window +2.04 %, a marginal
+FAIL). On the wake cases coupledFoam is therefore SLOWER than simpleFoam
+to a stationary 400-iteration window mean (0.4-0.6x) with the present
+settings; the earlier 2-2.8x came from the window rule. The report must
+state this.

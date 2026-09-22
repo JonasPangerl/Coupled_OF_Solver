@@ -10,11 +10,17 @@ quantity (Cd and Cl, or the pressure drop for T1/T2).
 Exception, the wake cases marked "oscillatory" (T4a, T4b, T5; D-042 and its
 addendum): their forces oscillate physically for ever, so 12.3(ii) is
 unsatisfiable. There "converged" means a stationary window mean
-(stationary_mean: window W = max(1000, n/2), capped at n, the two
-half-window means of Cd and of Cl differ by at most max(1 % |mean|, 0.005));
-the time to convergence uses the first stationary window
-(iters_to_stationary, scanned in steps of 50) in place of iters_to_conv,
-and Cd / Cl are the final-window means. The mean fields (fieldAverage
+(stationary_mean: the two half-window means of Cd and of Cl differ by at
+most max(1 % |mean|, 0.005)); the time to convergence uses the first
+stationary window (iters_to_stationary, scanned in steps of 50) in place
+of iters_to_conv, and Cd / Cl are the final-window means. The window W is
+ONE value per case for both solvers (D-068): CASES[<case>]["statWindow"]
+= max(300, coupledFoam budget // 2) = 400 on T4a, T4b and T5 (capped at
+the iterations run). The per-run rule of D-042 addendum 2,
+W = max(300, n/2) from each run's own budget n, made the simpleFoam window
+(1500 / 2000) and therefore its earliest possible convergence point a
+function of its budget; it is kept only as an informational sensitivity
+value (keys *_perRun in the records). The mean fields (fieldAverage
 function object of the T4/T5 controlDict) are averaged over the same
 window: set_field_average_start sets its timeStart to n - W + 1.
 
@@ -120,20 +126,22 @@ CASES = {
     "T3-GEKO": {"template": "T3_airFoil2D", "args": ["-turbulence", "GEKO"],
                 "monitor": "forces",
                 "iters": {"simpleFoam": 6000, "coupledFoam": 2000}, "np": 1},
+    # statWindow: the common D-042 averaging window of both solvers of the
+    # case (D-068) = max(STAT_WINDOW_MIN, coupledFoam budget // 2)
     "T4a": {"template": "T4_motorBike", "args": ["-mesh", "a"],
             "monitor": "forces",
             "iters": {"simpleFoam": 3000, "coupledFoam": 800}, "np": HEAVY_NP,
-            "oscillatory": True},
+            "oscillatory": True, "statWindow": 400},
     "T4b": {"template": "T4_motorBike", "args": ["-mesh", "b"],
             "monitor": "forces",
             "iters": {"simpleFoam": 4000, "coupledFoam": 800}, "np": HEAVY_NP,
-            "oscillatory": True},
+            "oscillatory": True, "statWindow": 400},
     # CF_T5_MESH=coarse: development mesh as in tests/test_T5_ahmed.py (D-059)
     "T5": {"template": "T5_ahmed",
            "args": ["-mesh", os.environ.get("CF_T5_MESH", "fine")],
            "monitor": "forces",
            "iters": {"simpleFoam": 2000, "coupledFoam": 800}, "np": HEAVY_NP,  # user: 2000 for now (D-042 add. 3)
-           "oscillatory": True},
+           "oscillatory": True, "statWindow": 400},
 }
 
 # Amendment C7: variants of configuration E, one change each (foamDictionary
@@ -194,7 +202,11 @@ TOL = 0.002
 # addendum of 2026-09-22): criterion 12.3(ii) is unsatisfiable there,
 # convergence := stationary window mean
 STAT_CRITERION = "stationaryMean (D-042 addendum)"
-STAT_WINDOW_MIN = 300       # W = max(300, n // STAT_WINDOW_DIV), capped at n (D-042 add. 2)
+# Common window per case (D-068): CASES[case]["statWindow"] =
+# max(STAT_WINDOW_MIN, coupledFoam budget // STAT_WINDOW_DIV), capped at the
+# iterations run. The per-run rule max(300, n // 2) (D-042 add. 2) remains
+# for cases without statWindow and as the *_perRun sensitivity value.
+STAT_WINDOW_MIN = 300
 STAT_WINDOW_DIV = 2
 STAT_REL = 0.01             # half-window means differ <= max(1 % |m|,
 STAT_ABS = 0.005            #                                  0.005)
@@ -305,9 +317,11 @@ def config_hash(name: str, cfg: str) -> str:
         # D-042 evaluation: only the wake cases' records become stale
         d["criterion"] = {"name": STAT_CRITERION, "wmin": STAT_WINDOW_MIN,
                           "wdiv": STAT_WINDOW_DIV,
+                          "caseWindow": case_window(name),
                           "rel": STAT_REL, "abs": STAT_ABS,
                           "step": STAT_STEP}
-        d["fieldAverageStart"] = field_average_start(spec["iters"][solver])
+        d["fieldAverageStart"] = field_average_start(spec["iters"][solver],
+                                                     name)
     blob = json.dumps(d, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
@@ -359,19 +373,65 @@ def is_oscillatory(name: str) -> bool:
     return bool(CASES.get(name, {}).get("oscillatory", False))
 
 
-def stat_window(n: int) -> int:
-    """Averaging window of a run of n iterations: max(300, n//2), capped at
-    n (D-042 addenda; the minimum was 1000, which only ever bound the short
-    coupledFoam runs - the simpleFoam references have n//2 >= 1500)."""
+def case_of_run(name: str | None) -> str | None:
+    """CASES key of a case key, test/run name or benchmark tag:
+    T4a, T4a_np10, ref_T4a_np10, bench_T4a_C_1, T4a_C_1 -> T4a;
+    T5_coarse_np10, ref_T5_coarse_np10 -> T5; T3_kOmegaSST_np1 -> T3-SST,
+    T3_GEKO_np1 -> T3-GEKO; T1_np4 -> T1. None if no case matches (T0)."""
+    if not name:
+        return None
+    s = str(name)
+    if s in CASES:
+        return s
+    for pre in ("ref_", "bench_"):
+        if s.startswith(pre):
+            s = s[len(pre):]
+    if s in CASES:
+        return s
+    for pre, key in (("T3_kOmegaSST", "T3-SST"), ("T3_GEKO", "T3-GEKO")):
+        if s.startswith(pre):
+            return key
+    for key in sorted(CASES, key=len, reverse=True):
+        if s == key or s.startswith(key + "_"):
+            return key
+    return None
+
+
+def case_window(case: str | None) -> int | None:
+    """Common D-042 averaging window of a case (D-068), None for cases
+    without one. `case` may be a CASES key or any run name (case_of_run)."""
+    key = case_of_run(case)
+    return CASES[key].get("statWindow") if key else None
+
+
+def per_run_window(n: int) -> int:
+    """The per-run window of D-042 addendum 2: max(300, n // 2) capped at n
+    (informational since D-068)."""
     return max(0, min(max(STAT_WINDOW_MIN, n // STAT_WINDOW_DIV), n))
 
 
-def field_average_start(n: int) -> int:
+def stat_window(n: int, case: str | None = None) -> int:
+    """Averaging window of a run of n iterations.
+
+    With `case` (a CASES key or a run name such as T4a_np10 or
+    ref_T4a_np10) that has a common window (D-068): that window, capped at
+    n - the SAME window for both solvers of the case. Otherwise the per-run
+    rule max(300, n // 2), capped at n (D-042 addendum 2). Callers that
+    evaluate a wake case must pass the case; without it the result is the
+    per-run sensitivity value."""
+    w = case_window(case)
+    if w is not None:
+        return max(0, min(int(w), n))
+    return per_run_window(n)
+
+
+def field_average_start(n: int, case: str | None = None) -> int:
     """timeStart of the fieldAverage function object for a run of n
-    iterations (deltaT 1, time = iteration): n - W + 1, so the mean fields
-    cover exactly the force window, the last W iterations (the timeControl
-    of a function object is active from time >= timeStart - 0.5 deltaT)."""
-    return n - stat_window(n) + 1
+    iterations (deltaT 1, time = iteration): n - W + 1 with
+    W = stat_window(n, case), so the mean fields cover exactly the force
+    window, the last W iterations (the timeControl of a function object is
+    active from time >= timeStart - 0.5 deltaT)."""
+    return n - stat_window(n, case) + 1
 
 
 def foam_dictionary(case: Path, fname: str, args: list[str],
@@ -541,21 +601,26 @@ def is_stationary(hist: dict[str, list[float]], n: int | None = None,
 
 
 def iters_to_stationary(hist: dict[str, list[float]],
-                        quantities: tuple[str, ...] = STAT_QUANTITIES
+                        quantities: tuple[str, ...] = STAT_QUANTITIES,
+                        case: str | None = None, w: int | None = None
                         ) -> int | None:
     """Smallest N <= n (iterations run) such that the window ending at N is
     stationary for all quantities; None if never (D-042).
 
-    "The window" is the run's window W = stat_window(n), slid along the
-    history: N is scanned in steps of STAT_STEP (50) from the first
-    multiple of 50 >= W, and finally N = n itself, so a stationary final
-    window always yields a value. (Re-deriving W from N instead would
-    shrink the window early in the run: under the original D-042 rule, on
-    the T4a reference, a 75-iteration window at N = 150 was stationary.)"""
+    "The window" is W = w if given, else stat_window(n, case) - the case's
+    common window (D-068) when `case` is given, the per-run window
+    otherwise - slid along the history: N is scanned in steps of STAT_STEP
+    (50) from the first multiple of 50 >= W, and finally N = n itself, so a
+    stationary final window always yields a value. (Re-deriving W from N
+    instead would shrink the window early in the run: under the original
+    D-042 rule, on the T4a reference, a 75-iteration window at N = 150 was
+    stationary.)"""
     if not hist:
         return None
     n = min(len(h) for h in hist.values())
-    w = stat_window(n)
+    if w is None:
+        w = stat_window(n, case)
+    w = min(int(w), n)
     if w < 2:
         return None
     first = -(-w // STAT_STEP) * STAT_STEP
@@ -569,24 +634,44 @@ def iters_to_stationary(hist: dict[str, list[float]],
 
 
 def stationary_eval(hist: dict[str, list[float]],
-                    quantities: tuple[str, ...] = STAT_QUANTITIES) -> dict:
+                    quantities: tuple[str, ...] = STAT_QUANTITIES,
+                    case: str | None = None) -> dict:
     """Record of the D-042 evaluation of a force history: W, means, stds,
     half-window drifts per quantity, `stationary` (final window, all
-    quantities) and iters_to_stationary."""
+    quantities) and iters_to_stationary.
+
+    W = stat_window(n, case): pass the case (CASES key or run name) so that
+    both solvers of a wake case use its common window (D-068). The per-run
+    window max(300, n // 2) is evaluated as well, for information only:
+    W_perRun, iters_to_stationary_perRun, stationary_perRun and
+    <q>_mean_perRun (the report may show both)."""
     if not hist or not all(q in hist for q in quantities):
         return {"criterion": STAT_CRITERION, "stationary": False,
-                "iters_to_stationary": None}
+                "iters_to_stationary": None,
+                "iters_to_stationary_perRun": None}
     n = min(len(h) for h in hist.values())
-    out: dict = {"criterion": STAT_CRITERION, "iterations_run": n,
-                 "W": stat_window(n)}
+    w = stat_window(n, case)
+    w_run = per_run_window(n)
+    out: dict = {"criterion": STAT_CRITERION, "iterations_run": n, "W": w,
+                 "windowRule": ("common per case (D-068)"
+                                if case_window(case) is not None
+                                else "per run (D-042 addendum 2)"),
+                 "W_perRun": w_run}
     for q in quantities:
-        s = stationary_mean(hist, q, n)
+        s = stationary_mean(hist, q, n, w)
         out.update({f"{q}_mean": s["mean"], f"{q}_std": s["std"],
                     f"{q}_mean1": s["mean1"], f"{q}_mean2": s["mean2"],
                     f"{q}_drift": s["drift"], f"{q}_driftTol": s["driftTol"],
                     f"{q}_stationary": s["stationary"]})
     out["stationary"] = all(out[f"{q}_stationary"] for q in quantities)
-    out["iters_to_stationary"] = iters_to_stationary(hist, quantities)
+    out["iters_to_stationary"] = iters_to_stationary(hist, quantities, w=w)
+    # sensitivity: the per-run window of D-042 addendum 2
+    st_run = [stationary_mean(hist, q, n, w_run) for q in quantities]
+    for q, s in zip(quantities, st_run):
+        out[f"{q}_mean_perRun"] = s["mean"]
+    out["stationary_perRun"] = all(s["stationary"] for s in st_run)
+    out["iters_to_stationary_perRun"] = iters_to_stationary(hist, quantities,
+                                                            w=w_run)
     return out
 
 
@@ -783,7 +868,8 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
         (case / rel).write_text(text)
     if is_oscillatory(name):
         # mean fields over the force window (D-042 addendum)
-        set_field_average_start(case, field_average_start(spec["iters"][solver]))
+        set_field_average_start(
+            case, field_average_start(spec["iters"][solver], name))
 
     rc = cfcase.allrun(
         case, ["-solver", solver, "-np", str(nprocs)] + spec["args"],
@@ -836,10 +922,17 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
     osc = is_oscillatory(name)
     if osc:
         # D-042: convergence := stationary window mean of Cd and Cl; the
-        # first stationary window gives the time to convergence
-        st = stationary_eval(hist)
+        # first stationary window gives the time to convergence. W is the
+        # case's common window (D-068); the per-run window is recorded as
+        # a sensitivity value (*_perRun)
+        st = stationary_eval(hist, case=name)
         rec.update(st)
         it = st["iters_to_stationary"]
+        it_run = st.get("iters_to_stationary_perRun")
+        if it_run is not None and rt:
+            tc_run = to_convergence(rt, progress_fraction(case, solver, it_run))
+            rec["wall_to_conv_s_perRun"] = tc_run.get("wall_to_conv_s")
+            rec["cpu_to_conv_h_perRun"] = tc_run.get("cpu_to_conv_h")
     else:
         rec["criterion"] = f"window {WINDOW}, tol {TOL} (12.3 ii)"
         it = iters_to_conv(hist)
@@ -913,6 +1006,11 @@ def summary_rows(recs: list[dict]) -> list[dict]:
             "dp_final": _med(g, "dp_final"),
             "Cd_std": _med(g, "Cd_std"), "Cl_std": _med(g, "Cl_std"),
             "W": _med(g, "W"),
+            # D-068 sensitivity: the per-run window of D-042 addendum 2
+            "W_perRun": _med(g, "W_perRun"),
+            "iters_perRun_median": _med(g, "iters_to_stationary_perRun"),
+            "wall_perRun_median": _med(g, "wall_to_conv_s_perRun"),
+            "cpuh_perRun_median": _med(g, "cpu_to_conv_h_perRun"),
             "criterion": ",".join(sorted({str(x["criterion"]) for x in g
                                           if x.get("criterion")})) or None,
             "cycleTypeFinal": ",".join(sorted({str(x.get("cycleTypeFinal"))
@@ -928,6 +1026,9 @@ def summary_rows(recs: list[dict]) -> list[dict]:
             t["speedup_wall_B_over_C"] = b["wall_median"] / cc["wall_median"]
         if b and cc and b["cpuh_median"] and cc["cpuh_median"]:
             t["speedup_cpu_B_over_C"] = b["cpuh_median"] / cc["cpuh_median"]
+        if b and cc and b["wall_perRun_median"] and cc["wall_perRun_median"]:
+            t["speedup_wall_B_over_C_perRun"] = (b["wall_perRun_median"]
+                                                 / cc["wall_perRun_median"])
     return table
 
 
@@ -1042,7 +1143,9 @@ SUMMARY_FIELDS = [
     "rss_sum_GB", "nCells", "Cd", "Cl", "dp", "Cd_final", "Cl_final",
     "dp_final", "Cd_std", "Cl_std", "W", "criterion", "cycleTypeFinal",
     "nPostSweepsFinal",
-    "speedup_wall_B_over_C", "speedup_cpu_B_over_C"]
+    "speedup_wall_B_over_C", "speedup_cpu_B_over_C",
+    "W_perRun", "iters_perRun_median", "wall_perRun_median",
+    "cpuh_perRun_median", "speedup_wall_B_over_C_perRun"]
 B10_FIELDS = [
     "case", "config", "reference", "status", "pass", "criterion",
     "wall_X", "wall_C", "dWall_X_vs_C", "cpuh_X", "cpuh_C", "dCpu_X_vs_C",

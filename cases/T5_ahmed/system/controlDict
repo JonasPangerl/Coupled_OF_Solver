@@ -78,10 +78,12 @@ functions
     // Mean fields over the averaging window of the wake criterion (D-042
     // addendum): UMean, UPrime2Mean, pMean, written at every write time.
     // The harness sets timeStart per run to n - W + 1 (n = iterations of
-    // the run, W = max(1000, n/2) capped at n; bench/run_bench.py
-    // field_average_start), so the average covers exactly the force window.
-    // The default belongs to endTime 5000 (W 2500). simpleFoam and
-    // coupledFoam both run it (same controlDict).
+    // the run, W = the case's common window run_bench.CASES[case]
+    // ["statWindow"] = 400 for both solvers (D-068), capped at n;
+    // bench/run_bench.py field_average_start), so the average covers
+    // exactly the force window. The default timeStart is only a
+    // placeholder. simpleFoam and coupledFoam both run it (same
+    // controlDict).
     fieldAverage
     {
         type            fieldAverage;
