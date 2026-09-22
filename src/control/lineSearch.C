@@ -290,9 +290,11 @@ void Foam::lineSearch::setStartup
         UstepEff_ = max(Ustep_, UrefEff_);
         pstepEff_ = max(pstepEff_, 0.5*sqr(UstepEff_));
     }
-    else if (startupRef_ == "exclude")
+    else if (startupRef_ == "exclude" && Ufield0_ > Ustep_)
     {
-        UstepEff_ = max(Ustep_, Ufield0_);
+        // Only a start whose initial field exceeds the step scale (the
+        // singular potential-flow peaks) is affected; otherwise a no-op
+        UstepEff_ = Ufield0_;
         pstepEff_ = max(pstepEff_, 0.5*sqr(UstepEff_));
         excludeDynamic_ = true;
     }

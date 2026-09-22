@@ -208,9 +208,13 @@ constexpr doubleScalar UrefStepCap = 4;
 
 // Start-up references (coupled.startupReference, D-057): "none"; "ramp":
 // Uref and Ustep blend from Ufield0 (beta 0) to their own value (beta 1)
-// along the start-up beta ramp (D-048); "exclude": while beta < 1 no cell
-// enters the dynamic set and Ustep >= Ufield0.
-constexpr const char* startupReference = "none";   // none | ramp | exclude
+// along the start-up beta ramp (D-048); "exclude": if Ufield0 > Ustep, then
+// while beta < 1 (upwind + ramp, D-048) the step scale is Ufield0 and no
+// cell enters the dynamic set - the start-up removes the inviscid,
+// singular potential-flow state, which the physical limits against U_inf
+// must not judge (T4a/T4b: iterations at CFL 1 / omegaMin otherwise).
+// No-op when the initial field does not exceed the reference (T0-T3).
+constexpr const char* startupReference = "exclude";   // none | ramp | exclude
 
 // Potential-flow start (coupled.potentialClip, D-057): before the first
 // coupled step of a fresh potentialInit start, |U| is clipped to

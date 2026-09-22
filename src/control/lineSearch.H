@@ -43,9 +43,11 @@ Description
     iteration 1 (after coupled.potentialClip), UrefStepCap =
     coupled.UrefStepCap (default cU = 4).
     coupled.startupReference ramp: Uref and Ustep blend linearly from
-    Ufield0 (start-up beta 0) to their frozen values (beta 1); exclude:
-    while beta < 1 the dynamic set is not updated (excludeDynamic) and
-    Ustep >= Ufield0; none (default): frozen values throughout.
+    Ufield0 (start-up beta 0) to their frozen values (beta 1); exclude
+    (default): if Ufield0 > Ustep, then while beta < 1 the step scale is
+    Ufield0 and no cell enters the dynamic set (excludeDynamic; rollback
+    marking stays); none: frozen values throughout. Both are no-ops when
+    the initial field does not exceed the reference (T0-T3).
 
     If omega < omegaMin the caller cuts CFL by kappa and repeats the step,
     at most maxCflCuts times (a cut at CFLmin is not repeated, D-057); then
