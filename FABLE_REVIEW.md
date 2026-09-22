@@ -174,3 +174,41 @@ T0/T1 are being re-verified.
 Recommendation: `./Allwmake` should always rebuild the applications after
 the library (check the top-level Allwmake), or run wclean on the apps when
 headers in src/ change.
+
+### 4. T3 airFoil2D: SST limit cycle and marginal linear solves (TOP OPEN ITEM)
+
+State 2026-09-22 morning, after the nut-cap fix (D-040) and the D-039
+preconditioner settings:
+- The nut cap no longer binds (nNutCapped 0) - that bug is fixed.
+- T3-SST still limit-cycles: R oscillates 1e-3..1e-2, forces oscillate
+  around roughly credible values without settling (old run: Cd swing
+  -0.02..+0.45). k bounding fires every iteration; 80-240 cells sit
+  permanently in the local CFL limiter.
+- Probes with the new build (run/exp_T3_cfl20, exp_T3_cfl500): both
+  aborted via B4 at ~434 / ~260 iterations because the linear solve
+  reached only a 0.51 reduction vs the eta = 0.5 target in 200
+  iterations - the D-039 settings are tuned on T1 and are marginal on
+  the stretched T3 C-grid. Linear maxIter is now 400 on T3/T4/T5 as
+  mitigation (commit after 83758a3).
+- T3-GEKO converges loosely (R 2.3e-4) with Cd 3.9 % off the reference
+  (tolerance 0.5 %).
+Suspects for the limit cycle, in order: (a) PTC too aggressive for a
+case simpleFoam needs 20000 heavily relaxed iterations for (T3-specific
+CFLmax, or slower PTC growth after bounding events); (b) segregated
+k/omega lag vs the coupled step (relaxation 0.7 -> 0.5, or turbulence
+sub-iterations); (c) freestream mixed-BC switching chatter at the far
+field; (d) preconditioner on stretched cells - rerun Test-blockSystem
+on dumped T3 systems (the harness from D-039 makes this cheap).
+Related: T1 needs ~495 its vs the 400-iteration test budget (spec 13);
+the outer-loop convergence rate is the remaining lever now that
+wall-clock per iteration is fixed.
+
+## Resolved (2026-09-22 morning)
+
+- Item 1: trajectory chaos, evidence in the section above.
+- Item 2 wall-clock: D-039 merged - T1 33 s vs simpleFoam 36 s; with
+  B11 (D-041) T0 Re100 np1 is at 6.2 s. Open remainder: outer iteration
+  count (item 4), scale-free rho so autoTune can return.
+- Items 2b: T0 np1+np4 Re100/Re1000 all PASS on the merged build.
+- Item 3: clean rebuild done for the merged build; an Allwmake relink
+  guard stays a nice-to-have.
