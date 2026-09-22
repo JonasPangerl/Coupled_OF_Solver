@@ -75,6 +75,17 @@ public:
 
         bool writeState() const noexcept { return writeState_; }
 
+        //- Presence of a restart file, agreed over all ranks: true if it
+        //  exists on every rank, false if on none, FatalError if the ranks
+        //  disagree (a partially written time directory would otherwise
+        //  give rank-dependent collectives, D-069 F5)
+        static bool presentOnAllRanks
+        (
+            const bool found,
+            const word& what,
+            const fileName& where
+        );
+
         //- Read the state of the current time; false if absent
         bool read(dictionary& state) const;
 
