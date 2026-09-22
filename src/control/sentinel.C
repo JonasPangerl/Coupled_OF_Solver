@@ -252,13 +252,22 @@ Foam::sentinel::checkResult Foam::sentinel::check
         }
     }
 
-    reduce(maxU, maxOp<scalar>());
-    reduce(minP, minOp<scalar>());
-    reduce(maxP, maxOp<scalar>());
-    reduce(minK, minOp<scalar>());
-    reduce(maxK, maxOp<scalar>());
-    reduce(minW, minOp<scalar>());
-    reduce(maxW, maxOp<scalar>());
+    // Seven extrema in one reduction (minima negated), the count in a
+    // second one; was eight scalar allreduces per check (D-069 F12)
+    {
+        FixedList<scalar, 7> ext
+        ({
+            maxU, -minP, maxP, -minK, maxK, -minW, maxW
+        });
+        reduce(ext, maxOp<scalar>());
+        maxU = ext[0];
+        minP = -ext[1];
+        maxP = ext[2];
+        minK = -ext[3];
+        maxK = ext[4];
+        minW = -ext[5];
+        maxW = ext[6];
+    }
     reduce(nNonFinite, sumOp<label>());
 
     res.nNonFinite = nNonFinite;
