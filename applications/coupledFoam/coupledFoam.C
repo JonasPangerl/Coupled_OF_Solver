@@ -380,7 +380,11 @@ int main(int argc, char *argv[])
 
                 // The written phi was built with the explicit term q_f of
                 // the assembly that was solved (rhieChow::updateFlux); use
-                // the stored q_f if present, else recompute it from p
+                // the stored q_f if present, else recompute it from p.
+                // The p coefficients as the first assembly will use them
+                // (a mixed p is constructed with its default valueFraction,
+                // D-069 F1)
+                p.boundaryFieldRef().updateCoeffs();
                 surfaceScalarField phiRe("phiRecomputed", phi);
                 tmp<surfaceScalarField> tQ = state.readQ();
                 if (tQ.valid())
@@ -769,6 +773,12 @@ int main(int argc, char *argv[])
         {
             clockTime ta;
             scalarField rDTV(ptc.rDeltaTV(phi, nuEff, cflF));
+            // Refresh the p boundary coefficients (valueFraction of the
+            // mixed types) before the assembly, as the native fvMatrix
+            // constructor does for U. Idempotent while updated(); the
+            // post-update p.correctBoundaryConditions() then evaluates with
+            // the coefficients of the solved continuity row (D-069 F1)
+            p.boundaryFieldRef().updateCoeffs();
             assembler.assembleMomentum(U, p, phi, nuEff, beta);
             nLocLim = ptc.applyLocalLimit
             (
