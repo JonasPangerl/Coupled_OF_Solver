@@ -6,6 +6,7 @@
 #include "blockSolver.H"
 #include "blockPreconditioner.H"
 #include "doubleReduce.H"
+#include "blockKernels.H"
 #include "coupledDefaults.H"
 #include <cmath>
 
@@ -148,11 +149,7 @@ void Foam::blockSolver::precondition
     }
     else
     {
-        const label n = r.size();
-        for (label i = 0; i < n; ++i)
-        {
-            w[i] = r[i];
-        }
+        blockKernels::copy(r.size(), r.cdata(), w.data());
     }
 }
 
@@ -168,9 +165,12 @@ Foam::reduceScalar Foam::blockSolver::normFactor
 
     reduceScalar s = 0;
     const label n = matrix_.nRows();
+    const blockScalar* __restrict__ AxPtr = Ax.cdata();
+    const blockScalar* __restrict__ bPtr = b.cdata();
+    #pragma omp simd reduction(+:s)
     for (label i = 0; i < n; ++i)
     {
-        s += std::abs(toDouble(Ax[i])) + std::abs(toDouble(b[i]));
+        s += std::abs(toDouble(AxPtr[i])) + std::abs(toDouble(bPtr[i]));
     }
 
     // GUARD: normFactor >= SMALL (spec 9.2)

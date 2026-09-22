@@ -240,6 +240,7 @@ void Foam::blockLduMatrix4::initResidualAcc(const blockScalarUList& b) const
 
     const blockScalar* __restrict__ bPtr = b.cdata();
     reduceScalar* __restrict__ accPtr = residualAcc_.data();
+    #pragma omp simd
     for (label i = 0; i < n; ++i)
     {
         accPtr[i] = toDouble(bPtr[i]);
@@ -312,6 +313,7 @@ void Foam::blockLduMatrix4::narrowResidualAcc(blockScalarUList& r) const
     const label n = nRows();
     const reduceScalar* __restrict__ accPtr = residualAcc_.cdata();
     blockScalar* __restrict__ rPtr = r.data();
+    #pragma omp simd
     for (label i = 0; i < n; ++i)
     {
         rPtr[i] = narrow(accPtr[i]);
@@ -331,6 +333,7 @@ void Foam::blockLduMatrix4::residual
     const label n = nRows();
     blockScalar* __restrict__ rPtr = r.data();
     const blockScalar* __restrict__ bPtr = b.cdata();
+    #pragma omp simd
     for (label i = 0; i < n; ++i)
     {
         rPtr[i] = bPtr[i] - rPtr[i];
@@ -357,6 +360,7 @@ void Foam::blockLduMatrix4::residualDouble
         const reduceScalar* __restrict__ xPtr = x.cdata();
         blockScalar* __restrict__ hiPtr = residualHi_.data();
         blockScalar* __restrict__ loPtr = residualLo_.data();
+        #pragma omp simd
         for (label i = 0; i < n; ++i)
         {
             const blockScalar hi = narrow(xPtr[i]);
