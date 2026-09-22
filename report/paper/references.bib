@@ -388,3 +388,164 @@
   address   = {Berlin},
   year      = {2002}
 }
+
+% --- Added for the tutorial solver comparison (solver_comparison_tutorial.tex)
+%     Keys prefixed cmp-. Vendor web pages accessed 2026-09-22.
+
+@article{cmp-WeissSmith1995,
+  author  = {Weiss, J. M. and Smith, W. A.},
+  title   = {Preconditioning applied to variable and constant density flows},
+  journal = {AIAA Journal},
+  volume  = {33},
+  number  = {11},
+  pages   = {2050--2057},
+  year    = {1995},
+  doi     = {10.2514/3.12946}
+}
+
+@article{cmp-ChenPrzekwas2010,
+  author  = {Chen, Z. and Przekwas, A. J.},
+  title   = {A coupled pressure-based computational method for incompressible/compressible flows},
+  journal = {Journal of Computational Physics},
+  volume  = {229},
+  pages   = {9150--9165},
+  year    = {2010},
+  doi     = {10.1016/j.jcp.2010.08.029}
+}
+
+@manual{cmp-Fluent12UG,
+  author       = {{ANSYS, Inc.}},
+  title        = {{ANSYS FLUENT} 12.0 User's Guide},
+  note         = {Sections 26.3 (pressure-velocity coupling, Courant number and explicit relaxation of the coupled solver) and 26.5 (algebraic multigrid parameters: smoothers, cycle types). \url{https://www.afs.enea.it/project/neptunius/docs/fluent/html/ug/node785.htm}, \url{https://www.afs.enea.it/project/neptunius/docs/fluent/html/ug/node794.htm}},
+  year         = {2009}
+}
+
+@manual{cmp-Fluent12TG,
+  author       = {{ANSYS, Inc.}},
+  title        = {{ANSYS FLUENT} 12.0 Theory Guide},
+  note         = {Sections 18.1.1 (pressure-based coupled algorithm, memory 1.5--2 times segregated), 18.1.2 (density-based solver), 18.4.3 (pressure-velocity coupling, coupled algorithm, Rhie--Chow), 18.6.3 (algebraic multigrid, coupled AMG, ILU and Gauss--Seidel smoothers). \url{https://www.afs.enea.it/project/neptunius/docs/fluent/html/th/node373.htm}, \url{https://www.afs.enea.it/project/neptunius/docs/fluent/html/th/node385.htm}},
+  year         = {2009}
+}
+
+@manual{cmp-FluentPseudoTime,
+  author       = {{Ansys, Inc.}},
+  title        = {Ansys Fluent Theory Guide, Release 2024 R2, Section 23.6: Pseudo Time Method (23.6.2 Global Time Step Method)},
+  note         = {\url{https://ansyshelp.ansys.com/public/Views/Secured/corp/v242/en/flu_th/flu_th_sec_pseudo_auto.html}; user guide Section 36.14 \url{https://ansyshelp.ansys.com/public/views/secured/corp/v251/en/flu_ug/flu_ug_sec_solve_pseudo.html}},
+  year         = {2024}
+}
+
+@manual{cmp-FluentLocalPseudo,
+  author       = {{Ansys, Inc.}},
+  title        = {Ansys Fluent Beta Features Manual, Release 2025 R2, Section 20.15: Using the Local Pseudo Time Step Method with the Pressure-Based Coupled Solver},
+  note         = {\url{https://ansyshelp.ansys.com/public/Views/Secured/corp/v252/en/fluent_beta_doc/flu_beta_solv_pseudo_coupled.html}},
+  year         = {2025}
+}
+
+@manual{cmp-StarCoupledDoc,
+  author       = {{Siemens Digital Industries Software}},
+  title        = {Simcenter {STAR-CCM+} User Guide: Coupled Flow Solver (theory)},
+  note         = {Coupled solution of continuity, momentum, energy and species; Weiss--Smith preconditioned Roe flux-difference splitting; implicit pseudo-time; continuity convergence accelerator. Consulted through the mirror \url{https://www.topcfd.cn/Ebook/STARCCMP/GUID-BBC28794-4C63-429F-BB47-8C1866AA13DF.html}},
+  year         = {2023}
+}
+
+@misc{cmp-StarAutoCFL2020,
+  author       = {{Siemens Digital Industries Software}},
+  title        = {Enjoy tuning your simulations? {LOOK AWAY}! (Simcenter {STAR-CCM+} 2020.1 automatic {CFL} control and line search for the explicit relaxation of the coupled solver)},
+  howpublished = {Simcenter blog, \url{https://blogs.sw.siemens.com/simcenter/enjoy-tuning-your-simulations-look-away/}},
+  year         = {2020}
+}
+
+@misc{cmp-StarEffortless2020,
+  author       = {{Siemens Digital Industries Software}},
+  title        = {Effortless convergence in {CFD}. It will make your day! (automatic {CFL} control of the Simcenter {STAR-CCM+} coupled solver)},
+  howpublished = {Simcenter blog, \url{https://blogs.sw.siemens.com/simcenter/effortless-convergence-in-cfd-it-will-make-your-day/}},
+  year         = {2020}
+}
+
+@misc{cmp-StarSIMPLEC2023,
+  author       = {{Siemens Digital Industries Software}},
+  title        = {{CFD} speedup at no additional cost has never been that {SIMPLE} and Consistent ({SIMPLEC} in Simcenter {STAR-CCM+} 2302)},
+  howpublished = {Simcenter blog, \url{https://blogs.sw.siemens.com/simcenter/cfd-speedup-with-simplec/}},
+  year         = {2023}
+}
+
+@misc{cmp-StarCoupledGPU2023,
+  author       = {Obiso, D.},
+  title        = {Fasten your seat belts: the coupled solver is taking off on {GPU}!},
+  howpublished = {Simcenter blog, \url{https://blogs.sw.siemens.com/simcenter/cfd-coupled-solver-is-taking-off-on-gpu/}},
+  year         = {2023}
+}
+
+@misc{cmp-VolupeCoupled,
+  author       = {{Volupe}},
+  title        = {Coupled solver settings in Simcenter {STAR-CCM+}},
+  howpublished = {\url{https://volupe.com/simcenter-star-ccm/coupled-solver-settings-in-simcenter-star-ccm/}},
+  note         = {Siemens reseller; continuity convergence accelerator, automatic {CFL} defaults},
+  year         = {2021}
+}
+
+@inproceedings{cmp-Caraeni2013,
+  author    = {Caraeni, D. and others},
+  title     = {Continuity convergence acceleration of a density-based coupled algorithm},
+  booktitle = {21st AIAA Computational Fluid Dynamics Conference},
+  note      = {AIAA Paper 2013-2962, \url{https://arc.aiaa.org/doi/abs/10.2514/6.2013-2962}},
+  year      = {2013}
+}
+
+@misc{cmp-HelyxCoupled,
+  author       = {{ENGYS Ltd.}},
+  title        = {{HELYX-Coupled}: advanced {CFD} software for incompressible and compressible flows},
+  howpublished = {Product page, \url{https://engys.com/helyx/coupled/} and \url{https://engys.com/products/add-ons/helyx-coupled}},
+  year         = {2026}
+}
+
+@misc{cmp-HelyxTechniques,
+  author       = {{ENGYS Ltd.}},
+  title        = {The techniques driving {HELYX}'s high performance coupled solver},
+  howpublished = {ENGYS blog, \url{https://engys.com/blog/the-techniques-driving-helyx-high-performance-coupled-solver/}},
+  year         = {2025}
+}
+
+@inproceedings{cmp-Jareteg2014,
+  author    = {Jareteg, K. and Vuk{\v{c}}evi{\'c}, V. and Jasak, H.},
+  title     = {{pUCoupledFoam} -- an open source coupled incompressible pressure-velocity solver based on foam-extend},
+  booktitle = {9th OpenFOAM Workshop},
+  address   = {Zagreb},
+  note      = {\url{https://www.croris.hr/crosbi/publikacija/prilog-skup/615018}},
+  year      = {2014}
+}
+
+@misc{cmp-Jareteg2015,
+  author       = {Jareteg, K.},
+  title        = {Block coupled matrix solvers in foam-extend-3 and more},
+  howpublished = {Lecture, CFD with OpenSource software (TME050), Chalmers University of Technology, \url{https://www.tfd.chalmers.se/~hani/kurser/OS_CFD_2015/KlasJareteg_CoupledSolver_TME050_2015_NoPause.pdf}},
+  year         = {2015}
+}
+
+@article{cmp-Akervik2006,
+  author  = {{\AA}kervik, E. and Brandt, L. and Henningson, D. S. and H{\oe}pffner, J. and Marxen, O. and Schlatter, P.},
+  title   = {Steady solutions of the {Navier--Stokes} equations by selective frequency damping},
+  journal = {Physics of Fluids},
+  volume  = {18},
+  pages   = {068102},
+  year    = {2006}
+}
+
+@article{cmp-Economon2020,
+  author  = {Economon, T. D.},
+  title   = {Simulation and adjoint-based design for variable density incompressible flows with heat transfer},
+  journal = {AIAA Journal},
+  volume  = {58},
+  year    = {2020},
+  doi     = {10.2514/1.J058222}
+}
+
+@book{cmp-Moukalled2016,
+  author    = {Moukalled, F. and Mangani, L. and Darwish, M.},
+  title     = {The Finite Volume Method in Computational Fluid Dynamics},
+  series    = {Fluid Mechanics and Its Applications},
+  volume    = {113},
+  publisher = {Springer},
+  address   = {Cham},
+  year      = {2016}
+}
