@@ -49,7 +49,39 @@ Every case in `cases/` has `Allrun` and `Allclean`:
 Solver controls live in `system/fvSolution` (`solvers.coupled` for the linear
 solver, top-level `coupled` for the outer iteration); every keyword and its
 default is listed in spec Section 11 and printed at start-up under
-`coupledFoam: effective settings`.
+`coupledFoam: effective settings`. Keywords added after the spec (all with
+their defaults in `src/include/coupledDefaults.H`):
+
+- `coupled.startupMode upwind | hybrid | none` (D-048, default `upwind`,
+  the original behaviour): `hybrid` ramps the convection blending beta
+  linearly from 0 to 1 over `startupRampLength` iterations from a ramp
+  start chosen by the residual history (`startupRampStart`,
+  `startupRampStartMax`, `startupSwitchR`, `startupStagnationFactor`,
+  `startupStagnationWindow`, `startupFastFactor`); `none` starts with beta
+  1. A fresh start without `potentialInit` on a non-uniform velocity field
+  (a mapped solution) is probed at iteration 1 and keeps beta 1 if it is
+  developed (`startupDevelopedTol`). The ramp state is part of the
+  restart state.
+- `coupled.Uref boundary | field | <value>` (D-050, default `boundary`):
+  the velocity scale of the line search, the local CFL limit, the dynamic
+  remediation set and the sentinel. `boundary` is the maximum over the
+  non-coupled boundary values (inflow, moving walls, free stream);
+  `field` is the previous definition (the maximum over the cells as
+  well, i.e. the potential-flow peak with `potentialInit`).
+- `solvers.coupled.blockGAMG.pivotGrowthLimit` (D-049, default 20, 0 =
+  off): the blockILU0 smoother falls back to the unmodified diagonal block
+  of a cell whose factorised pivot inverse grew by more than this factor.
+  Fallbacks appear as `nPivFb=` on the `CF|` line and as `pivotFallbacks`
+  in the summary.
+- `coupled.ptc.linFailPolicy strict | reduction` (default `strict`):
+  with `reduction` a linear solve that hit `maxIter` counts as a success if
+  it is finite and reduced the residual to at most `linAcceptReduction`
+  (0.9) times its start value (`linAcceptedUnconverged` in the summary).
+
+An abort (B4 linear-solve failures or the sentinel rollback limit) writes
+the last accepted fields, `sentinelFlag`, `remediationFlag` and the
+remediation cell sets into `<iter>_lastValid` (per processor directory in
+parallel), never into a numbered time directory.
 
 ## Tests and benchmarks
 
