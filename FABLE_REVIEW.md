@@ -243,3 +243,30 @@ tolerance are spec thresholds; both runs are physically close but the
 outer-iteration convergence rate near R ~1e-5 is the limit. Also: the
 test JSONs for T0-T2 carry wallSeconds but no cpuHours (the solver
 summary JSON has them) - reporting gap to close in tests/cflib.
+
+### 4c. TASK 3 result - T3-SST limit cycle persists (2026-09-22 ~10:10)
+
+Step 1 (D-043/D-044 defaults, nut cap 1e8 effective, 3000 its, 164 s):
+R oscillates 3e-3..8.6e-3 at CFL 500; 1300-2500 of 10720 cells locally
+CFL-limited; bounding k in every iteration (3502 events); forces
+oscillate around negative values. Step 2 probes (1500 its each,
+run/exp_T3_*):
+
+| probe | min R | last R | locally limited (mean last 300) | bounding k | Cd / Cl (mean last 500) |
+|---|---|---|---|---|---|
+| a CFLmax 20 | 1.5e-4 | 2.6e-3 | 134 | 1750 | 0.110 / 0.055 |
+| b k/omega relax 0.5 | 1.3e-4 | 3.3e-3 | 1844 | 1313 | 0.127 / 0.064 |
+| c startupUpwindIters 200 | 1.0e-3 | 8.6e-3 | 1807 | 1719 | 0.127 / 0.064 |
+| simpleFoam reference | | | | | 0.0907 / 0.253 |
+
+None converges (TASK 3 rule 3: no template change, move on). Key
+observation for the next analysis: Cl is ~1/4 of the reference in ALL
+probes - a systematic difference, not only a convergence problem
+(check: freestream BC linearisation incl. the A3 (1-viC) weighting on
+freestreamPressure, the far-field inflow/outflow switch - diagnostics
+level 3 item f counts it -, the k bounding every iteration, and whether
+the reference itself is converged: simpleFoam needed 20000 relaxed
+iterations and the GEKO reference Cl is 0.838 vs SST 0.253).
+Note: probe c did not change the switch point materially - the start-up
+switch also fires on R < 1e-2 (D-008), so startupUpwindIters alone
+cannot extend the upwind phase.
