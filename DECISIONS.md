@@ -1991,3 +1991,31 @@ original budget is ignored and flagged (D-060) and the N..end means stop
 at the original end. make_report._speed_record reads through it.
 plot_histories (owned by the figures agent) still reads all samples; the
 change it needs is given to the lead.
+
+### 8. Staleness guard: build id, guarded run reads, overwritten run directories (review M9)
+
+- Build: Guard.check_run rejects a coupledFoam run whose starts used more
+  than one build, whose build id differs from the report's build
+  (Guard.build_id: $CF_REPORT_BUILD_ID, else the coupledFoam on PATH when
+  make_report runs in an OpenFOAM environment, else the first coupledFoam
+  run checked, so that all runs of a report share one build), or whose
+  binary / libcoupledFoam.so at the recorded path was rebuilt since the
+  run (stale binary). The report should run in the same environment as the
+  campaign (cfenv sys) so that the install on PATH is the freeze build.
+- Record identity: results.write stores runFingerprint (provenance start
+  date, commit and build id of the run directory, size of its solver logs).
+  Guard.check_record rejects a record whose directory was re-run or whose
+  solver log changed afterwards, or whose run started at another commit
+  than the record's. Guard.check_record_run(case, rec, run_dir) does the
+  same for a consumer that reads a record's run directory; for records
+  without a fingerprint it compares the run start (provenance) or the
+  solver-log time with the record timestamp. Verified on main:
+  results/tests/T4a_np10.json (11:20) vs run/T4a_np10 (log.coupledFoam
+  13:40) is detected.
+- Guarded reads: user_convergence.evaluate / auto_iteration (and so
+  apply_test, apply_bench and make_report.table_convergence, which calls
+  evaluate) and make_report._speed_record read a run directory only if it
+  passes check_record_run (run/ref_* exempt from the commit check).
+- user_convergence.apply_test keeps Cd_mean / Cl_mean / *_std of the
+  coupledFoam record consistent with a user point (they were updated on
+  the reference side only).

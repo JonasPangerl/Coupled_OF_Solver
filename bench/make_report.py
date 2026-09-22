@@ -1195,6 +1195,9 @@ def _speed_record(tests: dict, rec: str, cfd: str, sfd: str) -> dict | None:
     d = tests.get(rec)
     if not d:
         return None
+    # M9: the run directory read below must still be this record's run
+    if (RUN / cfd).is_dir() and not GUARD.check_record_run(rec, d, RUN / cfd):
+        return None
     ref = d.get("reference") or {}
     kind, target = speed_criterion(rec, d)
     out: dict = {"criterion": kind, "Rtarget": target,

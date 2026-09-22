@@ -102,10 +102,27 @@ def _rt(rec: dict) -> dict:
     return {}
 
 
+def guard_ok(case: Path, rec: dict) -> bool:
+    """The run directory may be read for record `rec` (M9): it passes the
+    active staleness guard of the report (provenance at the target commit
+    and build; run/ref_* exempt) and is still the run the record was made
+    from. Always true without an active guard."""
+    import run_bench  # noqa: PLC0415, F401  (puts tests/ on sys.path)
+    from cflib import provenance  # noqa: PLC0415
+    return provenance.active().check_record_run(Path(case).name, rec,
+                                                Path(case))
+
+
 def evaluate(case: Path, solver: str, it: int, rec: dict) -> dict:
-    """Numbers of a run converged at iteration `it` (see module doc)."""
+    """Numbers of a run converged at iteration `it` (see module doc). A run
+    directory rejected by the staleness guard (guard_ok) is not read: the
+    result is flagged "ignored"."""
     import run_bench  # noqa: PLC0415
     out: dict = {"iters": it}
+    if not guard_ok(case, rec):
+        out["ignored"] = (f"run directory {Path(case).name} rejected by the "
+                          "staleness guard (listed in the appendix)")
+        return out
     h = force_hist(case)
     if h:
         n = min(len(h["Cd"]), len(h["Cl"]))
@@ -195,6 +212,8 @@ def auto_iteration(rec: dict, case: Path) -> int | None:
     if rec.get("convergedAt") is not None:
         return rec["convergedAt"]
     import run_bench  # noqa: PLC0415
+    if not Path(case).is_dir() or not guard_ok(case, rec):
+        return rec.get("iterations")
     h = force_hist(case)
     it = (run_bench.iters_to_conv({k: v.tolist() for k, v in h.items()})
           if h else None)
@@ -230,6 +249,11 @@ def apply_test(name: str, rec: dict, table: dict) -> dict:
         rec["cpuHoursToConv"] = ev["cpu_to_conv_h"]
         if "Cd" in ev:
             rec["Cd"], rec["Cl"] = ev["Cd"], ev["Cl"]
+            # wake-case tables read the *_mean keys: keep both consistent
+            # (review M9: the reference side was updated, this side not)
+            if rec.get("Cd_mean") is not None:
+                rec["Cd_mean"], rec["Cl_mean"] = ev["Cd"], ev["Cl"]
+                rec["Cd_std"], rec["Cl_std"] = ev["Cd_std"], ev["Cl_std"]
     if its is not None and rdir.is_dir():
         ev = evaluate(rdir, "simpleFoam", its, ref)
         if ev.get("ignored"):
@@ -244,6 +268,7 @@ def apply_test(name: str, rec: dict, table: dict) -> dict:
         if "Cd" in ev:
             ref["Cd"], ref["Cl"] = ev["Cd"], ev["Cl"]
             ref["Cd_mean"], ref["Cl_mean"] = ev["Cd"], ev["Cl"]
+            ref["Cd_std"], ref["Cl_std"] = ev["Cd_std"], ev["Cl_std"]
             rec["CdRef"], rec["ClRef"] = ev["Cd"], ev["Cl"]
     if rec.get("Cd") is not None and rec.get("CdRef"):
         rec["CdRelDiff"] = abs(rec["Cd"] - rec["CdRef"]) / abs(rec["CdRef"])

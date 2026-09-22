@@ -16,7 +16,7 @@ import os
 import time
 from pathlib import Path
 
-from .env import RESULTS, machine_state
+from .env import RESULTS, RUN_ROOT, machine_state
 from . import provenance
 
 
@@ -93,7 +93,18 @@ def complete_timing(record: dict) -> dict:
     return record
 
 
-def write(kind: str, name: str, data: dict) -> Path:
+def default_run_dir(kind: str, name: str) -> Path | None:
+    """Run directory a record of this kind/name is made from (tests: run/<name>,
+    bench: run/bench_<name>), None if it does not exist."""
+    d = RUN_ROOT / (f"bench_{name}" if kind == "bench" else name)
+    return d if d.is_dir() else None
+
+
+def write(kind: str, name: str, data: dict,
+          run_dir: Path | None = None) -> Path:
+    """Write results/<kind>/<name>.json. The record carries the fingerprint
+    of its run directory (run_dir, default default_run_dir) so the report
+    can detect a directory re-run after the record (M9)."""
     out = RESULTS / kind / f"{name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     head = provenance.git_head()
@@ -105,6 +116,9 @@ def write(kind: str, name: str, data: dict) -> Path:
         "WM_OPTIONS": os.environ.get("WM_OPTIONS"),
         "machine": machine_state().as_dict(),
     }
+    fp = provenance.run_fingerprint(run_dir or default_run_dir(kind, name))
+    if fp:
+        record["runFingerprint"] = fp
     record.update(data)
     complete_timing(record)
     out.write_text(json.dumps(_clean(record), indent=2) + "\n")

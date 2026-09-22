@@ -403,3 +403,72 @@ def test_reference_continuation_excluded(tmp_path):
     # a run without continuation is not cut
     other = _force_case(tmp_path / "T4a_np10", [0.4] * n, [0.07] * n)
     assert len(run_bench.force_history(other)["Cd"]) == n
+
+
+# --------------------------------------------------------------------------- #
+# M9: build id and record/run-directory identity in the staleness guard
+# --------------------------------------------------------------------------- #
+
+from cflib import provenance as pv  # noqa: E402
+
+TARGET = "abcdef1234567890abcdef1234567890abcdef12"
+
+
+def _fake_run(d, date="2026-09-22T20:00:00", build="b1", binary=None,
+              log="CF| iter=1\nEnd\n"):
+    d.mkdir(parents=True, exist_ok=True)
+    prov = {"gitCommit": TARGET, "dirty": False, "solver": "coupledFoam",
+            "date": date, "buildId": build, "binaries": {"coupledFoam": {}}}
+    if binary is not None:
+        prov["binaries"]["coupledFoam"]["binary"] = pv.file_info(binary)
+    (d / "provenance.json").write_text(json.dumps(prov))
+    (d / "log.coupledFoam").write_text(log)
+    return d
+
+
+def test_fingerprint_detects_rerun(tmp_path):
+    d = _fake_run(tmp_path / "T4a_np10")
+    rec = {"gitCommit": TARGET[:7], "timestamp": "2026-09-22T21:00:00",
+           "runFingerprint": pv.run_fingerprint(d)}
+    g = pv.Guard(TARGET, build_id=None)
+    assert g.check_record("T4a_np10", rec)
+    assert pv.record_run_mismatch(rec, d) is None
+    # the directory is re-run later: other start date, other log
+    _fake_run(d, date="2026-09-22T23:00:00", log="CF| iter=1\nCF| iter=2\nEnd\n")
+    assert "re-run" in pv.record_run_mismatch(rec, d)
+    g2 = pv.Guard(TARGET, build_id=None)
+    assert not g2.check_record("T4a_np10", rec)
+    assert not g2.check_record_run("T4a_np10", rec, d)
+
+
+def test_old_record_without_fingerprint(tmp_path):
+    d = _fake_run(tmp_path / "T4a_np10", date="2026-09-22T13:00:00")
+    rec = {"gitCommit": TARGET[:7], "timestamp": "2026-09-22T11:20:35"}
+    assert "after the record" in pv.record_run_mismatch(rec, d)
+
+
+def test_build_id_checks(tmp_path):
+    exe = tmp_path / "coupledFoam"
+    exe.write_bytes(b"binary v1")
+    d = _fake_run(tmp_path / "T1_np1", build="b1", binary=exe)
+    assert pv.Guard(TARGET, build_id="b1").check_run(d)
+    assert not pv.Guard(TARGET, build_id="b2").check_run(d)
+    g = pv.Guard(TARGET, build_id="first-run")
+    assert g.check_run(d) and g.build_id == "b1"
+    # a stale binary: rebuilt at the recorded path after the run
+    exe.write_bytes(b"binary v2")
+    g3 = pv.Guard(TARGET, build_id="b1")
+    assert not g3.check_run(d)
+    assert any("stale solver binary" in r["reason"] for r in g3.rows())
+
+
+def test_results_write_stores_fingerprint(tmp_path, monkeypatch):
+    run_root = tmp_path / "run"
+    _fake_run(run_root / "T1_np1")
+    monkeypatch.setattr(cfresults, "RESULTS", tmp_path / "results")
+    monkeypatch.setattr(cfresults, "RUN_ROOT", run_root)
+    out = cfresults.write("tests", "T1_np1", {"x": 1})
+    rec = json.loads(out.read_text())
+    fp = rec["runFingerprint"]
+    assert fp["provenanceDate"] == "2026-09-22T20:00:00"
+    assert fp["logs"]["log.coupledFoam"]["size"] > 0
