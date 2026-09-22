@@ -1797,7 +1797,7 @@ for SP to be built and tested against the maximum precision available.
 - Every setting that may need changing must be a run-time keyword, not a
   compile-time constant.
 
-## D-067 - Report conventions: mean-field deltas, SP verdict, common speed-up criterion (report-d, 2026-09-22)
+## D-067 - Report conventions: mean-field deltas, SP verdict, placeholders (report-d, 2026-09-22)
 
 Report generator and papers (branch report-d); no solver or test change.
 
@@ -1818,13 +1818,12 @@ Report generator and papers (branch report-d); no solver or test change.
   SP-geometry-fail). "Undetermined" if the gate or the DP value is not
   recorded. The "other" column of the per-iteration breakdown is the
   remainder of the iteration (incl. I/O) unless a record carries t_io.
-- **Speed-up of the test records (harness review M1).** Both solvers are
-  taken at the same criterion: the test's residual target on the coupled
-  R and on ALL initial residuals of simpleFoam (T0, T1), the native count
-  of D-024 (T2), the stationary window mean (T4, itersToConv of both
-  records), the solver's own stop if the run converged (T3). simpleFoam
-  time and CPU-hours are scaled to that iteration by its ClockTime log.
-  Before, simpleFoam was taken at its residualControl stop (T1: 769 instead
-  of 526 iterations, speed-up overstated by about 1.4x).
+- **Speed-up of the test records (harness review M1).** Implemented by
+  branch harness-fix (D-068 item 4, make_report._speed_record); report-d
+  keeps the main version of that function and only states the common
+  criterion in the text. The motorbike table wake_speedup reads the
+  record fields of D-068 item 5 (speedupWall/Cpu, *_perRun,
+  referenceSingleConfig, referenceNoPotentialStart,
+  referenceTimingConditionsUnknown).
 - **Pending placeholders.** A missing generated figure or table is one
   numbered line with its caption (\cfpendingitem), not a floating box.

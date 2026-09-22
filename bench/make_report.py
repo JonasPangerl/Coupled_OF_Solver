@@ -1160,19 +1160,14 @@ def _speed_record(tests: dict, rec: str, cfd: str, sfd: str) -> dict | None:
         return None
     ref = d.get("reference") or {}
     n_cf = d.get("iterations")
-    # convergence point of coupledFoam (harness review M1): the residual
-    # target of the test (T0-T2), else the stationary window mean (T4,
-    # itersToConv), else the solver's own stop if the run converged (T3)
-    it_cf = d.get("iterationsToR") or d.get("iterationsToR_coupled") \
-        or d.get("itersToConv")
-    if it_cf is None and d.get("converged") and d.get("autoIteration"):
-        it_cf = d.get("autoIteration")
+    it_cf = d.get("iterationsToR") or d.get("iterationsToR_coupled")
     wall_cf_run = d.get("wallSecondsSolver") or d.get("wallSeconds")
     cpu_cf_run = d.get("cpuHoursSolver") or d.get("cpuHours")
     if not (n_cf and wall_cf_run and cpu_cf_run):
         return None
-    # records without a convergence point count as not converged; the bar
-    # is then the whole run
+    # records without an iteration count to the residual target (T3: the
+    # residual target was not reached in the 3000 iterations) count as not
+    # converged; the bar is then the whole run
     conv_cf = bool(it_cf)
     cft = cf_timeline(RUN / cfd)
     if conv_cf and cft is not None and it_cf <= len(cft["t"]):
@@ -1181,26 +1176,8 @@ def _speed_record(tests: dict, rec: str, cfd: str, sfd: str) -> dict | None:
         frac = it_cf / n_cf
     else:
         frac = 1.0
+    it_sf = ref.get("convergedAt")
     n_sf = ref.get("iterations")
-    # convergence point of simpleFoam with the SAME criterion as coupledFoam
-    # (review M1): the residual target of the test on all initial residuals
-    # (T0, T1), the native iteration count of D-024 (T2), the stationary
-    # window mean (T4), else its own residualControl stop (T3)
-    it_sf = None
-    tgt = d.get("Rtarget")
-    sflog = RUN / sfd / "log.simpleFoam"
-    if tgt and sflog.exists():
-        nat = logs.parse_native(sflog)
-        it_sf = logs.native_iterations_to(nat, tgt,
-                                          tuple(nat["residuals"].keys()))
-    elif d.get("iterationsToR_native") is not None:
-        it_sf = d["iterationsToR_native"]
-        if n_sf and it_sf >= n_sf:
-            it_sf = None
-    elif ref.get("itersToConv") is not None:
-        it_sf = ref["itersToConv"]
-    else:
-        it_sf = ref.get("convergedAt")
     conv_sf = it_sf is not None
     ta = ref.get("timingAllrun") or {}
     wall_sf = ref.get("wallSecondsSolver") or ref.get("wallSeconds") \
@@ -1211,13 +1188,6 @@ def _speed_record(tests: dict, rec: str, cfd: str, sfd: str) -> dict | None:
         cpu_sf = wall_sf * nproc_sf / 3600.0   # serial reference: CPU = wall
     if not wall_sf:
         return None
-    if conv_sf:
-        sft = sf_timeline(RUN / sfd)
-        if sft is not None and it_sf <= len(sft["t"]) and sft["t"][-1] > 0:
-            fs = sft["t"][it_sf - 1] / sft["t"][-1]
-        else:
-            fs = it_sf / n_sf if n_sf else 1.0
-        wall_sf, cpu_sf = wall_sf * fs, cpu_sf * fs
     return {
         "wall_cf": wall_cf_run * frac, "cpu_cf": cpu_cf_run * frac,
         "it_cf": it_cf if conv_cf else n_cf, "conv_cf": conv_cf,
@@ -1860,12 +1830,12 @@ def sp_section(tests: dict, bench: list[dict]) -> None:
                        label="SP residual target (D7)")
             ax.set_title(lab, fontsize=8)
             ax.set_xlabel("outer iteration", fontsize=8)
-            ax.tick_params(labelsize=7)
+            ax.tick_params(labelsize=7.5)
         for ax in list(axs.flat)[len(hist):]:
             ax.axis("off")
         for r in range(nrow):
             axs[r, 0].set_ylabel("combined residual $R_n$", fontsize=8)
-        axs.flat[0].legend(fontsize=7, loc="upper right")
+        axs.flat[0].legend(fontsize=7.5, loc="upper right")
         save(fig, "sp_convergence_floor",
              "Convergence floor: combined residual $R_n$ of coupledFoam in "
              "double (solid) and single precision (dashed) on the same case; "
@@ -2099,18 +2069,20 @@ def table_wake_speedup(tests: dict) -> None:
         spw = d.get("speedupWall") or (ws / wc if ws and wc else None)
         spc = d.get("speedupCpu") or (cs / cc if cs and cc else None)
         W, Wr = d.get("W"), ref.get("W")
-        common = d.get("commonWindow") or (W is not None and W == Wr)
+        # harness-fix (D-068 items 1, 5): speedupWall/Cpu use the common
+        # window, speedupWall_perRun/Cpu_perRun the earlier per-run window
+        sw, sc = d.get("speedupWall_perRun"), d.get("speedupCpu_perRun")
+        common = sw is not None or d.get("commonWindow") \
+            or (W is not None and W == Wr)
         rule = (f"common W = {W}" if common else
                 f"per-run W = {W} / {Wr} (earlier rule)")
-        sens = (d.get("sensitivity") or {}).get("perRunWindow") \
-            or d.get("perRunWindow") or {}
-        sens_txt = (f"{sens['speedupWall']:.2f} / {sens['speedupCpu']:.2f}"
-                    if sens.get("speedupWall") and sens.get("speedupCpu")
+        sens_txt = (f"{sw:.2f} / {sc:.2f}" if sw and sc
                     else ("= left" if not common else "n/a"))
         rows.append([name, fmt(d.get("itersToConv"), "{}"),
                      fmt(ref.get("itersToConv"), "{}"), fmt(wc), fmt(ws),
                      fmt(cc, "{:.3g}"), fmt(cs, "{:.3g}"),
                      fmt(spw, "{:.2f}"), fmt(spc, "{:.2f}"), rule, sens_txt,
+                     _flag(d, "referenceSingleConfig"),
                      _flag(d, "referenceNoPotentialStart"),
                      _flag(d, "referenceTimingConditionsUnknown")])
         k = name.split("_")[0]
@@ -2124,7 +2096,8 @@ def table_wake_speedup(tests: dict) -> None:
         ["run", "it. cF", "it. sF", "wall cF [s]", "wall sF [s]",
          "CPU-h cF", "CPU-h sF", "speed-up wall", "speed-up CPU",
          "window", "per-run-window speed-up (wall / CPU)",
-         "ref. without potentialFoam start", "ref. timing conditions unknown"],
+         "ref. single native config.", "ref. without potentialFoam start",
+         "ref. timing conditions unknown"],
         rows,
         "Motorbike: coupledFoam (cF) test run against the cached simpleFoam "
         "(sF) reference, iterations, wall-clock time and CPU-hours to the "
@@ -2132,7 +2105,8 @@ def table_wake_speedup(tests: dict) -> None:
         "speed-up sF/cF. The window of the earlier rule was derived from each "
         "run's own budget and fixed the earliest possible convergence "
         "of the longer reference run; its speed-up is a sensitivity value. "
-        "The last two columns disclose the conditions of the reference run.",
+        "The last three columns disclose the conditions of the reference "
+        "run (harness-fix, D-068).",
         "tab:wakespeed", resize=True)
 
 

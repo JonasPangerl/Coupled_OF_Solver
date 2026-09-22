@@ -1812,7 +1812,10 @@ right) develop while each solver runs, for the wing and the motorbike.
 Orange is \code{simpleFoam}, blue is coupledFoam, and the
 horizontal axis is the time on the clock, so the two solvers are compared
 fairly: a curve that settles further left belongs to the faster solver.
-The thin wiggly line is the value after every iteration, the dashed line
+The thin line, or for long runs a light band spanning the minimum and
+maximum of each group of iterations, is the value after every iteration;
+where one run is much shorter, a second row zooms on its time range. The
+dashed line is
 its running average over the averaging window, and the dotted horizontal
 line the final average that enters Table~\ref{tab:validation}. Two
 dotted lines at the same height mean the solvers agree. Every quantity of
@@ -1825,8 +1828,8 @@ lift over wall-clock time, simpleFoam (orange) and coupledFoam
 \cffigure{loads_overview_motorbike}{Motorbike (T4a coarse, T4b fine): drag
 and lift over wall-clock time.}{fig:ovMotorbike}
 
-\cffigure{remediation_history}{Remediation set sizes over the iterations of
-the test runs.}{fig:remediation}
+\cffigure{remediation_history}{Size of the dynamic remediation set over the
+iterations, one panel per run.}{fig:remediation}
 
 \cftable{remediation_categories}{Remediation cells per category and test
 run.}{tab:remcat}
@@ -2259,7 +2262,8 @@ solve time (right) per cycle type. A stronger cycle needs fewer Krylov
 iterations but each is more expensive; the time panel decides.
 
 \cffigure{eta_rho_history}{Eisenstat--Walker forcing term $\eta_n$ and
-preconditioner efficiency $\rho$ with the controller events.}{fig:etarho}
+preconditioner efficiency $\rho$ with the controller events, one row per
+run.}{fig:etarho}
 
 \paragraph{Controller histories (Figure~\ref{fig:etarho}).} Left: the linear
 tolerance $\eta_n$ chosen by Eisenstat--Walker, on a log axis. It is typically
@@ -2792,6 +2796,30 @@ linear iterations of \code{simpleFoam} per field on its own iteration
 axis.}}
 
 \clearpage
+% \cfhistfigure (used by the generated figures/histories.tex, which only
+% \providecommand's it): [H] placement, but the first figure after the
+% bullet list is shrunk to the space left on the page if at least 40 % of
+% the text height is left, so that no page holds only the bullets
+\makeatletter
+\newlength\cf@hh
+\newcommand{\cfhistfigure}[3]{%
+  \par
+  \ifdim\pagegoal=\maxdimen
+    \setlength\cf@hh{0.8\textheight}%
+  \else
+    \setlength\cf@hh{\dimexpr\pagegoal-\pagetotal-7\baselineskip\relax}%
+    \ifdim\cf@hh>0.8\textheight\setlength\cf@hh{0.8\textheight}\fi
+    \ifdim\cf@hh<0.4\textheight\setlength\cf@hh{0.8\textheight}\fi
+  \fi
+  \begin{figure}[H]
+    \centering
+    \IfFileExists{figures/#1.pdf}%
+      {\includegraphics[width=0.95\linewidth,height=\cf@hh,keepaspectratio]{figures/#1.pdf}}%
+      {\pending{Figure \texttt{figures/\detokenize{#1}} is written by
+        \texttt{bench/make\_report.py} once its data exist.}}
+    \caption{#2}\label{#3}
+  \end{figure}}
+\makeatother
 \IfFileExists{figures/histories.tex}{\input{figures/histories.tex}}{%
   \pending{The appendix text \texttt{figures/histories.tex} is written by
   \texttt{bench/make\_report.py}.}}

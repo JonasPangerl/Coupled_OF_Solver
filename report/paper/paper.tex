@@ -1294,12 +1294,16 @@ computed end early and are completed when the report is regenerated.
 \cffigure{loads_overview_wing}{Wing (T3 airFoil2D, SST and GEKO): $C_d$
 (left) and $C_l$ (right) over wall-clock time, simpleFoam (orange) and
 coupledFoam (blue); dashed: running mean over the D-042 window, dotted:
-final window mean.}{fig:ovWing}
+final window mean; light band: per-iteration minimum-maximum per group of
+iterations; a second row per case zooms on the shorter run where the wall
+times differ by more than 5x.}{fig:ovWing}
 \cffigure{loads_overview_motorbike}{motorBike (T4a, T4b): $C_d$ and $C_l$
-over wall-clock time, both solvers.}{fig:ovMotorbike}
+over wall-clock time, both solvers; light band: per-iteration
+minimum-maximum per group of iterations; a second row per case zooms on the
+shorter run where the wall times differ by more than 5x.}{fig:ovMotorbike}
 
-\cffigure{remediation_history}{Remediation set sizes over the iterations of
-the test runs.}{fig:remediation}
+\cffigure{remediation_history}{Size of the dynamic remediation set over the
+iterations, one panel per run.}{fig:remediation}
 
 \cftable{remediation_categories}{Remediation cells per category and test
 run.}{tab:remcat}
@@ -1738,7 +1742,8 @@ V-, F-, W- and K-cycles on the block-Poisson system of the $128\times128$
 cavity mesh, serial, solved to $10^{-9}$ (D-023).}{fig:cycles}
 
 \cffigure{eta_rho_history}{Eisenstat--Walker forcing term $\eta_n$ and
-preconditioner efficiency $\rho$ with the controller events.}{fig:etarho}
+preconditioner efficiency $\rho$ with the controller events, one row per
+run.}{fig:etarho}
 
 \clearpage
 \subsection{Speed-up measured on the test runs}\label{sec:speedtests}
@@ -1750,9 +1755,10 @@ Both solvers are evaluated at the same criterion: the residual target of
 the test ($10^{-8}$ for T0, $10^{-5}$ for T1 and T2), reached by the
 combined residual $R$ of coupledFoam and by all initial residuals of
 \code{simpleFoam} (on T2 the native iteration count of D-024); the
-stationary window mean on the motorbike; on T3 the solver's own stop, if
-the run converged. Wall-clock time and CPU-hours are taken at that
-iteration from each solver's time log. The residual normalisations differ (Section~\ref{sec:norms}), so the time
+stationary window mean with the common window on the motorbike (D-068);
+on T3 the force window of criterion 12.3(ii) on both force histories.
+Wall-clock time and CPU-hours are taken at that iteration from each
+solver's time log (D-068, harness review M1). The residual normalisations differ (Section~\ref{sec:norms}), so the time
 axis, not the residual level, is the comparable quantity; the field
 comparisons of Section~\ref{sec:flowfields} show that both runs end at the
 same solution. On the serial runs CPU-hours and wall-clock time are nearly
@@ -2143,6 +2149,30 @@ Runs that are still being computed are skipped and appear as ``results
 pending''; they are filled in when the report is regenerated. The simpleFoam
 reference of the 4-rank runs is the serial reference run.
 
+% \cfhistfigure (used by the generated figures/histories.tex, which only
+% \providecommand's it): [H] placement, but the first figure after the
+% bullet list is shrunk to the space left on the page if at least 40 % of
+% the text height is left, so that no page holds only the bullets
+\makeatletter
+\newlength\cf@hh
+\newcommand{\cfhistfigure}[3]{%
+  \par
+  \ifdim\pagegoal=\maxdimen
+    \setlength\cf@hh{0.8\textheight}%
+  \else
+    \setlength\cf@hh{\dimexpr\pagegoal-\pagetotal-7\baselineskip\relax}%
+    \ifdim\cf@hh>0.8\textheight\setlength\cf@hh{0.8\textheight}\fi
+    \ifdim\cf@hh<0.4\textheight\setlength\cf@hh{0.8\textheight}\fi
+  \fi
+  \begin{figure}[H]
+    \centering
+    \IfFileExists{figures/#1.pdf}%
+      {\includegraphics[width=0.95\linewidth,height=\cf@hh,keepaspectratio]{figures/#1.pdf}}%
+      {\pending{Figure \texttt{figures/\detokenize{#1}} is written by
+        \texttt{bench/make\_report.py} once its data exist.}}
+    \caption{#2}\label{#3}
+  \end{figure}}
+\makeatother
 \IfFileExists{figures/histories.tex}{\input{figures/histories.tex}}{%
   \pending{The appendix text \texttt{figures/histories.tex} is written by
   \texttt{bench/make\_report.py}.}}
