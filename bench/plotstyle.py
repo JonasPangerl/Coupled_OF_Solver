@@ -206,6 +206,45 @@ def bin_stats(x, y, nbins: int = NBINS, log: bool = False,
 # drawing
 # --------------------------------------------------------------------------- #
 
+def fill(ax, x, y1, y2, **kw):
+    """fill_between that remembers its data, so mask_outside() can redraw
+    it without the parts beyond the final y range."""
+    coll = ax.fill_between(x, y1, y2, **kw)
+    coll._ps_fill = (np.asarray(x, float), np.asarray(y1, float),
+                     np.asarray(y2, float), dict(kw))
+    return coll
+
+
+def mask_outside(ax, lo: float, hi: float) -> None:
+    """Remove what lies beyond the y range [lo, hi] instead of letting the
+    renderer draw it clamped along the axis edge: data-coordinate lines get
+    NaN there (the line is broken), bands drawn with fill() lose the parts
+    that are entirely outside and are cut at the limits elsewhere. Axis-
+    fraction artists (axvline, axhline, clip markers) are untouched."""
+    for ln in list(ax.lines):
+        if ln.get_transform() != ax.transData:
+            continue
+        y = np.asarray(ln.get_ydata(orig=True), float)
+        if y.ndim != 1 or not y.size:
+            continue
+        out = (y > hi) | (y < lo)
+        if out.any():
+            ln.set_ydata(np.where(out, np.nan, y))
+    for coll in list(ax.collections):
+        data = getattr(coll, "_ps_fill", None)
+        if data is None:
+            continue
+        x, y1, y2, kw = data
+        a, b = np.minimum(y1, y2), np.maximum(y1, y2)
+        gone = (a > hi) | (b < lo)
+        if not gone.any() and a.min(initial=lo) >= lo and b.max(initial=hi) <= hi:
+            continue
+        a = np.where(gone, np.nan, np.clip(a, lo, hi))
+        b = np.where(gone, np.nan, np.clip(b, lo, hi))
+        coll.remove()
+        fill(ax, x, a, b, **kw)
+
+
 def envelope(ax, x, y, color, nbins: int = NBINS, log: bool = False,
              label=None, band_label=None, alpha: float = BAND_ALPHA,
              lw: float = LW_MAIN, ls: str = "-", z: float = Z_ENV,
@@ -215,8 +254,8 @@ def envelope(ax, x, y, color, nbins: int = NBINS, log: bool = False,
     bx, lo, md, hi = bin_stats(x, y, nbins, log, xlog)
     if not len(bx):
         return bx, md
-    ax.fill_between(bx, lo, hi, color=color, alpha=alpha, lw=0, zorder=z,
-                    label=band_label)
+    fill(ax, bx, lo, hi, color=color, alpha=alpha, lw=0, zorder=z,
+         label=band_label)
     if line:
         ax.plot(bx, md, color=color, lw=lw, ls=ls, zorder=z + 0.2,
                 label=label)
@@ -253,7 +292,9 @@ def robust_ylim(ax, series, skip_frac: float = 0.2, pct=(1.0, 99.0),
     The first skip_frac of each series (the start-up transient) and the
     outer (100 - pct) percentiles are ignored; values in `include` (window
     means, reference lines) are always inside. Points beyond the limits
-    are shown as small triangles at the axis edge in the series colour.
+    are shown as small triangles at the axis edge in the series colour;
+    everything already drawn in data coordinates beyond the limits is
+    masked (mask_outside), so call this after drawing the panel.
     Returns (lo, hi)."""
     vals = []
     for x, y, _ in series:
@@ -281,6 +322,7 @@ def robust_ylim(ax, series, skip_frac: float = 0.2, pct=(1.0, 99.0),
     if log:
         lo, hi = 10 ** lo, 10 ** hi
     ax.set_ylim(lo, hi)
+    mask_outside(ax, lo, hi)
     if mark:
         for x, y, col in series:
             if col is not None:
@@ -297,11 +339,17 @@ def clip_markers(ax, x, y, color, lo, hi, nmax: int = 25) -> None:
         idx = np.flatnonzero(sel & np.isfinite(x))
         if not idx.size:
             continue
-        # one marker per group of clipped points, at most nmax
-        xs = x[idx]
-        if xs.size > nmax:
-            e = _edges(xs.size, nmax)
-            xs = np.array([xs[a] for a in e[:-1]])
+        # sparse markers: at least 4 % of the panel's data width apart (a
+        # dense row of triangles would read as a line along the edge)
+        xs = np.sort(x[idx])
+        x0, x1 = ax.dataLim.intervalx
+        dx = 0.04 * (x1 - x0) if np.isfinite(x1 - x0) and x1 > x0 else 0.0
+        keep, last = [], -np.inf
+        for v in xs:
+            if v - last >= dx:
+                keep.append(v)
+                last = v
+        xs = np.array(keep[:nmax])
         ax.plot(xs, np.full(xs.size, ypos), mk, color=color, ms=2.8,
                 mec="none", alpha=0.8, transform=trans, clip_on=False,
                 zorder=Z_MARK)

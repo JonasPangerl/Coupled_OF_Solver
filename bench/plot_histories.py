@@ -773,8 +773,8 @@ def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
                 raw(ax, xs, ys, col, z=ps.Z_RAW + dz)
                 bx, bm = decimate(xs, ms)
                 _, bs = decimate(xs, sds)
-                ax.fill_between(bx, bm - bs, bm + bs, color=col, alpha=0.18,
-                                lw=0, zorder=3 + dz)
+                ps.fill(ax, bx, bm - bs, bm + bs, color=col, alpha=0.18,
+                        lw=0, zorder=3 + dz)
                 ax.plot(bx, bm, color=col, lw=ps.LW_MAIN, ls="--",
                         zorder=ps.Z_MEAN + dz)
                 if W >= 2 and n >= W and np.isfinite(x[n - W]):
