@@ -1796,3 +1796,35 @@ for SP to be built and tested against the maximum precision available.
   switchable and tunable in the case dictionaries (D-061 follow-up).
 - Every setting that may need changing must be a run-time keyword, not a
   compile-time constant.
+
+## D-067 - Report conventions: mean-field deltas, SP verdict, common speed-up criterion (report-d, 2026-09-22)
+
+Report generator and papers (branch report-d); no solver or test change.
+
+- **Mean-field deltas (D-063).** The 3D delta figures show signed
+  differences coupledFoam minus simpleFoam of the window-mean fields from
+  coupledFieldCompare: dU_x/U_inf (UMeanDelta_x) and dC_p = dp/(0.5
+  U_inf^2) (CpMeanDelta) on the mid-plane and the wheel-height plane
+  (render_<case>_delta_slices.png) and dC_p on the body
+  (render_<case>_delta_surface.png). Diverging map RdBu_r (the map of the
+  2D delta panels), white at zero, fixed symmetric limits +-0.2 for all
+  runs (comparable between runs, not scaled to the data). The earlier
+  |dU|/U_inf figure render_<case>_delta.png is removed. A render kept with
+  --allow-stale carries a caption note (\cfrenderflag).
+- **Single-precision verdict (D11, reference DP per D-062).** "SP usable"
+  if the monitored quantity of coupledFoam (Cd; dp for T1, x_r/h for T2,
+  i.e. the quantity of the case's test, not only Cd) is within 0.5 % of DP
+  and the checkMesh gate passed (no check failing only in SP, no
+  SP-geometry-fail). "Undetermined" if the gate or the DP value is not
+  recorded. The "other" column of the per-iteration breakdown is the
+  remainder of the iteration (incl. I/O) unless a record carries t_io.
+- **Speed-up of the test records (harness review M1).** Both solvers are
+  taken at the same criterion: the test's residual target on the coupled
+  R and on ALL initial residuals of simpleFoam (T0, T1), the native count
+  of D-024 (T2), the stationary window mean (T4, itersToConv of both
+  records), the solver's own stop if the run converged (T3). simpleFoam
+  time and CPU-hours are scaled to that iteration by its ClockTime log.
+  Before, simpleFoam was taken at its residualControl stop (T1: 769 instead
+  of 526 iterations, speed-up overstated by about 1.4x).
+- **Pending placeholders.** A missing generated figure or table is one
+  numbered line with its caption (\cfpendingitem), not a floating box.
