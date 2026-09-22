@@ -93,6 +93,13 @@ def complete_timing(record: dict) -> dict:
     return record
 
 
+def _tag(kind: str, name: str) -> str:
+    """Test records of an SP run are <name>_sp (cflib.precision, D11); the
+    benchmark has its own SP configurations (F1, F2) and is not tagged."""
+    from . import precision  # noqa: PLC0415
+    return precision.tag(name) if kind == "tests" else name
+
+
 def default_run_dir(kind: str, name: str) -> Path | None:
     """Run directory a record of this kind/name is made from (tests: run/<name>,
     bench: run/bench_<name>), None if it does not exist."""
@@ -104,7 +111,9 @@ def write(kind: str, name: str, data: dict,
           run_dir: Path | None = None) -> Path:
     """Write results/<kind>/<name>.json. The record carries the fingerprint
     of its run directory (run_dir, default default_run_dir) so the report
-    can detect a directory re-run after the record (M9)."""
+    can detect a directory re-run after the record (M9). Test records of an
+    SP run are named <name>_sp (D11)."""
+    name = _tag(kind, name)
     out = RESULTS / kind / f"{name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     head = provenance.git_head()
@@ -126,5 +135,11 @@ def write(kind: str, name: str, data: dict,
 
 
 def read(kind: str, name: str) -> dict | None:
+    """Record of the current precision (tests: <name>_sp in SP)."""
+    return read_exact(kind, _tag(kind, name))
+
+
+def read_exact(kind: str, name: str) -> dict | None:
+    """Record <name> as given (no precision tag)."""
     f = RESULTS / kind / f"{name}.json"
     return json.loads(f.read_text()) if f.exists() else None

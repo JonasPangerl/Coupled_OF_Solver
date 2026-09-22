@@ -26,12 +26,13 @@ import sys
 import pytest
 
 from cflib import env as cfenv
-from cflib import logs, refcase, results
+from cflib import logs, post, precision, refcase, results
 
 sys.path.insert(0, str(cfenv.REPO / "bench"))
 import run_bench  # noqa: E402  (12.3(ii) window, force history)
 
 TOL_COEFF = 0.05     # user-approved: 0.5 % -> 2 % (D-046) -> 5 % (D-058)
+TOL_IDENTITY = 1e-6  # D6: coupledForces vs native forceCoeffs, same run
 MODELS = ("kOmegaSST", "GEKO")
 WINDOW = run_bench.WINDOW           # 100
 TOL = run_bench.TOL                 # 0.002
@@ -89,6 +90,14 @@ def test_T3(foam, model, nprocs):
     cd_ref, cl_ref = ref_rec.get("Cd"), ref_rec.get("Cl")
 
     rec.update(conv)
+    # D6: the forces come from coupledForces (double accumulation) when the
+    # run wrote them; in DP the native forceCoeffs of the same run must
+    # agree (same fields, same iteration) to TOL_IDENTITY at the final
+    # iteration
+    ident = post.force_identity(case)
+    ident_ref = post.force_identity(ref)
+    ref_rec.update(forceSource=post.force_source(ref),
+                   forceIdentity=ident_ref)
     rec.update({
         "model": model, "nProcs": nprocs,
         "CdRef": cd_ref, "ClRef": cl_ref,
@@ -98,8 +107,18 @@ def test_T3(foam, model, nprocs):
                       if None not in (cl, cl_ref) else None),
         "tol": TOL_COEFF,
         "nDynFinal": ndyn[-1] if ndyn else None,
+        "forceSource": post.force_source(case),
+        "forceIdentity": ident,
+        "tolIdentity": TOL_IDENTITY,
         "reference": ref_rec,
     })
+    precision.annotate(rec, case, {"Cd": cd, "Cl": cl})
+    # In SP the native object accumulates in float: the difference is the
+    # effect D6 removes, recorded but not a criterion there
+    identity_ok = precision.is_sp() or all(
+        d.get(f"{k}_finalRelDiff", 0.0) < TOL_IDENTITY
+        for d in (ident, ident_ref) for k in ("Cd", "Cl", "Cm"))
+    rec["forceIdentityPass"] = None if precision.is_sp() else identity_ok
     checks = {
         "rc": rec["rc"] == 0 and not rec["fpeTrap"],
         "converged": bool(rec["converged"]),
@@ -108,6 +127,7 @@ def test_T3(foam, model, nprocs):
         "Cl": rec["ClRelDiff"] is not None and rec["ClRelDiff"] < TOL_COEFF,
         "nDynFinal": rec["nDynFinal"] == 0,
         "nPseudoInverse": rec["nPseudoInverse"] == 0,
+        "forceIdentity": identity_ok,
     }
     rec["checks"] = checks
     rec["pass"] = all(checks.values())
@@ -123,3 +143,4 @@ def test_T3(foam, model, nprocs):
     assert checks["Cd"], (cd, cd_ref)
     assert checks["Cl"], (cl, cl_ref)
     assert checks["nDynFinal"], rec["nDynFinal"]
+    assert checks["forceIdentity"], (ident, ident_ref)

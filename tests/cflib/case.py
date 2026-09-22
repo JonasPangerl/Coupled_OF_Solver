@@ -12,9 +12,15 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from . import precision
 from .env import REPO, RUN_ROOT, foam_env, run
 
 CASES = REPO / "cases"
+
+
+def run_dir(name: str) -> Path:
+    """RUN_ROOT/<name> of the current precision (<name>_sp in SP, D5)."""
+    return RUN_ROOT / precision.tag(name)
 
 
 def prepare(template: str, name: str, sets: dict | None = None,
@@ -23,10 +29,13 @@ def prepare(template: str, name: str, sets: dict | None = None,
 
     sets: {"system/fvSolution": {"coupled.maxIter": "300", ...}, ...}
     reuse: keep an existing run directory (e.g. a cached reference run).
+    SP (CF_PRECISION=sp): the run directory is <name>_sp; the mesh is made
+    in DP and shifted by the first allrun() (cflib.precision).
     """
     foam_env()
+    precision.check_environment()
     src = CASES / template
-    dst = RUN_ROOT / name
+    dst = run_dir(name)
     if dst.exists() and reuse:
         return dst
     if dst.exists():
@@ -36,6 +45,10 @@ def prepare(template: str, name: str, sets: dict | None = None,
     for fname, entries in (sets or {}).items():
         for entry, value in entries.items():
             set_entry(dst, fname, entry, value)
+    # the explicit sets of this run (the SP harness keeps them, D-065)
+    import json  # noqa: PLC0415
+    (dst / "harnessSets.json").write_text(
+        json.dumps(sets or {}, indent=2, default=str) + "\n")
     return dst
 
 
@@ -104,8 +117,19 @@ def allrun(case: Path, args: list[str] | None = None, fpe: bool = True,
     Writes <case>/provenance.json first (git commit and dirty flag, the
     coupledFoam binary and libcoupledFoam.so actually used, host, date,
     CF_* environment; cflib.provenance), which the report's staleness
-    guard reads (TASK 6)."""
+    guard reads (TASK 6).
+
+    SP (CF_PRECISION=sp, amendment D5): the first call on a case generates
+    the mesh in DP, shifts it to the origin, shifts the point settings and
+    runs the checkMesh gate (cflib.precision.prepare_case; raises
+    SPGeometryFail), then runs Allrun with -keep-mesh. A -mesh-only call is
+    completed by that preparation (Allrun is not run in SP)."""
     from . import provenance  # noqa: PLC0415
+    if precision.is_sp():
+        new_args = precision.prepare_case(case, list(args or []))
+        if new_args is None:
+            return 0
+        args = new_args
     provenance.write(case, list(args or []))
     env = {
         "FOAM_SIGFPE": "true" if fpe else "false",

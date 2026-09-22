@@ -372,3 +372,20 @@ switch counter now available on main).
   solvers/blockGAMG (same value as cfVSmall<double>, not matched by the
   D3 gate); Anderson history double (D9 memory line); the duplicate
   relTol entry in the effective-settings dictionary.
+
+### 7. Amendment D6/D5 follow-ups (amend-d-forces, 2026-09-23, D-065)
+
+- T1 fails the D5.3 gate in SP only through the checkMesh boundary-openness
+  float noise (1.7e-6 relative); CF_SP_GATE_OVERRIDE="Boundary openness"
+  runs it (user decision).
+- SP force cases stop on the SP-profile residualTol 1e-5 before the force
+  window settles (T3-SST: 357 its, Cl +2.4 % vs DP); run SP force cases
+  with coupled.convergence.mode all (or residualTol 0) for D10.
+- SP simpleFoam references never reach their residualControl (float
+  floor): give them a residualControl above 1e-6 or a fixed budget.
+- T0 SP-vs-DP centreline comparison: replace the sampled values by a
+  cell-centre pairing (as tests/test_unit.py, 87049df).
+- The SP harness path for decomposed meshes (T4a/T4b: transformPoints and
+  checkMesh -parallel on processor meshes) is implemented but not run.
+- T4/T5 coupledFieldCompare SP vs DP needs the shift (cell centres differ).
+

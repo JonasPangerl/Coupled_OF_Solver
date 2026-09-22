@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import case as cfcase
 from . import env as cfenv
-from . import logs
+from . import logs, precision
 
 # ExecutionTime (CPU time of the solver process) and ClockTime (wall) of an
 # OpenFOAM solver log; ClockTime is printed in whole seconds
@@ -75,7 +75,7 @@ def reference(template: str, name: str, args: list[str],
     Returns the case path and a record with iterations, wall and CPU time.
     The record is stored next to the case (reference.json) so a cached
     reference keeps its timing."""
-    case = cfcase.RUN_ROOT / name
+    case = cfcase.run_dir(name)
     meta = case / "reference.json"
     if cfcase.solver_ok(case, "simpleFoam") and meta.exists():
         rec = json.loads(meta.read_text())
@@ -97,6 +97,8 @@ def reference(template: str, name: str, args: list[str],
         "wallSecondsSolver": native["wall"],
         "timingAllrun": timing,
         "args": args,
+        "precision": precision.label(),
+        "meshShift": precision.read_mesh_shift(case),
     }
     rec.update(native_timing(case / "log.simpleFoam", 1, timing))
     meta.write_text(json.dumps(rec, indent=2))
@@ -132,6 +134,8 @@ def coupled(template: str, name: str, args: list[str],
         "finalR": rows[-1]["R"] if rows else None,
         "fpeTrap": logs.fpe_trapped(log),
         "nClampedMax": max((r.get("nClamped", 0) for r in rows), default=None),
+        # static remediation set (8.1/C1) as computed by this build (D5.5)
+        "staticSetSize": rows[0].get("nStat") if rows else None,
         "rollbacks": summ.get("rollbacks"),
         # C2: pseudo-inverse fallbacks of the tensorial Rhie-Chow D
         "nPseudoInverse": summ.get("nPseudoInverse", 0),

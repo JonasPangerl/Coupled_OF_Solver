@@ -17,6 +17,24 @@ def _latest_subdir(d: Path) -> Path | None:
     return max(subs)[1] if subs else None
 
 
+def mesh_shift(case: Path) -> np.ndarray:
+    """Origin shift of an SP run (constant/meshShift, amendment D5.2:
+    points_SP = points_DP + shift); zeros for a DP run."""
+    from .precision import read_mesh_shift  # noqa: PLC0415
+    s = read_mesh_shift(case)
+    return np.zeros(3) if s is None else np.array(s, dtype=float)
+
+
+_AXIS = {"x": 0, "y": 1, "z": 2}
+
+
+def unshift(case: Path, coord, axis) -> np.ndarray:
+    """A result coordinate (component `axis`: 0/1/2 or x/y/z) mapped back to
+    the DP frame: coord - shift[axis]. Identity for a DP run."""
+    i = _AXIS.get(axis, axis) if isinstance(axis, str) else int(axis)
+    return np.asarray(coord, dtype=float) - mesh_shift(case)[i]
+
+
 def read_xy(path: Path) -> np.ndarray:
     return np.loadtxt(path, comments="#")
 
@@ -138,8 +156,68 @@ def all_starts(case: Path, fo: str, fname: str) -> list[Path]:
     return out
 
 
-def force_coeffs(case: Path, fo: str = "forceCoeffs") -> dict[str, np.ndarray]:
-    """Cd/Cl history; restarts (several start directories) are merged."""
+COUPLED_FORCES = "coupledForces"
+COUPLED_FORCES_FILE = "coeffs.dat"
+
+
+def _last_per_time(out: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Keep the last row per time (restart overlap, a repeated final row)
+    in time order."""
+    if "Time" not in out or not len(out["Time"]):
+        return out
+    t = out["Time"]
+    _, idx = np.unique(t[::-1], return_index=True)
+    keep = len(t) - 1 - idx          # last occurrence of every time
+    keep = keep[np.argsort(t[keep], kind="stable")]
+    return {k: v[keep] for k, v in out.items()}
+
+
+def read_coupled_forces(path: Path) -> dict[str, np.ndarray]:
+    """One coeffs.dat of coupledForces (amendment D6): header line
+    '# iter Cd Cl Cm Cd_p Cd_v Cl_p Cl_v'."""
+    header = None
+    rows = []
+    with open(path) as fh:
+        for line in fh:
+            if line.startswith("#"):
+                toks = line[1:].split()
+                if toks and toks[0] == "iter":
+                    header = toks
+                continue
+            if line.strip():
+                rows.append([float(x) for x in line.split()])
+    if header is None:
+        header = ["iter", "Cd", "Cl", "Cm", "Cd_p", "Cd_v", "Cl_p", "Cl_v"]
+    data = np.array(rows, dtype=float).reshape(-1, len(header))
+    return {h: data[:, i] for i, h in enumerate(header)}
+
+
+def has_coupled_forces(case: Path) -> bool:
+    return bool(all_starts(case, COUPLED_FORCES, COUPLED_FORCES_FILE)) \
+        if (case / "postProcessing" / COUPLED_FORCES).is_dir() else False
+
+
+def coupled_force_coeffs(case: Path) -> dict[str, np.ndarray]:
+    """coupledForces history (D6), restarts merged (last row per iter).
+    Keys: iter, Cd, Cl, Cm, Cd_p, Cd_v, Cl_p, Cl_v and, for the callers of
+    the native reader, Time (= iter) and CmPitch (= Cm)."""
+    files = all_starts(case, COUPLED_FORCES, COUPLED_FORCES_FILE)
+    if not files:
+        raise FileNotFoundError(f"no {COUPLED_FORCES} output in {case}")
+    merged: dict[str, list] = {}
+    for f in files:
+        for k, v in read_coupled_forces(f).items():
+            merged.setdefault(k, []).extend(v.tolist())
+    out = {k: np.array(v) for k, v in merged.items()}
+    out["Time"] = out["iter"].copy()
+    out["CmPitch"] = out["Cm"].copy()
+    return _last_per_time(out)
+
+
+def force_coeffs_native(case: Path, fo: str = "forceCoeffs"
+                        ) -> dict[str, np.ndarray]:
+    """Native forceCoeffs Cd/Cl history; restarts (several start
+    directories) are merged."""
     files = all_starts(case, fo, "coefficient.dat")
     if not files:
         files = [function_object_file(case, fo, "coefficient.dat")]
@@ -150,10 +228,51 @@ def force_coeffs(case: Path, fo: str = "forceCoeffs") -> dict[str, np.ndarray]:
             merged.setdefault(k, []).extend(v.tolist())
     out = {k: np.array(v) for k, v in merged.items()}
     # Keep the last value per time (restart overlap)
-    if "Time" in out:
-        _, idx = np.unique(out["Time"][::-1], return_index=True)
-        keep = np.sort(len(out["Time"]) - 1 - idx)
-        out = {k: v[keep] for k, v in out.items()}
+    return _last_per_time(out)
+
+
+def force_source(case: Path, fo: str = "forceCoeffs") -> str:
+    """Which output force_coeffs reads: 'coupledForces' or the native fo."""
+    return COUPLED_FORCES if (fo == "forceCoeffs"
+                              and has_coupled_forces(case)) else fo
+
+
+def force_coeffs(case: Path, fo: str = "forceCoeffs") -> dict[str, np.ndarray]:
+    """Cd/Cl history; restarts (several start directories) are merged.
+
+    Amendment D6: the double-accumulated coupledForces output
+    (postProcessing/coupledForces/<start>/coeffs.dat, written by coupledFoam
+    and by the coupledForcesFO function object in simpleFoam) is preferred
+    when present; otherwise the native forceCoeffs file. Same shape either
+    way: arrays keyed Time (the iteration), Cd, Cl, CmPitch (+ the parts).
+    An explicit fo other than "forceCoeffs" always reads that native
+    object."""
+    if force_source(case, fo) == COUPLED_FORCES:
+        return coupled_force_coeffs(case)
+    return force_coeffs_native(case, fo)
+
+
+def force_identity(case: Path, fo: str = "forceCoeffs") -> dict:
+    """coupledForces vs native forceCoeffs of the same run, row by row at
+    the common iterations: max relative difference of Cd, Cl, Cm (Cm vs
+    CmPitch; relative to max(|native|, 1e-12)). Empty if one is missing."""
+    if not has_coupled_forces(case):
+        return {}
+    try:
+        nat = force_coeffs_native(case, fo)
+    except (FileNotFoundError, ValueError):
+        return {}
+    cf = coupled_force_coeffs(case)
+    common, ic, inat = np.intersect1d(cf["Time"], nat["Time"],
+                                      return_indices=True)
+    out: dict = {"nCommon": int(common.size)}
+    for k, kn in (("Cd", "Cd"), ("Cl", "Cl"), ("Cm", "CmPitch")):
+        if kn not in nat or not common.size:
+            continue
+        a, b = cf[k][ic], nat[kn][inat]
+        rel = np.abs(a - b) / np.maximum(np.abs(b), 1e-12)
+        out[f"{k}_maxRelDiff"] = float(rel.max())
+        out[f"{k}_finalRelDiff"] = float(rel[-1])
     return out
 
 

@@ -1,0 +1,28 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T4 - motorBike: double-accumulated force
+  coefficients (amendment D6, src/io/coupledForces.H). Values identical to
+  functions.forceCoeffs of system/controlDict. coupledFoam evaluates them
+  after every outer iteration (12.3 ii uses them); simpleFoam through the
+  coupledForcesFO entry of the controlDict.
+  CofR is in the mesh frame of the DP mesh; the SP harness (D5.2) shifts it
+  together with the mesh (tests/cflib/precision.py).
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      coupledForcesDict;
+}
+
+patches         (motorBikeGroup);
+rhoInf          1;
+magUInf         20;
+lRef            1.42;
+Aref            0.75;
+CofR            (0.72 0 0);
+dragDir         (1 0 0);
+liftDir         (0 0 1);
+pitchAxis       (0 1 0);
+
+// ************************************************************************* //

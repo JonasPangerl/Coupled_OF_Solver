@@ -52,6 +52,7 @@ Description
 #include "diagnosticFields.H"
 #include "sentinel.H"
 #include "convergenceMonitor.H"
+#include "coupledForces.H"
 #include "coupledState.H"
 #include "runInfo.H"
 #include "jsonWriter.H"
@@ -288,6 +289,18 @@ int main(int argc, char *argv[])
     convergenceMonitor conv(coupledDict);
     coupledState state(mesh, coupledDict);
 
+    // Double-accumulated force coefficients (amendment D6): with
+    // system/coupledForcesDict evaluated after every outer iteration and
+    // used by the force-window criterion 12.3(ii); a coupledForcesFO
+    // function object of the case is then dormant (no double output)
+    autoPtr<coupledForces> cforces(coupledForces::New(mesh));
+    if (cforces)
+    {
+        coupledForces::setInternal(true);
+        Info<< "coupledFoam: force coefficients from coupledForces ("
+            << runTime.system()/coupledForces::dictName << ")" << endl;
+    }
+
     // Deep diagnostics (TASK 5, D-045): level 0 = off. Every hook below is
     // guarded with diag.active(n); at level 0 the solver and the assembler
     // get no diagnostics object and take no clock readings.
@@ -336,6 +349,10 @@ int main(int argc, char *argv[])
             eff.add("bounds", b);
         }
         conv.writeSettings(eff);
+        if (cforces)
+        {
+            cforces->writeSettings(eff);
+        }
         eff.add("ftz", ftz);
         eff.add("writeState", state.writeState());
         eff.add
@@ -1421,7 +1438,25 @@ int main(int argc, char *argv[])
             }
         }
 
-        conv.record(runTime);
+        if (cforces)
+        {
+            // D6: this iteration's fields (no function-object lag); after a
+            // rollback the restored state repeats the last sample, which
+            // the monitor does not record twice
+            cforces->evaluate(p, turbulence->devReff()());
+            cforces->write(double(iter));
+            conv.record
+            (
+                scalar(cforces->Cd()),
+                scalar(cforces->Cl()),
+                scalar(cforces->Cm()),
+                cforces->name()
+            );
+        }
+        else
+        {
+            conv.record(runTime);
+        }
         lastR = R;
         lastLinIters = perf.nIterations;
 

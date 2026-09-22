@@ -3,7 +3,8 @@
 # T5 - Ahmed body 25 deg, half model, kOmegaSST, snappyHexMesh (spec 13)
 #
 #   ./Allrun [-mesh fine|coarse] [-solver coupledFoam|simpleFoam] [-np N]
-#            [-turbulence MODEL] [-mesh-only] [-remesh] [-restart]
+#            [-turbulence MODEL] [-mesh-only] [-remesh] [-keep-mesh]
+#            [-restart]
 #
 #   -mesh fine   refinement boxes at levels 1 2 3 4 5, target 5-8 M cells
 #                                                                    [default]
@@ -15,6 +16,10 @@
 #                existing mesh for -np); writes mesh_cells.txt and mesh.info
 #   -remesh      mesh again even if the case already holds a mesh of the
 #                requested variant
+#   -keep-mesh   never mesh: the case must already hold a mesh of the
+#                requested variant (mesh.info); the SP harness
+#                generates it in DP and shifts it (amendment D5,
+#                tests/cflib/precision.py)
 #   -restart     continue the solver from the latest time; no mesh, no
 #                potentialFoam, log goes to log.<solver>.restart
 #
@@ -47,6 +52,7 @@ model=""
 variant=fine
 meshOnly=false
 remesh=false
+keepMesh=false
 restart=false
 
 while [ "$#" -gt 0 ]
@@ -58,6 +64,7 @@ do
         -turbulence) model="$2"; shift 2 ;;
         -mesh-only) meshOnly=true; shift ;;
         -remesh) remesh=true; shift ;;
+        -keep-mesh) keepMesh=true; shift ;;
         -restart) restart=true; shift ;;
         *) echo "Unknown option $1" 1>&2; exit 1 ;;
     esac
@@ -264,7 +271,14 @@ then
     exit $?
 fi
 
-if [ "$remesh" = false ] && [ "$(meshInfo variant)" = "$variant" ]
+if [ "$keepMesh" = true ] && [ "$(meshInfo variant)" != "$variant" ]
+then
+    echo "-keep-mesh: no mesh of variant $variant in this case" 1>&2
+    exit 1
+fi
+
+if [ "$keepMesh" = true ] || { [ "$remesh" = false ] &&
+    [ "$(meshInfo variant)" = "$variant" ]; }
 then
     echo "Reusing mesh $variant ($(meshInfo cells) cells," \
         "decomposed for $(meshInfo np) ranks)"
