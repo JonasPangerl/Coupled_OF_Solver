@@ -590,6 +590,76 @@ Decisions:
     0.95 % in dp (stalled limitedLinear simpleFoam as the reference).
   - The paper reports this deviation from the tutorial.
 
+## D-039 - Preconditioner study: matrix-weighted agglomeration and one finest ILU0 sweep (2026-09-22)
+
+Study on branch `precond-research` (worktree /home/jonas/cf_precond, own
+install /home/jonas/cf_precond_platform), answering FABLE_REVIEW item 2.
+Method: `coupled.dumpLinearSystem (iters)` writes the linear system of an
+outer iteration; `Test-blockSystem` replays it with any number of solver
+variants (iterations, rho, the scale-free rhoOpt = min_a ||r - a A M^-1 r||
+/||r||, set-up and apply time). Systems from T1 iterations 30, 150, 300 and
+450 (CFL 98, 58, 500, 500).
+
+Findings (T1, np 1):
+1. The diagnosis "rho > 1" was partly a measurement artefact: rho as
+   defined in 6.3.5 is unscaled, so a preconditioner that is right in
+   direction but wrong in magnitude scores > 1. The scale-free rhoOpt of
+   the committed configuration was nevertheless 0.99-0.9999, i.e. one
+   cycle removed almost nothing of the residual.
+2. The finest-level smoothing was the main defect. blockILU0 as a
+   Richardson smoother (x += M^-1 (b - A x)) DIVERGES on this saddle-point
+   system: the rows are far from diagonally dominant (max |A_kc| of the
+   neighbours over |D_kk|: 9.5 in the momentum rows through the pressure
+   column, 8.7 in the continuity row through the velocity columns). With
+   nFinestSweeps 3 instead of 2 the solve needs 21 instead of 16
+   iterations; with 1 sweep it needs 1. Block Gauss-Seidel diverges
+   outright here (rho 1e7).
+3. Geometric agglomeration (faceAreaPair) on the graded mesh is the second
+   defect. Pair agglomeration on block-matrix weights
+   w_f = |a_uu,f|/sqrt(a_uu,P a_uu,N) + |a_pp,f|/sqrt(a_pp,P a_pp,N)
+   ("combined") gives rhoOpt 0.33-0.45 instead of 0.99 at CFL 500.
+   Momentum-only or pressure-only weights are worse than the sum.
+4. autoTune makes it worse: it reads the unscaled rho (~1.1), calls it bad
+   and raises nPostSweeps to 4, which costs 40 % wall time for nothing.
+5. A SIMPLE-type block preconditioner (blockSimple, S = schurScale*C, one
+   blockGAMG hierarchy on the decoupled [A 0; 0 S]) is the best
+   preconditioner per application (rhoOpt 0.59-0.68, 3 FGMRES iterations
+   in sequential mode) but costs two cycles, and the outer iteration
+   DIVERGED on T1 (R 1.8 after 600 iterations): its velocity increment is
+   not accurate enough for the line search. Kept as a selectable option,
+   not a default.
+6. Equilibration (symmetric diagonal scaling of the block system) does not
+   help; CFLmax 2000/10000 does not reduce the outer iteration count
+   (529/540 vs 527); etaMax 0.1 reduces outer iterations 527 -> 432 but
+   costs more wall time.
+
+T1 wall clock (np 1, same machine load, R < 1e-6):
+
+| configuration | outer its | wall s | mean lin its | mean rho |
+|---|---|---|---|---|
+| committed (D-038) | 518 | 175 | 25.4 | 12.7 |
+| + combined weights | 521 | 77 | 7.8 | 4.3 |
+| + nFinestSweeps 1 | 491 | 44 | 4.0 | 1.1 |
+| + nCellsInCoarsestLevel 20 | 527 | 41 | 4.0 | 1.4 |
+| + autoTune no + reagglomerateInterval 50 | 495 | 33 | 3.3 | 1.0 |
+| simpleFoam, same schemes, to 1e-8 | 769 | 37 | - | - |
+
+Decisions:
+- New selectable keywords in the blockGAMG dictionary, all defaulting to
+  the previous behaviour: `agglomerationWeights`
+  (geometric | momentum | pressure | combined), `reagglomerateInterval`,
+  `scaleCorrection` (none | finest | all). New preconditioners
+  `blockSmoother` (single level, for diagnosis) and `blockSimple`.
+- T1 (and the T2-T5 templates that follow it) use agglomerationWeights
+  combined, reagglomerateInterval 50, nFinestSweeps 1,
+  nCellsInCoarsestLevel 20 and autoTune no. T0 is unchanged: it uses the
+  blockGaussSeidel smoother, which needs its two finest sweeps
+  (nFinestSweeps 1 there: 186 instead of 56 outer iterations).
+- The library defaults stay as they are, because the evidence is from the
+  ILU0 smoother on graded meshes only.
+- Open: rho of 6.3.5 should be measured scale-free (rhoOpt) before
+  autoTune can be trusted; the startup phase (iterations 1-60, upwind,
+  CFL below 100) still needs 7-10 linear iterations per solve.
 ## D-040 - nut safety cap raised to 1e8*nu (T3 root cause, 2026-09-22)
 
 The applyBounds nut cap (nutMaxFactor, spec 9.2) was 1e5*nu. On T3

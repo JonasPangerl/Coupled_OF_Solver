@@ -133,6 +133,13 @@ int main(int argc, char *argv[])
     sentinel sen(mesh, coupledDict);
     anderson aa(mesh, coupledDict);
     adaptiveTolerance ew(linearDict);
+
+    // Linear-system dump for offline preconditioner studies
+    // (Test-blockSystem): coupled.dumpLinearSystem (iterations), serial only
+    const labelList dumpIters
+    (
+        coupledDict.getOrDefault<labelList>("dumpLinearSystem", labelList())
+    );
     const label maxLinFails =
         coupledDict.subOrEmptyDict("ptc").getOrDefault<label>
         (
@@ -471,6 +478,24 @@ int main(int argc, char *argv[])
                 const scalar Rn = Rraw/max((R1 > 0 ? R1 : Rraw), VSMALL);
                 eta = ew.eta(Rn, startupDone);
                 linSolver->setRelTol(eta);
+            }
+
+            if (!UPstream::parRun() && dumpIters.found(iter) && cuts == 0)
+            {
+                const blockLduMatrix4& Am = assembler.matrix();
+                const fileName dumpFile
+                (
+                    runTime.path()/"linsys"/("iter" + Foam::name(iter))
+                );
+                mkDir(dumpFile.path());
+                OFstream os(dumpFile, IOstreamOption(IOstreamOption::BINARY));
+                os  << Am.diag() << Am.upper() << Am.lower()
+                    << assembler.rhs()
+                    << token::SPACE << doubleScalar(assembler.normFactor())
+                    << token::SPACE << doubleScalar(eta)
+                    << token::SPACE << doubleScalar(ptc.CFL()) << nl;
+                Info<< "coupledFoam: linear system written to " << dumpFile
+                    << endl;
             }
 
             clockTime ts;

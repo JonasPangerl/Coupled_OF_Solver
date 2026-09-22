@@ -35,21 +35,24 @@ solvers
         blockGAMG
         {
             agglomerator          faceAreaPair;
+            agglomerationWeights  combined;   // matrix weights (D-039)
+            reagglomerateInterval 50;         // rebuild from the new matrix
             mergeLevels           2;
-            nCellsInCoarsestLevel 200;
+            nCellsInCoarsestLevel 20;         // dense LU on the coarsest level
             cycleType             K;
             kCycleThreshold       0.25;
             kCycleMaxSteps        2;
             smoother              blockILU0;  // T1: GS keeps CFL at 1-2 (D-028)
             nPreSweeps            1;
             nPostSweeps           2;
-            nFinestSweeps         2;
+            nFinestSweeps         1;          // 2 ILU0 sweeps amplify (D-039)
             coarsestSolver        blockBiCGStab;
             coarsestTolerance     1e-3;
             coarsestMaxIter       50;
             maxOperatorComplexity 1.5;
             cacheAgglomeration    true;
-            autoTune              yes;
+            autoTune              no;        // rho is unscaled: it demands
+                                              // sweeps that make it worse (D-039)
             tuneInterval          50;
             nPostSweepsMax        4;
         }

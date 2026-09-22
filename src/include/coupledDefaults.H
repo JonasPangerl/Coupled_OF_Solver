@@ -75,6 +75,14 @@ constexpr doubleScalar tuneRhoFail = 0.9;
 constexpr label tuneConsecutiveWindows = 2;      // 6.3.5 hysteresis/failure
 constexpr label minPostSweeps = 1;               // 6.3.5 lower bound
 constexpr doubleScalar maxOperatorComplexity = 1.5;
+// precond-research: coarse-correction scaling (none | finest | all),
+// agglomeration weights (geometric | momentum | pressure | combined),
+// re-agglomeration interval of matrix weights in updates (0: once)
+constexpr const char* scaleCorrection = "none";
+constexpr const char* agglomerationWeights = "geometric";
+constexpr label reagglomerateInterval = 0;
+// precond-research: blockSimple Schur approximation S = schurScale*C
+constexpr doubleScalar schurScale = 2;
 constexpr label maxCopAttempts = 3;              // 6.3, D-008
 constexpr bool cacheAgglomeration = true;
 
