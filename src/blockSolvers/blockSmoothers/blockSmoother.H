@@ -42,6 +42,12 @@ protected:
         //- Guarded pivots at the last update (this rank)
         label nSingular_;
 
+        //- Under-relaxation of each sweep's update (1 = undamped)
+        const blockScalar relax_;
+
+        //- True if relax_ != 1 (the undamped path stays bit-identical)
+        const bool damped_;
+
 
 public:
 
