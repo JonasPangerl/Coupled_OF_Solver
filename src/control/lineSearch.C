@@ -25,7 +25,18 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
     Uref_(0),
     pref_(0),
     refSet_(false),
-    UrefSource_()
+    UrefSource_(),
+    stepMode_(coupledDefaults::UrefStepMode),
+    stepCap_(coupledDefaults::UrefStepCap),
+    UstepExplicit_(0),
+    Ufield0_(0),
+    Ustep_(0),
+    startupRef_(coupledDefaults::startupReference),
+    UrefEff_(0),
+    prefEff_(0),
+    UstepEff_(0),
+    pstepEff_(0),
+    excludeDynamic_(false)
 {
     // coupled.Uref: a mode word or an explicit velocity scale (D-050)
     if (coupledDict.found("Uref", keyType::LITERAL))
@@ -59,6 +70,69 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
                 << "coupled.Uref must be boundary, field or a value > 0,"
                 << " got " << tok << exit(FatalIOError);
         }
+    }
+
+    // coupled.UrefStep: a mode word or an explicit step scale (D-057)
+    if (coupledDict.found("UrefStep", keyType::LITERAL))
+    {
+        ITstream& is = coupledDict.lookup("UrefStep", keyType::LITERAL);
+        const token tok(is);
+        if (tok.isNumber())
+        {
+            stepMode_ = "explicit";
+            UstepExplicit_ = tok.number();
+            if (!(UstepExplicit_ > 0) || !std::isfinite(UstepExplicit_))
+            {
+                FatalIOErrorInFunction(coupledDict)
+                    << "coupled.UrefStep must be reference, fieldCapped,"
+                    << " field or a finite value > 0, got " << UstepExplicit_
+                    << exit(FatalIOError);
+            }
+        }
+        else if
+        (
+            tok.isWord()
+         && (
+                tok.wordToken() == "reference"
+             || tok.wordToken() == "fieldCapped"
+             || tok.wordToken() == "field"
+            )
+        )
+        {
+            stepMode_ = tok.wordToken();
+        }
+        else
+        {
+            FatalIOErrorInFunction(coupledDict)
+                << "coupled.UrefStep must be reference, fieldCapped, field"
+                << " or a value > 0, got " << tok << exit(FatalIOError);
+        }
+    }
+    stepCap_ = coupledDict.getOrDefault<scalar>
+    (
+        "UrefStepCap",
+        coupledDefaults::UrefStepCap
+    );
+    if (!(stepCap_ >= 1) || !std::isfinite(stepCap_))
+    {
+        FatalIOErrorInFunction(coupledDict)
+            << "coupled.UrefStepCap must be a finite value >= 1, got "
+            << stepCap_ << exit(FatalIOError);
+    }
+    startupRef_ = coupledDict.getOrDefault<word>
+    (
+        "startupReference",
+        coupledDefaults::startupReference
+    );
+    if
+    (
+        startupRef_ != "none" && startupRef_ != "ramp"
+     && startupRef_ != "exclude"
+    )
+    {
+        FatalIOErrorInFunction(coupledDict)
+            << "coupled.startupReference must be none, ramp or exclude, got "
+            << startupRef_ << exit(FatalIOError);
     }
 
     const dictionary& d = coupledDict.subOrEmptyDict("lineSearch");
@@ -124,16 +198,104 @@ void Foam::lineSearch::setReference(const volVectorField& U)
     // GUARD: a zero reference would make every omega zero
     Uref_ = max(Umax, VSMALL);
     pref_ = 0.5*sqr(Uref_);
+    Ufield0_ = max(Ufield, Ubnd);
     refSet_ = true;
+    updateStep();
 }
 
 
-void Foam::lineSearch::setReference(const scalar Uref, const scalar pref)
+void Foam::lineSearch::setFieldScale(const volVectorField& U)
+{
+    scalar Ubnd = 0;
+    forAll(U.boundaryField(), patchi)
+    {
+        const fvPatchVectorField& Up = U.boundaryField()[patchi];
+        if (!Up.coupled() && Up.size())
+        {
+            Ubnd = max(Ubnd, max(mag(Up)()));
+        }
+    }
+    reduce(Ubnd, maxOp<scalar>());
+    Ufield0_ = max(gMax(mag(U.primitiveField())()), Ubnd);
+    updateStep();
+}
+
+
+void Foam::lineSearch::setReference
+(
+    const scalar Uref,
+    const scalar pref,
+    const scalar Ufield0
+)
 {
     Uref_ = Uref;
     pref_ = pref;
+    // A state without Ufield0 (before D-057): the step scale falls back to
+    // Uref for every mode except explicit
+    Ufield0_ = (Ufield0 > 0 ? Ufield0 : Uref);
     refSet_ = true;
     UrefSource_ = "restart";
+    updateStep();
+}
+
+
+void Foam::lineSearch::updateStep()
+{
+    if (stepMode_ == "explicit")
+    {
+        Ustep_ = UstepExplicit_;
+    }
+    else if (stepMode_ == "field")
+    {
+        Ustep_ = max(Uref_, Ufield0_);
+    }
+    else if (stepMode_ == "fieldCapped")
+    {
+        Ustep_ = max(Uref_, min(Ufield0_, stepCap_*Uref_));
+    }
+    else
+    {
+        Ustep_ = Uref_;
+    }
+
+    UrefEff_ = Uref_;
+    prefEff_ = pref_;
+    // reference mode: pstep is pref itself (bitwise D-050 behaviour, also
+    // for a restored pref)
+    UstepEff_ = Ustep_;
+    pstepEff_ = (stepMode_ == "reference" ? pref_ : 0.5*sqr(Ustep_));
+    excludeDynamic_ = false;
+}
+
+
+void Foam::lineSearch::setStartup
+(
+    const scalar betaStartup,
+    const bool startupDone
+)
+{
+    updateStep();
+
+    if (startupDone || startupRef_ == "none")
+    {
+        return;
+    }
+
+    if (startupRef_ == "ramp")
+    {
+        // w = 1 at beta 0 (field scale), 0 at beta 1 (frozen values)
+        const scalar w = min(max(1 - betaStartup, scalar(0)), scalar(1));
+        UrefEff_ = Uref_ + w*max(Ufield0_ - Uref_, scalar(0));
+        prefEff_ = 0.5*sqr(UrefEff_);
+        UstepEff_ = max(Ustep_, UrefEff_);
+        pstepEff_ = max(pstepEff_, 0.5*sqr(UstepEff_));
+    }
+    else if (startupRef_ == "exclude")
+    {
+        UstepEff_ = max(Ustep_, Ufield0_);
+        pstepEff_ = max(pstepEff_, 0.5*sqr(UstepEff_));
+        excludeDynamic_ = true;
+    }
 }
 
 
@@ -142,8 +304,8 @@ Foam::scalar Foam::lineSearch::omega(const blockScalarUList& dx) const
     const label nCells = dx.size()/blockDim;
     scalar om = 1;
 
-    const scalar limU = fU_*Uref_;
-    const scalar limp = fp_*pref_;
+    const scalar limU = fU_*UstepEff_;
+    const scalar limp = fp_*pstepEff_;
 
     for (label celli = 0; celli < nCells; ++celli)
     {
@@ -171,8 +333,8 @@ Foam::labelList Foam::lineSearch::offendingCells
 {
     const label nCells = dx.size()/blockDim;
     // GUARD: omegaMin > 0 by construction of the dictionary checks
-    const scalar limU = fU_*Uref_/max(omegaMin_, VSMALL);
-    const scalar limp = fp_*pref_/max(omegaMin_, VSMALL);
+    const scalar limU = fU_*UstepEff_/max(omegaMin_, VSMALL);
+    const scalar limp = fp_*pstepEff_/max(omegaMin_, VSMALL);
 
     DynamicList<label> cells;
     for (label celli = 0; celli < nCells; ++celli)
@@ -203,8 +365,8 @@ void Foam::lineSearch::countViolations
     nU = 0;
     np = 0;
     const label nCells = dx.size()/blockDim;
-    const scalar limU = fU_*Uref_;
-    const scalar limp = fp_*pref_;
+    const scalar limU = fU_*UstepEff_;
+    const scalar limp = fp_*pstepEff_;
     for (label celli = 0; celli < nCells; ++celli)
     {
         const blockScalar* d = dx.cdata() + celli*blockDim;
@@ -243,6 +405,16 @@ void Foam::lineSearch::writeSettings(dictionary& dict) const
     {
         dict.add("Uref", UrefMode_);
     }
+    if (stepMode_ == "explicit")
+    {
+        dict.add("UrefStep", UstepExplicit_);
+    }
+    else
+    {
+        dict.add("UrefStep", stepMode_);
+    }
+    dict.add("UrefStepCap", stepCap_);
+    dict.add("startupReference", startupRef_);
 }
 
 

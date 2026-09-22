@@ -95,6 +95,19 @@ int main(int argc, char *argv[])
             "potentialInit",
             coupledDefaults::potentialInit
         );
+    // D-057: clip the potential-flow start to potentialClip Uref (0 = off)
+    const scalar potentialClip =
+        coupledDict.getOrDefault<scalar>
+        (
+            "potentialClip",
+            coupledDefaults::potentialClip
+        );
+    if (!(potentialClip == 0 || potentialClip >= 1))
+    {
+        FatalIOErrorInFunction(coupledDict)
+            << "coupled.potentialClip must be 0 (off) or a factor >= 1 of"
+            << " Uref, got " << potentialClip << exit(FatalIOError);
+    }
     const bool ftz =
         coupledDict.getOrDefault<bool>("ftz", coupledDefaults::ftz);
 
@@ -224,6 +237,7 @@ int main(int argc, char *argv[])
         dictionary eff;
         eff.add("maxIter", maxIter);
         eff.add("potentialInit", potentialInit);
+        eff.add("potentialClip", potentialClip);
         startup.writeSettings(eff);
         eff.add("nonOrthLimiter", assembler.noc().limiter());
         ptc.writeSettings(eff);
@@ -315,7 +329,12 @@ int main(int argc, char *argv[])
             iter = st.get<label>("iter");
             startup.readState(st, iter);
             R1 = st.get<scalar>("R1");
-            ls.setReference(st.get<scalar>("Uref"), st.get<scalar>("pref"));
+            ls.setReference
+            (
+                st.get<scalar>("Uref"),
+                st.get<scalar>("pref"),
+                st.getOrDefault<scalar>("Ufield0", -1)
+            );
             ptc.readState(st);
             rem.readState(st);
             sen.readState(st);
@@ -502,8 +521,9 @@ int main(int argc, char *argv[])
         st.set("startupDone", startup.done(iter + 1));
         startup.writeState(st);
         st.set("R1", R1);
-        st.set("Uref", ls.Uref());
-        st.set("pref", ls.pref());
+        st.set("Uref", ls.UrefBase());
+        st.set("pref", ls.prefBase());
+        st.set("Ufield0", ls.Ufield0());
         ptc.writeState(st);
         rem.writeState(st);
         sen.writeState(st);
@@ -622,6 +642,43 @@ int main(int argc, char *argv[])
             Info<< "coupledFoam: Uref " << ls.Uref() << " (" << ls.UrefSource()
                 << ", mode " << ls.UrefMode() << "), pref " << ls.pref()
                 << endl;
+
+            // D-057: the potential-flow peaks at sharp edges are singular;
+            // clip |U| to potentialClip Uref, keep the total head in p
+            if (potentialInit && !restarted && potentialClip > 0)
+            {
+                const scalar Umax = potentialClip*ls.Uref();
+                vectorField& Ui = U.primitiveFieldRef();
+                scalarField& pi = p.primitiveFieldRef();
+                label nClip = 0;
+                scalar Upeak = 0;
+                forAll(Ui, celli)
+                {
+                    const scalar mu = mag(Ui[celli]);
+                    Upeak = max(Upeak, mu);
+                    if (mu > Umax)
+                    {
+                        // GUARD: mu > Umax > 0
+                        Ui[celli] *= Umax/mu;
+                        pi[celli] += 0.5*(sqr(mu) - sqr(Umax));
+                        ++nClip;
+                    }
+                }
+                reduce(nClip, sumOp<label>());
+                reduce(Upeak, maxOp<scalar>());
+                if (nClip)
+                {
+                    U.correctBoundaryConditions();
+                    p.correctBoundaryConditions();
+                }
+                ls.setFieldScale(U);
+                Info<< "coupledFoam: potentialClip " << potentialClip
+                    << ": " << nClip << " cells clipped to |U| = " << Umax
+                    << " (peak " << Upeak << ")" << endl;
+            }
+            Info<< "coupledFoam: Ustep " << ls.UstepBase() << " (mode "
+                << ls.stepMode() << ", Ufield0 " << ls.Ufield0()
+                << "), startupReference " << ls.startupReference() << endl;
         }
 
         const volScalarField nuEff("nuEff", turbulence->nuEff());
@@ -647,6 +704,8 @@ int main(int argc, char *argv[])
         }
         scalar betaGlobal = startup.beta(iter);
         const bool startupDone = startup.done(iter);
+        // Effective references of this iteration (D-057 startupReference)
+        ls.setStartup(betaGlobal, startupDone);
         if (iter > 1 && betaGlobal != startup.beta(iter - 1))
         {
             // The discretisation changes along the ramp: the Anderson
@@ -675,7 +734,7 @@ int main(int argc, char *argv[])
             (
                 rDTV,
                 assembler.momentumResidual(),
-                ls.Uref()
+                ls.Ustep()      // step scale (D-057)
             );
             dfields.record(rDTV, cflF, beta);                   // C6
             assembler.assembleContinuity(rDTV);
@@ -725,6 +784,7 @@ int main(int argc, char *argv[])
                         << " with the start-up beta" << endl;
                     betaGlobal = startup.beta(iter);
                     beta = rem.beta(betaGlobal);
+                    ls.setStartup(betaGlobal, startup.done(iter));
                     continue;
                 }
             }
@@ -859,10 +919,19 @@ int main(int argc, char *argv[])
              && cuts < ls.maxCflCuts()
             )
             {
+                // At CFLmin a cut cannot change the step: the repeated
+                // assembly and solve would reproduce the same omega (T4a
+                // start: 3 identical solves per iteration, D-057). Keep the
+                // hold of the cut, take the step with omegaMin. A failed
+                // solve still repeats (B4 counting unchanged).
+                const bool atCflMin = (ptc.CFL() <= ptc.CFLmin());
                 ptc.decrease(ls.kappa());
                 ++cuts;
                 ++nCflCutsTotal;
-                continue;
+                if (solveFailed || !atCflMin)
+                {
+                    continue;
+                }
             }
             if (solveFailed)
             {
@@ -875,7 +944,10 @@ int main(int argc, char *argv[])
             else if (omega < ls.omegaMin())
             {
                 omega = ls.omegaMin();
-                rem.markDynamic(ls.offendingCells(dx));
+                if (!ls.excludeDynamic())
+                {
+                    rem.markDynamic(ls.offendingCells(dx));
+                }
                 aa.flush("omegaMin");
             }
             break;
@@ -1065,10 +1137,15 @@ int main(int argc, char *argv[])
         if (!rolledBack)
         {
             const label dynVersion = rem.dynamicVersion();
-            rem.updateDynamic
-            (
-                U, p, kPtr, omegaPtr, ls.Uref(), ls.pref(), iter
-            );
+            // startupReference exclude (D-057): no dynamic marking before
+            // the start-up ramp ends (rollback marking stays active)
+            if (!ls.excludeDynamic())
+            {
+                rem.updateDynamic
+                (
+                    U, p, kPtr, omegaPtr, ls.Uref(), ls.pref(), iter
+                );
+            }
             if (rem.dynamicVersion() != dynVersion)
             {
                 // Membership changed (beta and dt of those cells change)
@@ -1588,6 +1665,11 @@ int main(int argc, char *argv[])
         j.add("pref", ls.pref());
         j.add("UrefMode", ls.UrefMode());
         j.add("UrefSource", ls.UrefSource());
+        j.add("Ustep", ls.Ustep());
+        j.add("UrefStepMode", ls.stepMode());
+        j.add("Ufield0", ls.Ufield0());
+        j.add("startupReference", ls.startupReference());
+        j.add("potentialClip", potentialClip);
         j.add("iterations", iter);
         j.add("converged", converged);
         j.add("finalR", lastR);

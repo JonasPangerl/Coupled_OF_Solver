@@ -176,9 +176,11 @@ constexpr label maxLinFails = 3;                 // B4
 constexpr const char* linFailPolicy = "strict";
 constexpr doubleScalar linAcceptReduction = 0.9;
 
-// Velocity reference Uref (D-050): the scale of the line search (fU Uref),
-// the local CFL limit (fLoc Uref), the dynamic-set thresholds (cU Uref,
-// cp pref with pref = Uref^2/2) and the sentinel (sentinelUFactor Uref).
+// Velocity reference Uref (D-050): the scale of the physical classification
+// - dynamic-set thresholds (cU Uref, cp pref with pref = Uref^2/2, cSpike
+// Uref), increment clipping, sentinel (sentinelUFactor Uref) and the
+// Anderson norm. The step limits (line search, local CFL limit) use Ustep
+// (UrefStepMode below, D-057).
 // "boundary": max |U| over the non-coupled boundary values (inflow, moving
 // walls, free stream) at iteration 1; "field": the maximum over the cells
 // and the non-coupled boundaries (the behaviour before D-050, which with
@@ -188,6 +190,34 @@ constexpr doubleScalar linAcceptReduction = 0.9;
 // velocity, e.g. an MRF-driven closed domain) the field maximum is used.
 constexpr const char* UrefMode = "boundary";     // boundary | field | value
 constexpr doubleScalar UrefFallbackFactor = 1e-6;
+
+// Step scale Ustep (coupled.UrefStep, D-057): the velocity scale of the
+// STEP limits - line search (fU Ustep, fp pstep with pstep = Ustep^2/2),
+// the omegaMin offending cells and the local CFL limit (fLoc Ustep). Uref
+// (above) stays the scale of the physical classification: dynamic set (cU,
+// cp, cSpike), increment clipping, sentinel and the Anderson norm.
+// "reference": Ustep = Uref (the behaviour of D-050);
+// "fieldCapped": Ustep = max(Uref, min(Ufield0, UrefStepCap Uref)), Ufield0
+// = max |U| over the initial field (after potentialClip) and the
+// non-coupled boundaries, frozen at iteration 1: the largest physically
+// plausible local speed (UrefStepCap = cU: suction peaks up to 2-3 U_inf,
+// D-044) without the singular potential-flow peaks (T4b 8.8 U_inf);
+// "field": Ustep = max(Uref, Ufield0); a number: that value.
+constexpr const char* UrefStepMode = "reference";
+constexpr doubleScalar UrefStepCap = 4;
+
+// Start-up references (coupled.startupReference, D-057): "none"; "ramp":
+// Uref and Ustep blend from Ufield0 (beta 0) to their own value (beta 1)
+// along the start-up beta ramp (D-048); "exclude": while beta < 1 no cell
+// enters the dynamic set and Ustep >= Ufield0.
+constexpr const char* startupReference = "none";   // none | ramp | exclude
+
+// Potential-flow start (coupled.potentialClip, D-057): before the first
+// coupled step of a fresh potentialInit start, |U| is clipped to
+// potentialClip Uref and p is shifted by (|U|^2 - |Uclip|^2)/2 (the total
+// head of the potential solution is kept). The peaks at sharp edges are
+// singular in potential flow (T4a 4.3, T4b 8.8 U_inf). 0 = off.
+constexpr doubleScalar potentialClip = 0;
 
 // Line search (spec 7.2)
 constexpr doubleScalar fU = 0.3;
