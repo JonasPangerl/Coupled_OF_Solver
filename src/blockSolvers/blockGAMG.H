@@ -152,6 +152,18 @@ private:
         label maxMergeLevels_;
         label denseLUMaxCells_;
 
+        //- Coarse-correction scaling: 0 none, 1 finest level, 2 all levels
+        //  (minimal-residual factor alpha = <A d, r>/<A d, A d> for the
+        //  prolongated correction d, as native GAMG scaleCorrection)
+        label scaleMode_;
+
+        //- Agglomeration weights: geometric (native agglomerator) or from
+        //  the finest block matrix (momentum | pressure | combined)
+        word aggWeights_;
+        label reaggInterval_;
+        label nUpdates_;
+        bool aggFromMatrix_;
+
         //- Processor agglomeration controls (6.3.4)
         word procAgglomType_;
         label procAgglomCellsPerRank_;
@@ -213,6 +225,8 @@ private:
         mutable List<blockScalarList> q2_;
         mutable List<blockScalarList> rk_;
         mutable List<blockScalarList> gbuf_;  // local pre-gather coarse vector
+        mutable List<blockScalarList> sd_;    // scaled correction P e
+        mutable List<blockScalarList> sq_;    // A P e
 
         //- Last coarsest-level iteration count (diagnostics)
         mutable label nCoarsestIters_;
@@ -238,6 +252,15 @@ private:
             List<reduceScalar>& ratios,
             labelList& cells
         ) const;
+
+        //- Face weights of the finest level from the block matrix
+        tmp<scalarField> matrixFaceWeights() const;
+
+        //- True if the coarse correction at level l is scaled
+        bool scaleAt(const label l) const
+        {
+            return scaleMode_ == 2 || (scaleMode_ == 1 && l == 0);
+        }
 
         //- True if the ratio rule holds
         bool ratiosOk(const List<reduceScalar>& ratios) const;

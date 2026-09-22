@@ -16,6 +16,7 @@
 #include "objectRegistry.H"
 #include "PstreamReduceOps.H"
 #include "addToRunTimeSelectionTable.H"
+#include "pairGAMGAgglomeration.H"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -192,6 +193,36 @@ bool Foam::blockGAMGProcAgglomeration::agglomerate()
 }
 
 
+// * * * * * * * * * * * * blockPairAgglomeration  * * * * * * * * * * * * * //
+
+namespace Foam
+{
+
+//- Native pair agglomeration on given finest-level face weights
+//  (precond-research: weights from the block matrix, see
+//  blockGAMG::matrixFaceWeights)
+class blockPairAgglomeration
+:
+    public pairGAMGAgglomeration
+{
+public:
+
+    blockPairAgglomeration
+    (
+        const lduMesh& mesh,
+        const dictionary& controlDict,
+        const tmp<scalarField>& tweights
+    )
+    :
+        pairGAMGAgglomeration(mesh, controlDict)
+    {
+        agglomerate(nCellsInCoarsestLevel_, 0, tweights(), true);
+    }
+};
+
+} // End namespace Foam
+
+
 // * * * * * * * * * * * * * * * Static Functions  * * * * * * * * * * * * * //
 
 Foam::blockGAMG::cycleKind Foam::blockGAMG::cycleFromWord(const word& w)
@@ -294,6 +325,25 @@ Foam::blockGAMG::blockGAMG
             coupledDefaults::denseLUMaxCells
         )
     ),
+    scaleMode_(0),
+    aggWeights_
+    (
+        dict.getOrDefault<word>
+        (
+            "agglomerationWeights",
+            word(coupledDefaults::agglomerationWeights)
+        )
+    ),
+    reaggInterval_
+    (
+        dict.getOrDefault<label>
+        (
+            "reagglomerateInterval",
+            coupledDefaults::reagglomerateInterval
+        )
+    ),
+    nUpdates_(0),
+    aggFromMatrix_(false),
     procAgglomType_
     (
         dict.getOrDefault<word>("processorAgglomerator", "masterCoarsest")
@@ -351,6 +401,39 @@ Foam::blockGAMG::blockGAMG
     setDefault("coarsestTolerance", coupledDefaults::coarsestTolerance);
     setDefault("coarsestMaxIter", coupledDefaults::coarsestMaxIter);
     setDefault("cacheAgglomeration", coupledDefaults::cacheAgglomeration);
+    {
+        const word sc
+        (
+            dict.getOrDefault<word>
+            (
+                "scaleCorrection",
+                word(coupledDefaults::scaleCorrection)
+            )
+        );
+        if (sc == "none") scaleMode_ = 0;
+        else if (sc == "finest") scaleMode_ = 1;
+        else if (sc == "all") scaleMode_ = 2;
+        else
+        {
+            FatalIOErrorInFunction(dict)
+                << "scaleCorrection " << sc << ": valid none finest all"
+                << exit(FatalIOError);
+        }
+        dict_.set("scaleCorrection", sc);
+    }
+    if
+    (
+        aggWeights_ != "geometric" && aggWeights_ != "momentum"
+     && aggWeights_ != "pressure" && aggWeights_ != "combined"
+    )
+    {
+        FatalIOErrorInFunction(dict)
+            << "agglomerationWeights " << aggWeights_
+            << ": valid geometric momentum pressure combined"
+            << exit(FatalIOError);
+    }
+    dict_.set("agglomerationWeights", aggWeights_);
+    dict_.set("reagglomerateInterval", reaggInterval_);
     dict_.set("cycleType", cycleName(cycle_));
     dict_.set("processorAgglomerator", procAgglomType_);
     if (ruleMode())
@@ -604,6 +687,63 @@ void Foam::blockGAMG::measure
 }
 
 
+Foam::tmp<Foam::scalarField> Foam::blockGAMG::matrixFaceWeights() const
+{
+    // Strength of the coupling across each internal face, from the
+    // finest block matrix:
+    //   momentum  max(|U_f(0,0)|, |L_f(0,0)|)            (u-u block)
+    //   pressure  max(|U_f(3,3)|, |L_f(3,3)|)            (p-p block)
+    //   combined  sum over (0,0) and (3,3) of the classical strength
+    //             max(|U|,|L|)/sqrt(|D_P| |D_N|)
+    const label uu = 0;
+    const label pp = blockSize - 1;
+    const lduAddressing& addr = fine_.lduAddr();
+    const labelUList& lAddr = addr.lowerAddr();
+    const labelUList& uAddr = addr.upperAddr();
+    const blockScalarList& fU = fine_.upper();
+    const blockScalarList& fL = fine_.lower();
+    const blockScalarList& fD = fine_.diag();
+
+    auto strength = [&](const label facei, const label k)
+    {
+        return std::max
+        (
+            std::abs(toDouble(fU[facei*blockSize + k])),
+            std::abs(toDouble(fL[facei*blockSize + k]))
+        );
+    };
+    auto normalised = [&](const label facei, const label k)
+    {
+        const reduceScalar dP =
+            std::abs(toDouble(fD[lAddr[facei]*blockSize + k]));
+        const reduceScalar dN =
+            std::abs(toDouble(fD[uAddr[facei]*blockSize + k]));
+        // GUARD: a zero diagonal gives a zero-strength face
+        return strength(facei, k)
+            /std::max(std::sqrt(dP*dN), doubleScalarVSMALL);
+    };
+
+    auto tw = tmp<scalarField>::New(lAddr.size(), Zero);
+    scalarField& w = tw.ref();
+    forAll(w, facei)
+    {
+        if (aggWeights_ == "momentum")
+        {
+            w[facei] = strength(facei, uu);
+        }
+        else if (aggWeights_ == "pressure")
+        {
+            w[facei] = strength(facei, pp);
+        }
+        else
+        {
+            w[facei] = normalised(facei, uu) + normalised(facei, pp);
+        }
+    }
+    return tw;
+}
+
+
 bool Foam::blockGAMG::ratiosOk(const List<reduceScalar>& ratios) const
 {
     for (const reduceScalar r : ratios)
@@ -661,7 +801,33 @@ void Foam::blockGAMG::agglomerate()
             )
         );
 
-        const GAMGAgglomeration& agg = GAMGAgglomeration::New(mesh, aggDict);
+        const GAMGAgglomeration* aggP = nullptr;
+        if (aggFromMatrix_)
+        {
+            // Pair agglomeration on block-matrix face weights; replaces a
+            // previous one of the same name (re-agglomeration)
+            const word nm
+            (
+                aggDict.get<word>("name") + "_" + aggWeights_
+            );
+            aggDict.set("name", nm);
+            const GAMGAgglomeration* old =
+                mesh.thisDb().cfindObject<GAMGAgglomeration>(nm);
+            if (old)
+            {
+                mesh.thisDb().checkOut(const_cast<GAMGAgglomeration*>(old));
+            }
+            autoPtr<GAMGAgglomeration> p
+            (
+                new blockPairAgglomeration(mesh, aggDict, matrixFaceWeights())
+            );
+            aggP = &regIOobject::store(p);
+        }
+        else
+        {
+            aggP = &GAMGAgglomeration::New(mesh, aggDict);
+        }
+        const GAMGAgglomeration& agg = *aggP;
         measure(agg, cop, ratios, cells);
 
         const bool copOk = cop <= maxCop_;
@@ -849,7 +1015,8 @@ void Foam::blockGAMG::allocateWork()
     for
     (
         auto* v
-      : {&b_, &e_, &r_, &t_, &e2_, &z1_, &q1_, &z2_, &q2_, &rk_, &gbuf_}
+      : {&b_, &e_, &r_, &t_, &e2_, &z1_, &q1_, &z2_, &q2_, &rk_, &gbuf_,
+         &sd_, &sq_}
     )
     {
         v->clear();
@@ -863,6 +1030,11 @@ void Foam::blockGAMG::allocateWork()
         }
         const label n = matrixLevel(l).nRows();
         r_[l].resize(n, Zero);
+        if (l < L_ && scaleAt(l))
+        {
+            sd_[l].resize(n, Zero);
+            sq_[l].resize(n, Zero);
+        }
         if (l > 0)
         {
             b_[l].resize(n, Zero);
@@ -1574,7 +1746,30 @@ void Foam::blockGAMG::cycle
         }
     }
 
-    prolongAdd(l, ec, x);
+    if (scaleAt(l))
+    {
+        // Minimal-residual scaling of the prolongated correction d = P e:
+        // x += alpha d, alpha = <A d, r>/<A d, A d>, r = b - A x (pre-smoothed)
+        blockScalarList& d = sd_[l];
+        blockScalarList& q = sq_[l];
+        d = Zero;
+        prolongAdd(l, ec, d);
+        A.Amul(q, d);
+        const FixedList<reduceScalar, 2> s =
+            doubleReduce::dot2(q, r_[l], q, q, A.comm());
+        // GUARD: a vanishing correction is added unscaled (alpha 1)
+        const blockScalar alpha =
+            narrow(s[1] > doubleScalarVSMALL ? s[0]/s[1] : 1.0);
+        const label n = x.size();
+        for (label i = 0; i < n; ++i)
+        {
+            x[i] += alpha*d[i];
+        }
+    }
+    else
+    {
+        prolongAdd(l, ec, x);
+    }
 
     if (nPost > 0)
     {
@@ -1698,7 +1893,25 @@ bool Foam::blockGAMG::setCycleType(const cycleKind c) const
 
 void Foam::blockGAMG::update()
 {
-    if (!dict_.get<bool>("cacheAgglomeration"))
+    ++nUpdates_;
+    const bool matrixWeights = (aggWeights_ != "geometric");
+    if
+    (
+        matrixWeights
+     && (
+            !aggFromMatrix_
+         || (reaggInterval_ > 0 && nUpdates_ % reaggInterval_ == 0)
+        )
+    )
+    {
+        // First update (the matrix exists only now) or re-agglomeration:
+        // pair agglomeration on the block-matrix weights
+        clearHierarchy();
+        aggPtr_ = nullptr;
+        aggFromMatrix_ = true;
+        buildHierarchy();
+    }
+    else if (!dict_.get<bool>("cacheAgglomeration"))
     {
         // Rebuild everything on a fresh agglomeration (the matrices and
         // smoothers reference the agglomeration's addressing)
