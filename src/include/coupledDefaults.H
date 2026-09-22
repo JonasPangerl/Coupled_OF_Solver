@@ -224,6 +224,21 @@ constexpr label diagStallWindow = 50;            // "stalled": no new min R
 constexpr doubleScalar diagAsymptoticResidualFactor = 100;  // R <= 100*tol
 constexpr doubleScalar diagAsymptoticForceFactor = 10;      // window <= 10*tol
 
+// ---------------------------------------------------------------------------
+// Amendment C1/C5/C6 (SPEC_amendment_C.md, D-054)
+// ---------------------------------------------------------------------------
+// C1: topological static criteria, coupled.remediation.static. The
+// nonOrthThreshold default stays at 85 (D-047/D-051); 65 and 60 are
+// benchmark variants only.
+constexpr bool wallStarvedEnabled = true;        // coupledFoam switch
+constexpr label maxWallInternalFaces = 2;
+constexpr bool procAMIEnabled = true;            // keyword procAMI
+constexpr bool volumeJumpEnabled = true;         // coupledFoam switch
+constexpr doubleScalar volJumpThreshold = 0.98;  // volume ratio > 50
+// C6: write-time diagnostic fields, coupled.diagnosticFields
+constexpr bool diagnosticFieldsEnabled = true;
+// ---------------------------------------------------------------------------
+
 // Misc (spec 9.1, 10)
 constexpr bool ftz = true;
 constexpr bool writeState = true;
