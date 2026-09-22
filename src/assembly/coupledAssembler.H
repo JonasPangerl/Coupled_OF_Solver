@@ -30,6 +30,14 @@ Description
     complete after its own face and narrowed once. The residual b - A x is
     accumulated in double from the same double coefficients (D-012).
 
+    Zero-copy assembly (amendment D2.3/D8.1, DECISIONS.md D-064): when
+    scalar == blockScalar (the SP build) the diagonal blocks are accumulated
+    directly in the matrix array (no double staging buffer, no conversion
+    pass); the row-3 scaling and the clamp count of the diagonal blocks are
+    applied in the pass that adds the row-3 diagonal to A x. In DP (and
+    SPDP) the staging path is unchanged. A x, b and the residual stay double
+    in every build (D2.2a, D-012).
+
     Norms (after row scaling), see DECISIONS.md D-016:
         normFactor = sum_i |(A x)_i| + |b_i| + SMALL  (all rows except the
                                                        replaced row of the
@@ -57,6 +65,7 @@ SourceFiles
 #include "MRFCoupling.H"
 #include "volFields.H"
 #include "surfaceFields.H"
+#include <type_traits>
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -66,6 +75,15 @@ namespace Foam
 class coupledAssembler
 {
 public:
+
+    //- Zero-copy assembly (D2.3, D8.1): fields and block coefficients have
+    //  the same type (SP build)
+    static constexpr bool zeroCopy = std::is_same<scalar, blockScalar>::value;
+
+    //- Accumulation type of the diagonal blocks: double staging buffer
+    //  (DP, SPDP) or the matrix array itself (SP)
+    typedef std::conditional_t<zeroCopy, blockScalar, doubleScalar>
+        diagScalar;
 
     //- Wall-time split of the assembly (diagnostics, TASK 5), seconds,
     //  accumulated until resetTimes()
@@ -125,8 +143,11 @@ private:
         blockLduMatrix4 A_;
         blockScalarList rhs_;
 
+        //- Double staging buffer of the diagonal blocks (empty with
+        //  zeroCopy, where the diagonal is accumulated in A_.diag())
+        List<diagScalar> DdStage_;
+
         //- Double work storage
-        reduceScalarList Dd_;
         reduceScalarList Ax_;
         reduceScalarList b_;
 
@@ -143,8 +164,8 @@ private:
         const volVectorField* UPtr_;
         const volScalarField* pPtr_;
 
-        //- Results
-        scalar sp_;
+        //- Results (row scale in double, D2.2)
+        doubleScalar sp_;
         reduceScalar normFactor_;
         reduceScalar residualL2_;
         reduceScalar rU_;
@@ -154,7 +175,33 @@ private:
 
     // Private Member Functions
 
-        //- Index into Dd_ for cell, row, column
+        //- Accumulation array of the diagonal blocks: the matrix array if
+        //  T == blockScalar (zero-copy), else the staging buffer. A template
+        //  so that the discarded branch is not instantiated.
+        template<class T>
+        static T* diagAccumulator
+        (
+            blockScalarList& matrixDiag,
+            List<T>& stage
+        ) noexcept
+        {
+            if constexpr (std::is_same<T, blockScalar>::value)
+            {
+                return matrixDiag.data();
+            }
+            else
+            {
+                return stage.data();
+            }
+        }
+
+        //- Accumulation array of the diagonal blocks (16 per cell)
+        diagScalar* diagAcc() noexcept
+        {
+            return diagAccumulator(A_.diag(), DdStage_);
+        }
+
+        //- Index into the diagonal blocks for cell, row, column
         static label di(const label celli, const label r, const label c)
         {
             return celli*blockSize + r*blockDim + c;
@@ -259,7 +306,7 @@ public:
             const scalarField& abar() const noexcept { return abar_; }
 
             //- Continuity row scale s_p (5.3f)
-            scalar rowScale() const noexcept { return sp_; }
+            doubleScalar rowScale() const noexcept { return sp_; }
 
             reduceScalar normFactor() const noexcept { return normFactor_; }
 
