@@ -472,3 +472,42 @@ def test_results_write_stores_fingerprint(tmp_path, monkeypatch):
     fp = rec["runFingerprint"]
     assert fp["provenanceDate"] == "2026-09-22T20:00:00"
     assert fp["logs"]["log.coupledFoam"]["size"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# minor items: T5 names and hash, foamDictionary flag
+# --------------------------------------------------------------------------- #
+
+def test_t5_hash_independent_of_reader_env(monkeypatch):
+    monkeypatch.setenv("CF_T5_MESH", "coarse")
+    rec = {"case": "T5", "config": "C", "meshVariant": run_bench.mesh_variant("T5"),
+           "configHash": run_bench.config_hash("T5", "C")}
+    assert rec["meshVariant"] == "coarse"
+    monkeypatch.delenv("CF_T5_MESH")
+    assert run_bench.is_current(rec)
+    assert run_bench.config_hash("T5", "C") != rec["configHash"]
+
+
+def test_t5_run_names(monkeypatch):
+    assert run_bench.t5_run_name(10, "fine") == "T5_np10"
+    assert run_bench.t5_run_name(10, "coarse") == "T5_coarse_np10"
+    monkeypatch.setenv("CF_T5_MESH", "coarse")
+    assert run_bench.t5_run_name(10) == "T5_coarse_np10"
+    assert run_bench.case_args("T5") == ["-mesh", "coarse"]
+
+
+def test_foam_dictionary_flag_only_on_fvsolution(monkeypatch, tmp_path):
+    calls = []
+
+    class _R:
+        stdout = ""
+
+    def _run(cmd, **kw):
+        calls.append(cmd)
+        return _R()
+
+    monkeypatch.setattr(run_bench.subprocess, "run", _run)
+    run_bench.foam_dictionary(tmp_path, "system/controlDict", ["-entry", "x"])
+    run_bench.foam_dictionary(tmp_path, "system/fvSolution", ["-entry", "x"])
+    assert "-disableFunctionEntries" not in calls[0]
+    assert "-disableFunctionEntries" in calls[1]

@@ -90,15 +90,16 @@ def test_T5(foam):
     env = ahmed_env()
     mesh = mesh_dir(TEMPLATE, mesh_name, mesh_args, NP, extra_env=env)
 
-    suffix = "" if variant == "fine" else f"_{variant}"
+    # run names shared with the report (run_bench.t5_run_name): T5_np10 on
+    # the fine mesh, T5_coarse_np10 on the coarse one
+    name = run_bench.t5_run_name(NP, variant)
     # wake case: averaged force criterion (D-042)
     osc = run_bench.is_oscillatory("T5")
     ref_case, ref = reference(
-        TEMPLATE, mesh, f"ref_T5{suffix}_np{NP}", mesh_args,
+        TEMPLATE, mesh, f"ref_{name}", mesh_args,
         budget_sets("simpleFoam", BUDGET["simpleFoam"]), oscillatory=osc,
         case_name="T5")
 
-    name = f"T5{suffix}_np{NP}"
     case, rec = run_solver(
         TEMPLATE, mesh, name, "coupledFoam", mesh_args,
         budget_sets("coupledFoam", BUDGET["coupledFoam"]), extra_env=env,

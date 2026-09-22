@@ -2019,3 +2019,26 @@ change it needs is given to the lead.
 - user_convergence.apply_test keeps Cd_mean / Cl_mean / *_std of the
   coupledFoam record consistent with a user point (they were updated on
   the reference side only).
+
+### 9. Minor items (review m2, m7, m10, m12, m13)
+
+- T5 hash: the configuration hash of T5 used CF_T5_MESH of the process
+  that computed it, so make_report without the variable dropped the
+  coarse records as stale. Bench records now store meshVariant and
+  is_current hashes T5 records with it (run_bench.case_args,
+  mesh_variant).
+- T5 run names: run_bench.t5_run_name (T5_np10 fine, T5_coarse_np10
+  coarse) is used by tests/test_T5_ahmed.py and by make_report.SPEED_CASES
+  (the variant with a test record; CF_T5_MESH first).
+- run_bench.foam_dictionary uses -disableFunctionEntries on fvSolution only
+  (CLAUDE.md rule; controlDict WITHOUT it). Checked with the system
+  foamDictionary on copies of the T4/T5/T1 controlDicts: only the set
+  entries change (T1: $inletP is expanded in place, as with
+  cflib.case.set_entry).
+- test_fpe: startupUpwindIters 0 had no effect under the default hybrid
+  start-up (D-048); the torture start now sets coupled.startupMode none
+  (no ramp: full second order and the full CFL0 200 from iteration 1).
+  Smoke run on the current main build (T1, 1 rank): converged to R < 1e-5
+  in 140 iterations, no trap, no rollback.
+- Docstrings and the T4/T5 controlDict comment no longer say
+  max(1000, n/2); the run_bench configuration list matches item 2.

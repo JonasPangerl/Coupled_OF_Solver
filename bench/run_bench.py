@@ -355,12 +355,42 @@ def config_sets(cfg: str, spec: dict, name: str | None = None
     return solver, sets, files
 
 
-def config_hash(name: str, cfg: str) -> str:
-    """Hash of everything that defines a run of (case, configuration)."""
+def t5_variant() -> str:
+    """T5 mesh variant of this process: CF_T5_MESH (default fine)."""
+    return os.environ.get("CF_T5_MESH", "fine")
+
+
+def t5_run_name(nprocs: int = HEAVY_NP, variant: str | None = None) -> str:
+    """Name of the T5 test run (and, with the prefix ref_, of its
+    reference): T5_np10 on the fine mesh, T5_<variant>_np10 otherwise (as
+    tests/test_T5_ahmed.py names them)."""
+    v = variant or t5_variant()
+    return f"T5{'' if v == 'fine' else '_' + v}_np{nprocs}"
+
+
+def case_args(name: str, variant: str | None = None) -> list[str]:
+    """Allrun arguments of a case; for T5 the mesh variant `variant`
+    (default: CF_T5_MESH of this process)."""
+    if name == "T5":
+        return ["-mesh", variant or t5_variant()]
+    return list(CASES[name]["args"])
+
+
+def mesh_variant(name: str, variant: str | None = None) -> str | None:
+    """-mesh value of a case's Allrun arguments (T4a: a, T5: fine/coarse)."""
+    args = case_args(name, variant)
+    return args[args.index("-mesh") + 1] if "-mesh" in args else None
+
+
+def config_hash(name: str, cfg: str, variant: str | None = None) -> str:
+    """Hash of everything that defines a run of (case, configuration).
+    variant: the T5 mesh variant of the run (default: CF_T5_MESH of this
+    process); records store it (meshVariant) so the hash does not depend on
+    the environment of the process that reads them."""
     spec = CASES[name]
     solver, sets, files = config_sets(cfg, spec, name)
     d = {"v": HARNESS_VERSION, "case": name, "cfg": cfg,
-         "template": spec["template"], "args": spec["args"],
+         "template": spec["template"], "args": case_args(name, variant),
          "monitor": spec["monitor"], "solver": solver,
          "sets": sets, "files": files,
          "window": WINDOW, "tol": TOL}
@@ -425,7 +455,9 @@ def is_current(rec: dict) -> bool:
     """True if a result record was produced with the current definition of
     its (case, configuration)."""
     try:
-        return rec.get("configHash") == config_hash(rec["case"], rec["config"])
+        return rec.get("configHash") == config_hash(
+            rec["case"], rec["config"],
+            rec.get("meshVariant") if rec["case"] == "T5" else None)
     except (KeyError, ValueError):
         return False
 
@@ -534,11 +566,16 @@ def field_average_start(n: int, case: str | None = None) -> int:
 
 def foam_dictionary(case: Path, fname: str, args: list[str],
                     capture: bool = False) -> str:
-    """foamDictionary -disableFunctionEntries <args> <fname> in `case`.
-    ALWAYS with -disableFunctionEntries: without it foamDictionary expands
-    and drops #include/#sinclude directives when it rewrites a file."""
+    """foamDictionary <args> <fname> in `case` (CLAUDE.md rule, as
+    cflib.case.set_entry): fvSolution WITH -disableFunctionEntries (without
+    it foamDictionary expands and drops the `#sinclude "relaxation"` when it
+    rewrites the file); every other dictionary (controlDict, fvSchemes)
+    WITHOUT it, because the flag writes their $-macros ($inletP,
+    $turbulence) back quoted and broken."""
+    flag = (["-disableFunctionEntries"] if Path(fname).name == "fvSolution"
+            else [])
     out = subprocess.run(
-        ["foamDictionary", "-disableFunctionEntries"] + list(args) + [fname],
+        ["foamDictionary"] + flag + list(args) + [fname],
         cwd=case, check=True, capture_output=True, text=True)
     return out.stdout if capture else ""
 
@@ -1079,7 +1116,7 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
             case, field_average_start(spec["iters"][solver], name))
 
     rc = cfcase.allrun(
-        case, ["-solver", solver, "-np", str(nprocs)] + spec["args"],
+        case, ["-solver", solver, "-np", str(nprocs)] + case_args(name),
         fpe=False,
         extra_env={"CF_RANK_WRAPPER": str(WRAPPER),
                    "CF_TIMING_DIR": str(case / "timing"),
@@ -1089,6 +1126,7 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
                    else "no"},
     )
     rec = {"case": name, "config": cfg, "run": run, "solver": solver,
+           "meshVariant": mesh_variant(name),
            "nProcs": nprocs, "rc": rc, "machineBefore": state,
            "configHash": chash, "harnessVersion": HARNESS_VERSION,
            "sets": sets}

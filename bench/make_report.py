@@ -1034,6 +1034,20 @@ def table_b10(rows: list[dict]) -> str:
 # speed-up figures from the test records and the run logs
 # --------------------------------------------------------------------------- #
 
+def _t5_run() -> str:
+    """T5 test-run name the report shows (m7): CF_T5_MESH if set, else the
+    variant (fine, then coarse) that has a test record, else the fine one."""
+    import os  # noqa: PLC0415
+    env = os.environ.get("CF_T5_MESH")
+    for v in ([env] if env else []) + ["fine", "coarse"]:
+        n = run_bench.t5_run_name(run_bench.HEAVY_NP, v)
+        if (RESULTS / "tests" / f"{n}.json").exists():
+            return n
+    return run_bench.t5_run_name(run_bench.HEAVY_NP, env or "fine")
+
+
+T5_RUN = _t5_run()
+
 # (label, test record, coupledFoam run dir, simpleFoam reference dir)
 SPEED_CASES = [
     ("T0 Re100", "T0_Re100_np1", "T0_Re100_np1", "ref_T0_Re100"),
@@ -1044,7 +1058,7 @@ SPEED_CASES = [
     ("T3 GEKO", "T3_GEKO_np1", "T3_GEKO_np1", "ref_T3_GEKO"),
     ("T4a", "T4a_np10", "T4a_np10", "ref_T4a_np10"),
     ("T4b", "T4b_np10", "T4b_np10", "ref_T4b_np10"),
-    ("T5", "T5_np10", "T5_np10", "ref_T5_np10"),
+    ("T5", T5_RUN, T5_RUN, "ref_" + T5_RUN),
 ]
 BUSY_MINUTES = 10.0   # a log written less than this ago belongs to a live run
 _RES_LINE = logs._RES
