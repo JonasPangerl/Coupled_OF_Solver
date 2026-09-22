@@ -1,0 +1,68 @@
+{
+ "render_T4a_delta_slices.png": {
+  "cfCommit": null,
+  "cfRun": "T4a_np10",
+  "cfUsed": true,
+  "date": "2026-09-22T22:09:55"
+ },
+ "render_T4a_delta_surface.png": {
+  "cfCommit": null,
+  "cfRun": "T4a_np10",
+  "cfUsed": true,
+  "date": "2026-09-22T22:09:55"
+ },
+ "render_T4a_geometry.png": {
+  "cfCommit": null,
+  "cfRun": "T4a_np10",
+  "cfUsed": false,
+  "date": "2026-09-22T22:09:55"
+ },
+ "render_T4a_mean_U.png": {
+  "cfCommit": null,
+  "cfRun": "T4a_np10",
+  "cfUsed": true,
+  "date": "2026-09-22T22:09:55"
+ },
+ "render_T4a_slice_U.png": {
+  "cfCommit": null,
+  "cfRun": "T4a_np10",
+  "cfUsed": true,
+  "date": "2026-09-22T22:09:55"
+ },
+ "render_T4a_slice_p.png": {
+  "cfCommit": null,
+  "cfRun": "T4a_np10",
+  "cfUsed": true,
+  "date": "2026-09-22T22:09:55"
+ },
+ "render_T4a_surface_Cp.png": {
+  "cfCommit": null,
+  "cfRun": "T4a_np10",
+  "cfUsed": true,
+  "date": "2026-09-22T22:09:55"
+ },
+ "render_T4b_geometry.png": {
+  "cfCommit": null,
+  "cfRun": "T4b_np10",
+  "cfUsed": false,
+  "date": "2026-09-22T22:12:13"
+ },
+ "render_T4b_slice_U.png": {
+  "cfCommit": null,
+  "cfRun": "T4b_np10",
+  "cfUsed": false,
+  "date": "2026-09-22T22:12:13"
+ },
+ "render_T4b_slice_p.png": {
+  "cfCommit": null,
+  "cfRun": "T4b_np10",
+  "cfUsed": false,
+  "date": "2026-09-22T22:12:13"
+ },
+ "render_T4b_surface_Cp.png": {
+  "cfCommit": null,
+  "cfRun": "T4b_np10",
+  "cfUsed": false,
+  "date": "2026-09-22T22:12:13"
+ }
+}
