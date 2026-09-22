@@ -1162,8 +1162,9 @@ relative on integral quantities. Native references are produced with
   benchmarks. Pass: both solvers reach a stationary window mean of $C_d$
   and $C_l$ (averaged force criterion for oscillating wakes, D-042,
   Section~\ref{sec:perf}); window means within $\max(2\,\%,0.002)$ ($C_d$)
-  and $\max(2\,\%,0.01)$ ($C_l$) of \code{simpleFoam}; static set at most
-  1\,\% of the cells; no rollbacks.
+  and $\max(2\,\%,0.01)$ ($C_l$) of \code{simpleFoam}; RMS of the
+  mean-field differences at most 0.02 (proposed, D-042 addendum); static set
+  at most 1\,\% of the cells; no rollbacks.
 \item[T5, Ahmed body, $25^\circ$ slant.] Generated geometry, half model,
   5--8\,M cells, $U_\infty=\SI{40}{m/s}$, SST with wall functions. Pass:
   as T4 (averaged force criterion, D-042); comparison with the experimental
@@ -1292,17 +1293,31 @@ iteration identically for all solvers: over the last 100 iterations,
 $\max C_d-\min C_d\le0.002\,|\overline{C_d}|$ and the same for $C_l$ (the
 pressure drop for T1 and T2).
 
-\paragraph{Wake cases (D-042).} T4a, T4b and T5 have physically oscillating
-wakes: the T4b \code{simpleFoam} reference oscillates by about $\pm1\,\%$ in
-$C_d$ and $\pm8\,\%$ in $C_l$ indefinitely, so the window criterion above
-cannot be met by any steady solver on these cases. For them (user decision,
-D-042) a run of $n$ iterations is converged when its window mean is
-stationary: over the last $W=\max(500,n/4)$ iterations ($W\le n/2$) the means
-of the two half-windows differ by at most $\max(0.005\,|\overline{C}|,0.002)$,
-for $C_d$ and $C_l$ separately. The convergence iteration is the first
-iteration (scanned in steps of 50) at which this holds, and the coefficients
-compared are the window means, within $\max(2\,\%,0.002)$ for $C_d$ and
-$\max(2\,\%,0.01)$ for $C_l$. The criteria of T0--T3 are unchanged.
+\paragraph{Wake cases (D-042 and addendum).} T4a, T4b and T5 have physically
+oscillating wakes: the T4b \code{simpleFoam} reference oscillates by about
+$\pm1\,\%$ in $C_d$ and $\pm8\,\%$ in $C_l$ indefinitely, so the window
+criterion above cannot be met by any steady solver on these cases. For them
+(user decisions, D-042 and its addendum) a run of $n$ iterations is converged
+when its window mean is stationary: over the last $W=\max(1000,n/2)$
+iterations ($W\le n$) the means of the two half-windows differ by at most
+$\max(0.01\,|\overline{C}|,0.005)$, for $C_d$ and $C_l$ separately. The
+first version of the rule ($W=\max(500,n/4)$, $\max(0.005\,|\overline{C}|,
+0.002)$) was too tight. Over $W=1000$ the half-window means of the 4000-iteration T4b
+reference still drift by 5.5\,\% in $C_l$; over $W=2000$ they drift by 0.9\,\%
+($C_d$) and 1.1\,\% ($C_l$). The convergence iteration is the first iteration
+(scanned in steps of 50) at which this holds, and the coefficients compared
+are the window means, within $\max(2\,\%,0.002)$ for $C_d$ and
+$\max(2\,\%,0.01)$ for $C_l$. Numbers alone can agree for the wrong reason,
+so the flow fields are compared as well. A \code{fieldAverage} function
+object averages $\Uv$ and $p$ over the same window $W$. The utility
+\code{coupledFieldCompare} writes the differences of the mean fields between
+the two solvers, including the boundary values (the surface $\Delta C_p$ on
+the body), and reports their volume-weighted RMS. The proposed pass
+thresholds are an RMS of $|\Delta\overline{\Uv}|/U_\infty$ and of
+$|\Delta\overline{p}|/(\tfrac12U_\infty^2)$ of at most 0.02 each. The cached
+references, which were run before the averaging existed, are continued once
+by $W$ iterations with the averaging active. The criteria of T0--T3 are
+unchanged.
 
 \paragraph{Timing.} Every rank of every application that the case script
 starts runs under \code{/usr/bin/time -v}. The total cost of a solution is

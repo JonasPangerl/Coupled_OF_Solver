@@ -601,7 +601,7 @@ def fig_remediation(tests: dict) -> None:
 
 def table_validation(tests: dict) -> str:
     header = ["case", "quantity", "coupledFoam", "simpleFoam", "rel. diff.",
-              "tolerance", "pass"]
+              "tolerance", "field RMS dU / dp", "pass"]
     rows = []
     specs = [
         ("T1_np1", "dp", "dp", "dpRef", "dpRelDiff", "tolDp"),
@@ -616,7 +616,7 @@ def table_validation(tests: dict) -> str:
         if not d:
             continue
         rows.append([name, q, fmt(d.get(kc), "{:.5g}"), fmt(d.get(kr), "{:.5g}"),
-                     fmt(d.get(kd), "{:.2e}"), fmt(d.get(kt), "{:.3g}"),
+                     fmt(d.get(kd), "{:.2e}"), fmt(d.get(kt), "{:.3g}"), "",
                      "yes" if d.get("pass") else "NO"])
     osc_rows = False
     for name in sorted(tests):
@@ -624,9 +624,10 @@ def table_validation(tests: dict) -> str:
             continue
         d = tests[name]
         ok = "yes" if d.get("pass") else "NO"
-        if d.get("criterion") == run_bench.STAT_CRITERION:
-            # wake case (D-042): window mean +- std, tolerance
-            # max(relative, absolute) of the reference mean
+        if str(d.get("criterion", "")).startswith("stationaryMean"):
+            # wake case (D-042 and addendum): window mean +- std, tolerance
+            # max(relative, absolute) of the reference mean; mean-field
+            # delta (volume RMS of |dUMean|/U_inf and |dpMean|/p_ref)
             osc_rows = True
             ref = d.get("reference") or {}
             for q, (rel, ab) in run_bench.OSC_TOL.items():
@@ -635,25 +636,46 @@ def table_validation(tests: dict) -> str:
                     _pm(d.get(f"{q}_mean"), d.get(f"{q}_std")),
                     _pm(ref.get(f"{q}_mean"), ref.get(f"{q}_std")),
                     fmt(d.get(f"{q}RelDiff"), "{:.2e}"),
-                    f"max({rel:.0%}, {ab:g})", ok])
+                    f"max({rel:.0%}, {ab:g})",
+                    _field_rms(d) if q == "Cd" else "", ok])
         else:
             rows.append([name, "Cd", fmt(d.get("Cd"), "{:.5g}"),
                          fmt(d.get("CdRef"), "{:.5g}"),
-                         fmt(d.get("CdRelDiff"), "{:.2e}"), "0.01", ok])
+                         fmt(d.get("CdRelDiff"), "{:.2e}"), "0.01", "", ok])
     if not rows:
         notes.append("validation table: no T1-T5 results")
         return ""
     note = None
     if osc_rows:
+        ft = run_bench.FIELD_TOL
         note = ("† Oscillating wake: stationary window mean over the "
-                "last W = max(500, n/4) iterations, mean ± standard "
-                "deviation; tolerance max(relative, absolute) of the "
-                "simpleFoam mean (averaged force criterion, D-042).")
+                f"last W = max({run_bench.STAT_WINDOW_MIN}, "
+                f"n/{run_bench.STAT_WINDOW_DIV}) iterations (capped at n), "
+                "mean ± standard deviation; tolerance max(relative, "
+                "absolute) of the simpleFoam mean (averaged force "
+                "criterion, D-042 addendum). Field RMS dU / dp: "
+                "volume-weighted RMS of the mean-velocity difference "
+                "(magnitude, over U_inf) and of the mean-pressure "
+                "difference (over the free-stream dynamic pressure) "
+                "between the solvers, fields averaged over the same "
+                "window (coupledFieldCompare); proposed limits "
+                f"{ft['volRmsMagUDeltaRel']:.0%} / "
+                f"{ft['volRmsPDeltaRel']:.0%}; n/a: not evaluated.")
     return write_table("validation", header, rows,
                        "Validation: integral quantities, coupledFoam vs. "
                        "simpleFoam on identical meshes and schemes; wake "
-                       "cases T4 and T5 compared by window means (D-042).",
-                       "tab:validation", note=note)
+                       "cases T4 and T5 compared by window means and "
+                       "mean-field deltas (D-042 addendum).",
+                       "tab:validation", resize=True, note=note)
+
+
+def _field_rms(d: dict) -> str:
+    """'x % / y %' of the mean-field delta (D-042 addendum), n/a if the
+    record predates it or the comparison failed."""
+    u, p = d.get("fieldRmsU"), d.get("fieldRmsP")
+    if u is None or p is None:
+        return "n/a"
+    return f"{100 * u:.2f}% / {100 * p:.2f}%"
 
 
 def _pm(m, s) -> str:

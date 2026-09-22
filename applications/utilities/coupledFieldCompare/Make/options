@@ -1,0 +1,12 @@
+WM_OSTYPE ?= POSIX
+
+EXE_INC = \
+    -Wall -Wextra -Werror \
+    -isystem $(LIB_SRC)/OpenFOAM/lnInclude \
+    -isystem $(LIB_SRC)/OSspecific/$(WM_OSTYPE)/lnInclude \
+    -isystem $(LIB_SRC)/finiteVolume/lnInclude \
+    -isystem $(LIB_SRC)/meshTools/lnInclude
+
+EXE_LIBS = \
+    -lfiniteVolume \
+    -lmeshTools

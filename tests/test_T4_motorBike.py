@@ -5,15 +5,20 @@ Two meshes: (a) tutorial refinement (~350 k cells), (b) surface level
 (6 6), features 7, refinementBox 5 (target 1-2 M cells, D-031; the
 actual count is recorded).
 
-Pass (per mesh), averaged force criterion for the oscillating wake (D-042,
-user decision; the old 12.3(ii) 0.2 % min/max window is unsatisfiable for
-any steady solver here, the simpleFoam reference included): both solvers
-have a stationary window mean of Cd and Cl at the end of their run
-(bench/run_bench.py:stationary_mean - window W = max(500, n/4) <= n/2,
-half-window means differ by <= max(0.5 % |mean|, 0.002)); the window means
-agree with simpleFoam (SIMPLEC) on the same mesh: Cd within
-max(2 %, 0.002 absolute), Cl within max(2 %, 0.01 absolute); static
-remediation set <= 1 % of the cells; nRollbacks == 0. Time to convergence
+Pass (per mesh), averaged force criterion for the oscillating wake (D-042
+and its addendum, user decisions; the old 12.3(ii) 0.2 % min/max window is
+unsatisfiable for any steady solver here, the simpleFoam reference
+included): both solvers have a stationary window mean of Cd and Cl at the
+end of their run (bench/run_bench.py:stationary_mean - window
+W = max(1000, n/2) capped at n, half-window means differ by
+<= max(1 % |mean|, 0.005)); the window means agree with simpleFoam
+(SIMPLEC) on the same mesh: Cd within max(2 %, 0.002 absolute), Cl within
+max(2 %, 0.01 absolute); the mean fields over the same window agree:
+volume RMS of |dUMean|/U_inf and of |dpMean|/p_ref at most 0.02 each
+(proposed thresholds; applications/utilities/coupledFieldCompare writes
+the delta fields and fieldCompare.json; a cached reference without mean
+fields is continued once with averaging, continue_reference_with_average);
+static remediation set <= 1 % of the cells; nRollbacks == 0. Time to convergence
 uses the first stationary window (run_bench.iters_to_stationary). Peak RSS,
 wall time and CPU-hours of both solvers are recorded (every rank runs under
 bench/rank_wrapper.sh). The coupledFoam runtime stop (convergence dict) is
@@ -195,12 +200,23 @@ def budget_sets(solver: str, n: int, extra: dict | None = None) -> dict:
     return sets
 
 
-def force_history(case: Path) -> dict[str, list[float]]:
+def force_history(case: Path, t_min: float | None = None,
+                  t_max: float | None = None) -> dict[str, list[float]]:
+    """Cd / Cl history (restarts merged); optionally only the samples with
+    t_min < Time <= t_max (a reference continuation is evaluated over its
+    own iterations, the original reference over its original ones)."""
     try:
         fc = post.force_coeffs(case)
     except (FileNotFoundError, KeyError):
         return {}
-    return {"Cd": fc["Cd"].tolist(), "Cl": fc["Cl"].tolist()}
+    keep = np.ones(len(fc["Cd"]), dtype=bool)
+    if (t_min is not None or t_max is not None) and "Time" in fc:
+        t = fc["Time"]
+        if t_min is not None:
+            keep &= t > t_min
+        if t_max is not None:
+            keep &= t <= t_max
+    return {"Cd": fc["Cd"][keep].tolist(), "Cl": fc["Cl"][keep].tolist()}
 
 
 def evaluate_history(rec: dict, case: Path, solver: str,
@@ -260,10 +276,19 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
     """Run one solver on a copy of a cached mesh; returns the case and a
     record with convergence (harness criterion; D-042 stationary mean if
     `oscillatory`), coefficients, wall time, CPU-hours and peak RSS
-    (per-rank /usr/bin/time -v)."""
+    (per-rank /usr/bin/time -v).
+
+    oscillatory: the fieldAverage function object of the template averages
+    UMean/pMean over the force window, timeStart = n - W + 1 with n the
+    endTime of `sets` (run_bench.field_average_start, D-042 addendum)."""
     info = mesh_info(mesh)
     nprocs = int(info.get("np", "1"))
     case = case_from_mesh(template, mesh, name, sets)
+    avg_start = None
+    n_budget = (sets or {}).get("system/controlDict", {}).get("endTime")
+    if oscillatory and n_budget is not None:
+        avg_start = run_bench.field_average_start(int(n_budget))
+        run_bench.set_field_average_start(case, avg_start)
     env = {"CF_RANK_WRAPPER": str(WRAPPER),
            "CF_TIMING_DIR": str(case / "timing")}
     env.update(extra_env or {})
@@ -282,6 +307,7 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
         "cpuHours": ranks.get("cpuHours"),
         "peakRSS_GB_sum": ranks.get("peakRSS_GB_sum"),
         "peakRSS_GB_max_rank": ranks.get("peakRSS_GB_max_rank"),
+        "fieldAverageTimeStart": avg_start,
     }
 
     hist = force_history(case)
@@ -339,8 +365,11 @@ def reevaluate_reference(case: Path, rec: dict,
     for k in ("wallToConv_s", "cpuHoursToConv", "progressFraction", "Cd",
               "Cl", "itersToConvCdOnly"):
         rec.pop(k, None)
-    evaluate_history(rec, case, "simpleFoam", force_history(case), ranks,
-                     oscillatory)
+    # a continuation (continue_reference_with_average) extends the force
+    # history; the reference itself is its original run only
+    cont = rec.get("continuation") or {}
+    hist = force_history(case, t_max=cont.get("startTime"))
+    evaluate_history(rec, case, "simpleFoam", hist, ranks, oscillatory)
     return rec
 
 
@@ -364,18 +393,187 @@ def reference(template: str, mesh: Path, name: str, mesh_args: list[str],
     return case, rec
 
 
+# ---------------------------------------------------------------------------
+# Mean fields of the reference (D-042 addendum)
+# ---------------------------------------------------------------------------
+
+CONTINUATION_TIMING = "timing_continuation"
+CONTINUATION_CASES = ("T4a", "T4b", "T5")
+
+
+def default_n_extra(case_name: str) -> int:
+    """Continuation length of a cached reference: the averaging window W of
+    its budget (T4a 1500, T4b 2000, T5 2500)."""
+    return run_bench.stat_window(
+        run_bench.CASES[case_name]["iters"]["simpleFoam"])
+
+
+def _case_name_of(ref_dir: Path) -> str | None:
+    """run/ref_T4a_np10 -> T4a, run/ref_T5_coarse_np10 -> T5."""
+    for name in CONTINUATION_CASES:
+        if ref_dir.name.startswith(f"ref_{name}_"):
+            return name
+    return None
+
+
+def continue_reference_with_average(case: Path, n_extra: int | None = None
+                                    ) -> dict:
+    """Continue a cached simpleFoam reference from its final time for
+    n_extra iterations with the fieldAverage function object active from
+    the first continued iteration, and evaluate the forces over the
+    continuation only (D-042 addendum; the T4a/T4b references were run
+    before the averaging existed and are not recomputed from scratch).
+
+    n_extra default: default_n_extra of the case named by the directory
+    (ref_T4a_* 1500, ref_T4b_* 2000, ref_T5* 2500). The run uses the
+    Allrun -restart path (log.<solver>.restart) with endTime = t0 + n_extra,
+    writeInterval n_extra, fieldAverage timeStart t0 + 1 and
+    restartOnRestart true. Its rank timing goes to <case>/timing_continuation
+    (the reference's own timing is untouched) and is recorded separately
+    (continuationWallSeconds, continuationCpuHours). The record is stored in
+    reference.json under "continuation" and returned. A completed
+    continuation of the same length is reused; any other earlier
+    continuation is an error (no silent chaining)."""
+    case = Path(case)
+    meta = case / "reference.json"
+    rec = json.loads(meta.read_text()) if meta.exists() else {}
+    if n_extra is None:
+        name = _case_name_of(case)
+        if name is None:
+            raise ValueError(f"{case}: n_extra needed (unknown case)")
+        n_extra = default_n_extra(name)
+    n_extra = int(n_extra)
+    t0_name = cfcase.latest_time(case)
+    if t0_name is None:
+        raise FileNotFoundError(f"{case}: no time directory to continue from")
+    t0 = float(t0_name)
+    old = rec.get("continuation")
+    if old:
+        done = (old.get("ok") and old.get("endTimeName")
+                in run_bench.mean_field_times(case))
+        if done and old.get("nExtra") == n_extra:
+            return old
+        if done or float(old.get("startTime", -1)) != t0:
+            raise RuntimeError(
+                f"{case}: earlier continuation {old.get('startTime')} -> "
+                f"{old.get('endTime')} (ok {old.get('ok')}) exists; "
+                "refusing to chain another one")
+
+    solver = rec.get("solver", "simpleFoam")
+    nprocs = int(rec.get("nProcs") or 1)
+    args = list(rec.get("args") or ["-solver", solver, "-np", str(nprocs)])
+    t_end = t0 + n_extra
+    end_name = f"{t_end:g}"
+    for entry, value in (("startFrom", "latestTime"), ("endTime", end_name),
+                         ("writeInterval", str(n_extra))):
+        run_bench.foam_dictionary(case, "system/controlDict",
+                                  ["-entry", entry, "-set", value])
+    run_bench.ensure_field_average(case, t0 + 1, restart_on_restart=True)
+    # output of an interrupted earlier attempt from the same start time
+    for d in (case / "postProcessing").glob(f"*/{t0_name}"):
+        shutil.rmtree(d)
+    tdir = case / CONTINUATION_TIMING
+    if tdir.exists():
+        shutil.rmtree(tdir)
+    rc = cfcase.allrun(case, args + ["-restart"], fpe=False,
+                       extra_env={"CF_RANK_WRAPPER": str(WRAPPER),
+                                  "CF_TIMING_DIR": str(tdir)})
+    timing_allrun = cfenv.last_timing.as_dict()
+    log = case / f"log.{solver}.restart"
+    text = log.read_text(errors="replace") if log.exists() else ""
+    ok = rc == 0 and "FOAM FATAL" not in text and "\nEnd" in text
+    rt = run_bench.rank_times(case, solver, CONTINUATION_TIMING)
+
+    hist = force_history(case, t_min=t0, t_max=t_end)
+    n = min((len(h) for h in hist.values()), default=0)
+    cont: dict = {
+        "method": "Allrun -restart, fieldAverage from the first continued "
+                  "iteration (D-042 addendum)",
+        "startTime": t0, "startTimeName": t0_name, "endTime": t_end,
+        "endTimeName": end_name, "nExtra": n_extra,
+        "fieldAverageTimeStart": t0 + 1, "rc": rc, "ok": ok,
+        "log": str(log), "timingDir": str(tdir),
+        "timingAllrun": timing_allrun, "ranks": rt,
+        "continuationWallSeconds": rt.get("wallSeconds"),
+        "continuationCpuHours": rt.get("cpuHours"),
+        "iterationsRun": n,
+        "meanFieldTimes": run_bench.mean_field_times(case),
+    }
+    # forces over the continuation window only (the whole continuation)
+    for q in run_bench.STAT_QUANTITIES:
+        if n < 2 or q not in hist:
+            continue
+        s = run_bench.stationary_mean(hist, q, n, w=n)
+        cont.update({f"{q}_mean": s["mean"], f"{q}_std": s["std"],
+                     f"{q}_drift": s["drift"], f"{q}_driftTol": s["driftTol"],
+                     f"{q}_stationary": s["stationary"]})
+    cont["stationary"] = bool(n >= 2 and all(
+        cont.get(f"{q}_stationary") for q in run_bench.STAT_QUANTITIES))
+    rec["continuation"] = cont
+    rec["continuationWallSeconds"] = cont["continuationWallSeconds"]
+    rec["continuationCpuHours"] = cont["continuationCpuHours"]
+    meta.write_text(json.dumps(results._clean(rec), indent=2) + "\n")
+    return cont
+
+
+def reference_mean_time(ref_case: Path, ref: dict, name: str) -> str | None:
+    """Time of the reference's mean fields. A reference run with the
+    averaging has them at its final time; a cached reference without them
+    is continued once (continue_reference_with_average, n_extra =
+    default_n_extra(name)), which updates ref["continuation"]."""
+    times = run_bench.mean_field_times(ref_case)
+    cont = ref.get("continuation")
+    if cont and cont.get("ok") and cont.get("endTimeName") in times:
+        return cont["endTimeName"]
+    latest = cfcase.latest_time(ref_case)
+    if latest in times and not cont:
+        return latest
+    cont = continue_reference_with_average(ref_case, default_n_extra(name))
+    ref["continuation"] = cont
+    ref["continuationWallSeconds"] = cont.get("continuationWallSeconds")
+    ref["continuationCpuHours"] = cont.get("continuationCpuHours")
+    return cont["endTimeName"] if cont.get("ok") else None
+
+
+def mean_field_comparison(case: Path, rec: dict, ref_case: Path, ref: dict,
+                          name: str) -> dict:
+    """coupledFieldCompare of the coupledFoam mean fields (final time)
+    against the reference mean fields (D-042 addendum); both cases share
+    the cached mesh and its decomposition."""
+    own = run_bench.mean_field_times(case)
+    ref_time = reference_mean_time(ref_case, ref, name)
+    if not own or ref_time is None:
+        out: dict = {"rc": None,
+                     "error": "no UMean/pMean in "
+                     + ("the coupledFoam run" if not own else "the reference")}
+        out.update(run_bench.field_checks(out))
+        return out
+    out = run_bench.field_delta_compare(case, ref_case,
+                                        int(rec.get("nProcs") or 1),
+                                        time=own[-1], ref_time=ref_time)
+    out["ownAverageTimeStart"] = rec.get("fieldAverageTimeStart")
+    cont = ref.get("continuation") or {}
+    out["referenceAverageTimeStart"] = (cont.get("fieldAverageTimeStart")
+                                        if cont.get("endTimeName") == ref_time
+                                        else ref.get("fieldAverageTimeStart"))
+    return out
+
+
 STAT_KEYS = ("W", "iterations_run", "Cd_mean", "Cd_std", "Cl_mean", "Cl_std",
              "Cd_drift", "Cd_driftTol", "Cl_drift", "Cl_driftTol",
              "stationary", "iters_to_stationary")
 
 
 def compare(rec: dict, ref: dict, tol_cd: float = TOL_CD,
-            oscillatory: bool = False) -> dict:
+            oscillatory: bool = False, field: dict | None = None) -> dict:
     """Solver-to-solver comparison and the common pass conditions.
-    oscillatory: the averaged force criterion of D-042 (stationary window
-    means, Cd within max(2 %, 0.002), Cl within max(2 %, 0.01))."""
+    oscillatory: the averaged force criterion of D-042 and its addendum
+    (stationary window means, Cd within max(2 %, 0.002), Cl within
+    max(2 %, 0.01)) plus the mean-field delta checks of `field`
+    (mean_field_comparison: volume RMS |dUMean|/U_inf and |dpMean|/p_ref
+    <= 0.02 each; missing = fail)."""
     if oscillatory:
-        return _compare_mean(rec, ref)
+        return _compare_mean(rec, ref, field)
     out: dict = {"tolCd": tol_cd, "window": WINDOW, "tolWindow": TOL}
     if rec.get("Cd") is not None and ref.get("Cd") is not None:
         out["CdRef"] = ref["Cd"]
@@ -409,9 +607,10 @@ def _speedups(out: dict, rec: dict, ref: dict) -> None:
         out["speedupCpu"] = ref["cpuHoursToConv"] / rec["cpuHoursToConv"]
 
 
-def _compare_mean(rec: dict, ref: dict) -> dict:
+def _compare_mean(rec: dict, ref: dict, field: dict | None = None) -> dict:
     """D-042 comparison: both runs stationary, window means within the
-    user-approved tolerances (run_bench.mean_comparison)."""
+    user-approved tolerances (run_bench.mean_comparison); mean-field delta
+    checks from `field` (D-042 addendum, proposed thresholds)."""
     mc = run_bench.mean_comparison(rec, ref)
     out: dict = {
         "criterion": run_bench.STAT_CRITERION,
@@ -433,7 +632,20 @@ def _compare_mean(rec: dict, ref: dict) -> dict:
             "CdTol": mc.get("Cd_tol"), "ClTol": mc.get("Cl_tol"),
         })
     _speedups(out, rec, ref)
+    field = field or {}
+    fchk = field.get("fieldChecks") or {}
+    out.update({
+        "fieldCompare": field or None,
+        "fieldTol": dict(run_bench.FIELD_TOL),
+        "fieldRmsU": field.get("volRmsMagUDeltaRel"),
+        "fieldRmsP": field.get("volRmsPDeltaRel"),
+        "fieldMaxU": field.get("volMaxMagUDeltaRel"),
+        "fieldCellFracU": field.get("cellFractionMagUDeltaAbove"),
+    })
     out["checks"] = {
+        "fieldU": field.get("rc") == 0
+        and bool(fchk.get("volRmsMagUDeltaRel")),
+        "fieldP": field.get("rc") == 0 and bool(fchk.get("volRmsPDeltaRel")),
         "rc": rec["rc"] == 0 and not rec.get("fpeTrap"),
         "converged": bool(rec.get("stationary"))
         and rec.get("iters_to_stationary") is not None,
@@ -461,6 +673,14 @@ def assert_checks(cmp: dict, rec: dict, ref: dict) -> None:
     assert c["Cd"], (rec.get("Cd"), ref.get("Cd"), cmp.get("CdRelDiff"))
     if "Cl" in c:
         assert c["Cl"], (rec.get("Cl"), ref.get("Cl"), cmp.get("ClAbsDiff"))
+    if "fieldU" in c:
+        fc = cmp.get("fieldCompare") or {}
+        assert c["fieldU"], ("mean-field RMS |dU|/U_inf", cmp.get("fieldRmsU"),
+                             cmp.get("fieldTol"), fc.get("error"),
+                             fc.get("log"))
+        assert c["fieldP"], ("mean-field RMS |dp|/p_ref", cmp.get("fieldRmsP"),
+                             cmp.get("fieldTol"), fc.get("error"),
+                             fc.get("log"))
     assert c["staticSet"], (rec.get("staticCells"), rec.get("staticFraction"))
     assert c["rollbacks"], rec.get("rollbacks")
     assert c["peakRSS"], "no peak RSS recorded"
@@ -488,7 +708,11 @@ def test_T4(foam, variant):
         TEMPLATE, mesh, name, "coupledFoam", mesh_args,
         budget_sets("coupledFoam", budget["coupledFoam"]), oscillatory=osc)
 
-    cmp = compare(rec, ref, oscillatory=osc)
+    # mean-field delta comparison (D-042 addendum); a cached reference
+    # without mean fields is continued once with averaging
+    field = (mean_field_comparison(case, rec, ref_case, ref, f"T4{variant}")
+             if osc else None)
+    cmp = compare(rec, ref, oscillatory=osc, field=field)
     meshing = cfcase.RUN_ROOT / f"T4{variant}_mesh" / "meshing.json"
     rec.update(cmp)
     rec.update({

@@ -7,13 +7,16 @@ iteration with the identical criterion for all solvers (spec 12.3 ii): over
 the last `window` iterations max - min <= tol*|mean| for every monitored
 quantity (Cd and Cl, or the pressure drop for T1/T2).
 
-Exception, the wake cases marked "oscillatory" (T4a, T4b, T5; D-042): their
-forces oscillate physically for ever, so 12.3(ii) is unsatisfiable. There
-"converged" means a stationary window mean (stationary_mean: window
-W = max(500, n/4) <= n/2, the two half-window means of Cd and of Cl differ
-by at most max(0.5 % |mean|, 0.002)); the time to convergence uses the
-first stationary window (iters_to_stationary, scanned in steps of 50) in
-place of iters_to_conv, and Cd / Cl are the final-window means.
+Exception, the wake cases marked "oscillatory" (T4a, T4b, T5; D-042 and its
+addendum): their forces oscillate physically for ever, so 12.3(ii) is
+unsatisfiable. There "converged" means a stationary window mean
+(stationary_mean: window W = max(1000, n/2), capped at n, the two
+half-window means of Cd and of Cl differ by at most max(1 % |mean|, 0.005));
+the time to convergence uses the first stationary window
+(iters_to_stationary, scanned in steps of 50) in place of iters_to_conv,
+and Cd / Cl are the final-window means. The mean fields (fieldAverage
+function object of the T4/T5 controlDict) are averaged over the same
+window: set_field_average_start sets its timeStart to n - W + 1.
 
 Configurations (DECISIONS.md D-025, amendment B10):
     A  simpleFoam, the tutorial's solver settings and relaxation factors.
@@ -75,6 +78,7 @@ import os
 import re
 import shutil
 import statistics
+import subprocess
 import sys
 from pathlib import Path
 
@@ -147,16 +151,30 @@ PRE_APPS = ("potentialFoam",)
 WINDOW = 100
 TOL = 0.002
 
-# Oscillatory wake cases ("oscillatory": True in CASES; D-042): criterion
-# 12.3(ii) is unsatisfiable there, convergence := stationary window mean
-STAT_CRITERION = "stationaryMean (D-042)"
-STAT_WINDOW_MIN = 500       # W = max(500, n//4), capped at n//2
-STAT_REL = 0.005            # half-window means differ <= max(0.5 % |m|,
-STAT_ABS = 0.002            #                                  0.002)
+# Oscillatory wake cases ("oscillatory": True in CASES; D-042 and its
+# addendum of 2026-09-22): criterion 12.3(ii) is unsatisfiable there,
+# convergence := stationary window mean
+STAT_CRITERION = "stationaryMean (D-042 addendum)"
+STAT_WINDOW_MIN = 1000      # W = max(1000, n // STAT_WINDOW_DIV), capped at n
+STAT_WINDOW_DIV = 2
+STAT_REL = 0.01             # half-window means differ <= max(1 % |m|,
+STAT_ABS = 0.005            #                                  0.005)
 STAT_STEP = 50              # scan step of iters_to_stationary
 STAT_QUANTITIES = ("Cd", "Cl")
 # comparison of the window means with the reference: (relative, absolute)
 OSC_TOL = {"Cd": (0.02, 0.002), "Cl": (0.02, 0.01)}
+
+# Mean-field delta comparison of the oscillatory cases (D-042 addendum,
+# proposed pass thresholds): fieldAverage function object in the case
+# controlDict (entry functions.<FIELD_AVERAGE_FO>), averaged over the same
+# window W as the forces; applications/utilities/coupledFieldCompare writes
+# the delta fields and <case>/fieldCompare.json. Pass: volume-weighted RMS
+# of |dUMean|/U_inf and of |dpMean|/p_ref (p_ref = 0.5 U_inf^2) at most
+# FIELD_TOL each.
+FIELD_AVERAGE_FO = "fieldAverage"
+FIELD_TOL = {"volRmsMagUDeltaRel": 0.02, "volRmsPDeltaRel": 0.02}
+FIELD_COMPARE_APP = "coupledFieldCompare"
+FIELD_COMPARE_JSON = "fieldCompare.json"
 
 # B10 acceptance (F): adaptive (C) not more than 5 % slower than fixed
 # relTol (F), and identical Cd / dp to 1e-4 (relative)
@@ -246,8 +264,10 @@ def config_hash(name: str, cfg: str) -> str:
     if spec.get("oscillatory"):
         # D-042 evaluation: only the wake cases' records become stale
         d["criterion"] = {"name": STAT_CRITERION, "wmin": STAT_WINDOW_MIN,
+                          "wdiv": STAT_WINDOW_DIV,
                           "rel": STAT_REL, "abs": STAT_ABS,
                           "step": STAT_STEP}
+        d["fieldAverageStart"] = field_average_start(spec["iters"][solver])
     blob = json.dumps(d, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
@@ -300,9 +320,134 @@ def is_oscillatory(name: str) -> bool:
 
 
 def stat_window(n: int) -> int:
-    """Averaging window of a run of n iterations: max(500, n//4), capped at
-    n//2 (D-042)."""
-    return min(max(STAT_WINDOW_MIN, n // 4), n // 2)
+    """Averaging window of a run of n iterations: max(1000, n//2), capped at
+    n (D-042 addendum; was max(500, n//4) <= n//2)."""
+    return max(0, min(max(STAT_WINDOW_MIN, n // STAT_WINDOW_DIV), n))
+
+
+def field_average_start(n: int) -> int:
+    """timeStart of the fieldAverage function object for a run of n
+    iterations (deltaT 1, time = iteration): n - W + 1, so the mean fields
+    cover exactly the force window, the last W iterations (the timeControl
+    of a function object is active from time >= timeStart - 0.5 deltaT)."""
+    return n - stat_window(n) + 1
+
+
+def foam_dictionary(case: Path, fname: str, args: list[str],
+                    capture: bool = False) -> str:
+    """foamDictionary -disableFunctionEntries <args> <fname> in `case`.
+    ALWAYS with -disableFunctionEntries: without it foamDictionary expands
+    and drops #include/#sinclude directives when it rewrites a file."""
+    out = subprocess.run(
+        ["foamDictionary", "-disableFunctionEntries"] + list(args) + [fname],
+        cwd=case, check=True, capture_output=True, text=True)
+    return out.stdout if capture else ""
+
+
+def _function_objects(case: Path) -> list[str]:
+    return foam_dictionary(case, "system/controlDict",
+                           ["-entry", "functions", "-keywords"],
+                           capture=True).split()
+
+
+def set_field_average_start(case: Path, time_start: int | float) -> None:
+    """Set functions.<FIELD_AVERAGE_FO>.timeStart in <case>/system/controlDict
+    (the entry must exist: T4/T5 templates, D-042 addendum)."""
+    keys = _function_objects(case)
+    if FIELD_AVERAGE_FO not in keys:
+        raise KeyError(f"{case}/system/controlDict has no functions."
+                       f"{FIELD_AVERAGE_FO} (functions: {keys})")
+    foam_dictionary(case, "system/controlDict",
+                    ["-entry", f"functions.{FIELD_AVERAGE_FO}.timeStart",
+                     "-set", f"{time_start:g}"])
+
+
+# The fieldAverage entry of the T4/T5 templates (for cases prepared before
+# it existed: the cached references, continue_reference_with_average)
+FIELD_AVERAGE_DICT = (
+    "{ type fieldAverage; libs (fieldFunctionObjects); timeStart %s; "
+    "writeControl writeTime; restartOnRestart %s; restartOnOutput false; "
+    "periodicRestart false; log false; "
+    "fields ( U { mean on; prime2Mean on; base iteration; } "
+    "p { mean on; prime2Mean off; base iteration; } ); }")
+
+
+def ensure_field_average(case: Path, time_start: int | float,
+                         restart_on_restart: bool = False) -> None:
+    """Add the fieldAverage function object to <case>/system/controlDict if
+    it is missing, and set its timeStart (and restartOnRestart: a
+    continuation must not resume an earlier average)."""
+    if FIELD_AVERAGE_FO not in _function_objects(case):
+        foam_dictionary(case, "system/controlDict",
+                        ["-entry", f"functions.{FIELD_AVERAGE_FO}", "-set",
+                         FIELD_AVERAGE_DICT % (f"{time_start:g}", "false")])
+    set_field_average_start(case, time_start)
+    foam_dictionary(case, "system/controlDict",
+                    ["-entry",
+                     f"functions.{FIELD_AVERAGE_FO}.restartOnRestart",
+                     "-set", "true" if restart_on_restart else "false"])
+
+
+def mean_field_times(case: Path) -> list[str]:
+    """Time directories (serial or processor0) that hold UMean and pMean."""
+    out = []
+    for base in (case, case / "processor0"):
+        if not base.is_dir():
+            continue
+        for d in base.iterdir():
+            try:
+                float(d.name)
+            except ValueError:
+                continue
+            if (d / "UMean").exists() and (d / "pMean").exists():
+                out.append(d.name)
+    return sorted(set(out), key=float)
+
+
+def field_delta_compare(case: Path, ref_case: Path, nprocs: int = 1,
+                        time: str | None = None,
+                        ref_time: str | None = None,
+                        log_name: str = "log.coupledFieldCompare") -> dict:
+    """Mean-field delta comparison (D-042 addendum): run
+    applications/utilities/coupledFieldCompare in `case` against `ref_case`
+    (serial, or -parallel with nprocs ranks on identically decomposed
+    cases) and return <case>/fieldCompare.json plus rc, log and the checks
+    of field_checks. U_inf is the magUInf of the case's forceCoeffs
+    function object, p_ref = 0.5 U_inf^2 (kinematic pressure)."""
+    uinf = float(foam_dictionary(
+        case, "system/controlDict",
+        ["-entry", "functions.forceCoeffs.magUInf", "-value"],
+        capture=True).split()[0])
+    pref = 0.5 * uinf ** 2
+    cmd = [FIELD_COMPARE_APP, "-reference", str(Path(ref_case).resolve()),
+           "-Uinf", repr(uinf), "-pref", repr(pref)]
+    if time is not None:
+        cmd += ["-time", str(time)]
+    if ref_time is not None:
+        cmd += ["-referenceTime", str(ref_time)]
+    if nprocs > 1:
+        cmd = cfenv.mpirun_prefix(nprocs) + cmd + ["-parallel"]
+    out_json = case / FIELD_COMPARE_JSON
+    out_json.unlink(missing_ok=True)
+    rc = cfenv.run(cmd, cwd=case, log=case / log_name)
+    rec: dict = {"rc": rc, "log": str(case / log_name), "command": cmd,
+                 "Uinf": uinf, "pref": pref, "nProcs": nprocs}
+    if rc == 0 and out_json.exists():
+        rec.update(json.loads(out_json.read_text()))
+    rec.update(field_checks(rec))
+    return rec
+
+
+def field_checks(metrics: dict) -> dict:
+    """Proposed pass criteria of the mean-field comparison (D-042
+    addendum): volume RMS |dUMean|/U_inf <= 0.02 and volume RMS
+    |dpMean|/p_ref <= 0.02."""
+    checks = {}
+    for key, tol in FIELD_TOL.items():
+        v = metrics.get(key)
+        checks[key] = v is not None and v <= tol
+    return {"fieldTol": dict(FIELD_TOL), "fieldChecks": checks,
+            "fieldPass": metrics.get("rc") == 0 and all(checks.values())}
 
 
 def stationary_mean(hist: dict[str, list[float]], quantity: str,
@@ -315,7 +460,8 @@ def stationary_mean(hist: dict[str, list[float]], quantity: str,
     given (iters_to_stationary slides the run's window W over the history).
     Returns W, mean, std (population), the half-window means mean1 (first
     W/2) and mean2 (last W/2), the drift |mean1 - mean2|, its tolerance
-    max(0.5 % |mean|, 0.002) and `stationary` (drift <= tolerance). For an
+    max(STAT_REL |mean|, STAT_ABS) = max(1 % |mean|, 0.005) and `stationary`
+    (drift <= tolerance). For an
     odd W the middle sample belongs to neither half; a window that does
     not fit (W > n) or has fewer than 2 samples is never stationary."""
     if n is None:
@@ -363,8 +509,8 @@ def iters_to_stationary(hist: dict[str, list[float]],
     history: N is scanned in steps of STAT_STEP (50) from the first
     multiple of 50 >= W, and finally N = n itself, so a stationary final
     window always yields a value. (Re-deriving W from N instead would
-    shrink the window to N/2 < 500 early in the run: on the T4a reference
-    that declares a 75-iteration window at N = 150 stationary.)"""
+    shrink the window early in the run: under the original D-042 rule, on
+    the T4a reference, a 75-iteration window at N = 150 was stationary.)"""
     if not hist:
         return None
     n = min(len(h) for h in hist.values())
@@ -449,9 +595,10 @@ def _parse_time_reports(reps: list[Path]) -> dict:
     }
 
 
-def rank_times(case: Path, solver: str) -> dict:
+def rank_times(case: Path, solver: str, timing_dir: str = "timing") -> dict:
     """Wall time, CPU time and peak RSS from the /usr/bin/time -v reports in
-    <case>/timing.
+    <case>/<timing_dir> (default timing; a reference continuation keeps its
+    own reports in timing_continuation).
 
     The totals (wallSeconds, cpuSeconds, cpuHours) include the
     pre-processing applications of PRE_APPS (potentialFoam), which run
@@ -462,7 +609,7 @@ def rank_times(case: Path, solver: str) -> dict:
     and the pre-processing's (they never run at the same time); the
     solver's own values are kept as solverPeakRSS_GB_*.
     Returns {} if the solver left no report (run failed before start)."""
-    tdir = case / "timing"
+    tdir = case / timing_dir
     reps = sorted(tdir.glob(f"{solver}.rank*.time"))
     if not reps:
         return {}
@@ -585,6 +732,9 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
     case = cfcase.prepare(spec["template"], f"bench_{tag}", sets)
     for rel, text in files.items():
         (case / rel).write_text(text)
+    if is_oscillatory(name):
+        # mean fields over the force window (D-042 addendum)
+        set_field_average_start(case, field_average_start(spec["iters"][solver]))
 
     rc = cfcase.allrun(
         case, ["-solver", solver, "-np", str(nprocs)] + spec["args"],

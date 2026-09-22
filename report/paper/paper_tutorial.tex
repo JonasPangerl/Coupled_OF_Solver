@@ -1744,10 +1744,17 @@ remediated cells would point to the local upwinding of
 Section~\ref{sec:remediation}. The wake behind the motorbike and the Ahmed
 body (rows marked \textsuperscript{\dag}) never settles, not even in
 \code{simpleFoam}, so for T4 and T5 the table compares averages over a long
-window, shown as mean $\pm$ standard deviation, and ``converged'' means that
-this average has stopped drifting (D-042). Their tolerances are
+window (the second half of the run, at least 1000 iterations), shown as
+mean $\pm$ standard deviation. There, ``converged'' means that the averages
+of the two halves of that window differ by at most 1\,\% or by 0.005,
+whichever is larger (D-042 and its addendum). Their tolerances are
 correspondingly coarser (2\,\% for $C_d$, and an absolute 0.01 for the small
 $C_l$), a change the project owner approved for exactly these cases.
+Two numbers can agree by luck, so the averaged flow fields of the two
+solvers are also subtracted cell by cell. The column ``field RMS dU / dp''
+gives the typical size of that difference, relative to the free-stream
+speed and to the free-stream dynamic pressure. The proposed pass limit is
+2\,\%.
 
 \cffigure{remediation_history}{Remediation set sizes and rollbacks over the
 iterations for T4 and T5.}{fig:remediation}
@@ -1789,7 +1796,8 @@ coefficients have settled: over the last 100 iterations, $C_d$ and $C_l$
 vary by at most 0.2\,\% of their mean (for T1 and T2, the pressure drop).
 This is the ``convergence iteration''. For the wake cases T4 and T5, whose
 forces never settle, it is instead the first iteration at which their
-long-window average stops drifting (D-042).
+average over a long window (half the run, at least 1000 iterations) drifts
+by at most 1\,\% or 0.005, whichever is larger (D-042 and its addendum).
 
 \paragraph{Stopwatch.} Every rank runs under \code{/usr/bin/time}, which
 records the wall-clock time and the CPU time. The totals of the whole run

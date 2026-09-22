@@ -6,11 +6,14 @@ Allrun if missing, with this interpreter: CF_PYTHON). Mesh: snappyHexMesh,
 target 5-8 M cells (Allrun -mesh fine); CF_T5_MESH=coarse selects the ~1-2 M
 development mesh instead (recorded in the result; spec runs use fine).
 
-Pass, averaged force criterion for the oscillating wake (D-042, user
-decision; see test_T4_motorBike.py): both solvers have a stationary window
-mean of Cd and Cl (harness function bench/run_bench.py:stationary_mean);
-window means within max(2 %, 0.002) (Cd) and max(2 %, 0.01) (Cl) of
-simpleFoam on the same mesh; time to convergence from the first stationary
+Pass, averaged force criterion for the oscillating wake (D-042 and its
+addendum, user decisions; see test_T4_motorBike.py): both solvers have a
+stationary window mean of Cd and Cl (harness function
+bench/run_bench.py:stationary_mean, W = max(1000, n/2) capped at n, drift
+<= max(1 %, 0.005)); window means within max(2 %, 0.002) (Cd) and
+max(2 %, 0.01) (Cl) of simpleFoam on the same mesh; mean-field deltas
+(coupledFieldCompare) with volume RMS |dUMean|/U_inf and |dpMean|/p_ref
+<= 0.02 (proposed); time to convergence from the first stationary
 window; static set <= 1 % of cells; nRollbacks == 0; peak RSS, wall
 and CPU-hours recorded for both solvers. Informational only: both Cd within
 +-10 % of the experimental 0.285 (Ahmed et al. 1984); y+ on the body.
@@ -32,7 +35,8 @@ from cflib import case as cfcase
 from cflib import results
 
 from test_T4_motorBike import (NP, assert_checks, budget_sets, compare,
-                               mesh_dir, reference, run_solver)
+                               mean_field_comparison, mesh_dir, reference,
+                               run_solver)
 
 TEMPLATE = "T5_ahmed"
 CD_EXP = 0.285
@@ -97,7 +101,10 @@ def test_T5(foam):
         budget_sets("coupledFoam", BUDGET["coupledFoam"]), extra_env=env,
         oscillatory=osc)
 
-    cmp = compare(rec, ref, oscillatory=osc)
+    # mean-field delta comparison (D-042 addendum), as in T4
+    field = (mean_field_comparison(case, rec, ref_case, ref, "T5")
+             if osc else None)
+    cmp = compare(rec, ref, oscillatory=osc, field=field)
     stats_file = mesh / "geometry" / "ahmed25_stats.json"
     meshing = mesh / "meshing.json"
     info = {
