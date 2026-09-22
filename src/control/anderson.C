@@ -38,7 +38,9 @@ Foam::anderson::anderson(const fvMesh& mesh, const dictionary& coupledDict)
     nRejected_(0),
     nFlushed_(0),
     lastStatus_(status::disabled),
-    lastMaxAlpha_(0)
+    lastMaxAlpha_(0),
+    lastGamma_(),
+    lastFlushReason_("none")
 {
     const dictionary& d = coupledDict.subOrEmptyDict("anderson");
     enabled_ = d.getOrDefault<bool>("enabled", coupledDefaults::andersonEnabled);
@@ -409,6 +411,7 @@ Foam::anderson::status Foam::anderson::apply
         maxA = std::fmax(maxA, std::fabs(a));
     }
     lastMaxAlpha_ = maxA;
+    lastGamma_ = gamma;
 
     if (!std::isfinite(maxA))
     {
@@ -490,14 +493,34 @@ void Foam::anderson::reject(volVectorField& U, volScalarField& p)
 }
 
 
-void Foam::anderson::flush()
+void Foam::anderson::flush(const char* reason)
 {
     if (hasPrev_ || nHist_ > 0)
     {
         ++nFlushed_;
+        lastFlushReason_ = reason;
     }
     nHist_ = 0;
     hasPrev_ = false;
+}
+
+
+Foam::doubleScalar Foam::anderson::conditionEstimate() const
+{
+    if (nHist_ == 0)
+    {
+        return 0;
+    }
+    doubleScalar mx = 0;
+    doubleScalar mn = GREAT;
+    for (label j = 0; j < nHist_; ++j)
+    {
+        const doubleScalar r = std::fabs(R(j, j));
+        mx = std::fmax(mx, r);
+        mn = std::fmin(mn, r);
+    }
+    // GUARD: accepted columns have R(j, j) > 0 (rank test)
+    return mx/std::fmax(mn, doubleScalarVSMALL);
 }
 
 

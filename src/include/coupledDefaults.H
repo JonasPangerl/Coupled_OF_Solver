@@ -22,6 +22,7 @@ Description
 
 #include "label.H"
 #include "scalar.H"
+#include <cstdint>
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -202,6 +203,16 @@ constexpr doubleScalar zonalCflFactor = 1;       // entry default: neutral
 constexpr doubleScalar zonalBeta = 1;            // entry default: neutral
 constexpr label zonalNLayers = 1;                // patchDistance entry default
                                                  // (layer 1 = patch cells)
+
+// Deep diagnostics, coupled.diagnostics (OPUS_TASKS TASK 5, D-045)
+constexpr label diagLevel = 0;                   // 0 = off
+constexpr label diagMaxLevel = 3;
+constexpr bool diagEcho = false;
+constexpr std::int64_t diagMaxBytes = 2147483648LL;  // 2 GiB per rank
+// Phase classification (TASK 5.2)
+constexpr label diagStallWindow = 50;            // "stalled": no new min R
+constexpr doubleScalar diagAsymptoticResidualFactor = 100;  // R <= 100*tol
+constexpr doubleScalar diagAsymptoticForceFactor = 10;      // window <= 10*tol
 
 // Misc (spec 9.1, 10)
 constexpr bool ftz = true;

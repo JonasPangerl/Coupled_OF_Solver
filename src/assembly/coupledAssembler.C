@@ -36,6 +36,8 @@ Foam::coupledAssembler::coupledAssembler
     const MRFCoupling* mrfPtr
 )
 :
+    timing_(false),
+    times_(),
     mesh_(mesh),
     kinds_(boundaryCoupling::kinds(mesh)),
     blockIndex_(mesh.boundary().size(), -1),
@@ -187,6 +189,8 @@ void Foam::coupledAssembler::assembleMomentum
     const scalarField& beta
 )
 {
+    const doubleScalar tStart = (timing_ ? diagnostics::clock() : 0);
+
     UPtr_ = &U;
     pPtr_ = &p;
 
@@ -314,6 +318,7 @@ void Foam::coupledAssembler::assembleMomentum
     }
 
     // --- Boundary faces
+    const doubleScalar tb0 = (timing_ ? diagnostics::clock() : 0);
     forAll(kinds_, patchi)
     {
         const fvPatch& patch = mesh_.boundary()[patchi];
@@ -411,6 +416,8 @@ void Foam::coupledAssembler::assembleMomentum
         }
     }
 
+    const doubleScalar tb1 = (timing_ ? diagnostics::clock() : 0);
+
     // --- Diagonal contribution to A x for rows 0-2 (PTC excluded: it
     //     cancels in b - A x), momentum residual
     forAll(V, celli)
@@ -429,11 +436,20 @@ void Foam::coupledAssembler::assembleMomentum
             rMom_[celli][r] = b_[celli*blockDim + r] - Ax_[celli*blockDim + r];
         }
     }
+
+    if (timing_)
+    {
+        const doubleScalar tEnd = diagnostics::clock();
+        times_.boundary += tb1 - tb0;
+        times_.momentumOps += (tEnd - tStart) - (tb1 - tb0);
+    }
 }
 
 
 void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
 {
+    const doubleScalar tStart = (timing_ ? diagnostics::clock() : 0);
+
     if (!UPtr_ || !pPtr_)
     {
         FatalErrorInFunction
@@ -470,8 +486,10 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
     }
 
     // --- Rhie-Chow D, D_f, explicit face term q
+    const doubleScalar tr0 = (timing_ ? diagnostics::clock() : 0);
     rc_.updateD(abar_, p);
     rc_.updateExplicit(p, noc_);
+    const doubleScalar tr1 = (timing_ ? diagnostics::clock() : 0);
 
     // --- Continuity row scale s_p (5.3f); GUARD: s_p <= 1/VSMALL. Every
     //     row-3 coefficient is scaled in double before it is narrowed, so
@@ -523,6 +541,7 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
     }
 
     // --- Boundary faces, row 3
+    const doubleScalar tb0 = (timing_ ? diagnostics::clock() : 0);
     forAll(kinds_, patchi)
     {
         const fvPatch& patch = mesh_.boundary()[patchi];
@@ -640,6 +659,8 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
             }
         }
     }
+
+    const doubleScalar tb1 = (timing_ ? diagnostics::clock() : 0);
 
     // --- Pressure reference for closed domains (DECISIONS.md D-021):
     //     the continuity row of the reference cell is replaced by
@@ -763,6 +784,14 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
     rp_ = sums[4]/(sums[5] + SMALL);
 
     A_.markUpdated();
+
+    if (timing_)
+    {
+        const doubleScalar tEnd = diagnostics::clock();
+        times_.rhieChow += tr1 - tr0;
+        times_.boundary += tb1 - tb0;
+        times_.continuity += (tEnd - tStart) - (tr1 - tr0) - (tb1 - tb0);
+    }
 }
 
 

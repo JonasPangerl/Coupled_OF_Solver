@@ -56,6 +56,11 @@ class adaptiveTolerance
         scalar etaPrev_;
         scalar Rprev_;
 
+        //- Diagnostics of the last eta() call: the raw Eisenstat-Walker
+        //  value (-1: not evaluated) and the rule that set the result
+        scalar lastRaw_;
+        const char* lastClip_;
+
 
 public:
 
@@ -71,6 +76,13 @@ public:
         //- eta for the current outer iteration given R_n (call once per
         //  assembly; a repeated step after a CFL cut passes the same R)
         scalar eta(const scalar R, const bool startupDone);
+
+        //- Raw EW value of the last eta() call (-1: not evaluated)
+        scalar lastRaw() const noexcept { return lastRaw_; }
+
+        //- Rule that set the last eta: none | fixed | noHistory |
+        //  safeguard1 | etaMin | etaMax
+        const char* lastClip() const noexcept { return lastClip_; }
 
         //- Accept the iteration: R becomes R_(n-1) of the next one
         void accept(const scalar R, const scalar eta);

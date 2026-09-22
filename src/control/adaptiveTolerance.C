@@ -22,7 +22,9 @@ Foam::adaptiveTolerance::adaptiveTolerance(const dictionary& d)
     ),
     relTolFixed_(d.getOrDefault<scalar>("relTol", coupledDefaults::relTol)),
     etaPrev_(-1),
-    Rprev_(-1)
+    Rprev_(-1),
+    lastRaw_(-1),
+    lastClip_("none")
 {
     if (etaMin_ <= 0 || etaMax_ < etaMin_ || etaMax_ >= 1)
     {
@@ -41,29 +43,46 @@ Foam::scalar Foam::adaptiveTolerance::eta
     const bool startupDone
 )
 {
+    lastRaw_ = -1;
+
     if (!enabled_)
     {
+        lastClip_ = "fixed";
         return relTolFixed_;
     }
 
     // Safeguards 3 and 4
     if (!startupDone || Rprev_ <= 0 || etaPrev_ < 0)
     {
+        lastClip_ = "noHistory";
         return etaMax_;
     }
 
     // GUARD: Rprev > 0 checked above; pow base >= 0
     scalar e = gamma_*std::pow(max(R, scalar(0))/Rprev_, alpha_);
+    lastRaw_ = e;
+    lastClip_ = "none";
 
     // Safeguard 1
     const scalar sg = gamma_*std::pow(etaPrev_, alpha_);
-    if (sg > safeguard_)
+    if (sg > safeguard_ && sg > e)
     {
-        e = max(e, sg);
+        e = sg;
+        lastClip_ = "safeguard1";
     }
 
     // Safeguard 2
-    return min(max(e, etaMin_), etaMax_);
+    if (e < etaMin_)
+    {
+        lastClip_ = "etaMin";
+        return etaMin_;
+    }
+    if (e > etaMax_)
+    {
+        lastClip_ = "etaMax";
+        return etaMax_;
+    }
+    return e;
 }
 
 

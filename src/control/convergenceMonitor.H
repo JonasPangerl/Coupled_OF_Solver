@@ -92,6 +92,12 @@ public:
         scalar Cd() const { return Cd_.size() ? Cd_.last() : 0; }
         scalar Cl() const { return Cl_.size() ? Cl_.last() : 0; }
 
+        //- Diagnostics: max over Cd and Cl of the window spread over its
+        //  tolerance, (max - min)/(forceCoeffsTol*|mean|); < 1 means the
+        //  window criterion holds. -1 if not available (no forces, window
+        //  not full)
+        scalar forceCriterionRatio() const;
+
         //- Evaluate the criterion for the normalised residual R
         bool converged(const scalar R) const;
 

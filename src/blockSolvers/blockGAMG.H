@@ -86,6 +86,7 @@ SourceFiles
 #include "blockLduMatrix4.H"
 #include "blockSmoother.H"
 #include "blockSolver.H"
+#include "diagnostics.H"
 #include "GAMGAgglomeration.H"
 #include "UPtrList.H"
 
@@ -231,6 +232,13 @@ private:
         //- Last coarsest-level iteration count (diagnostics)
         mutable label nCoarsestIters_;
 
+        //- Incremented on every (re)build of the hierarchy (agglomeration,
+        //  gathering, coarse levels)
+        label hierarchyVersion_;
+
+        //- Deep diagnostics (TASK 5; null: off), set by the preconditioner
+        mutable diagnostics* diag_;
+
 
     // Private Member Functions
 
@@ -355,6 +363,37 @@ private:
             const cycleKind kind
         ) const;
 
+        //- True if diagnostics at level n are on
+        bool diagOn(const label n) const noexcept
+        {
+            return diag_ && diag_->active(n);
+        }
+
+        //- nSweeps single sweeps with the residual norm after each
+        //  (diagnostics level 3; same result as one smooth(x, b, nSweeps)
+        //  call: the sweeps of both smoothers are independent)
+        void smoothLogged
+        (
+            const label l,
+            blockScalarUList& x,
+            const blockScalarUList& b,
+            const label nSweeps,
+            DynamicList<doubleScalar>& norms
+        ) const;
+
+        //- Residual norm ||b - A_l x|| via the scratch r_[l] (collective
+        //  on the level communicator; diagnostics only)
+        doubleScalar residualNorm
+        (
+            const label l,
+            const blockScalarUList& x,
+            const blockScalarUList& b
+        ) const;
+
+        //- Per-level operator statistics after an update (level 3,
+        //  rank-local, no reduction)
+        void diagOperatorStats() const;
+
         //- K-step at level l (GCR, 1 or 2 steps), output in e
         void kstep
         (
@@ -411,6 +450,15 @@ public:
 
         //- Coarsest-level iterations of the last cycle
         label nCoarsestIters() const noexcept { return nCoarsestIters_; }
+
+        //- Hierarchy build counter (changes on every re-agglomeration)
+        label hierarchyVersion() const noexcept { return hierarchyVersion_; }
+
+        //- Number of coefficient updates so far
+        label nUpdates() const noexcept { return nUpdates_; }
+
+        //- Attach deep diagnostics (null: off)
+        void setDiagnostics(diagnostics* d) const noexcept { diag_ = d; }
 
         //- Current cycle type and post-sweeps (autoTune)
         cycleKind cycleType() const noexcept { return cycle_; }

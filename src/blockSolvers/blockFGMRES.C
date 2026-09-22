@@ -56,6 +56,7 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
 {
     blockSolverPerformance perf;
     perf.solverName = typeName;
+    const diagSolveScope diagScope(*this, perf);
 
     const label comm = matrix_.comm();
     const label n = matrix_.nRows();
@@ -187,6 +188,24 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
             if (measure)
             {
                 perf.rho = std::sqrt(max(1 - 2*H[0][0] + ww, 0.0));
+                if (diagActive(2))
+                {
+                    // Scale-free rhoOpt = min_a ||v0 - a w|| (D-039), from
+                    // the values of this pass: no extra reduction
+                    // GUARD: w.w > 0 unless the preconditioned vector is 0
+                    diag_->rhoOpt
+                    (
+                        std::sqrt
+                        (
+                            max
+                            (
+                                1 - H[0][0]*H[0][0]
+                               /std::max(ww, doubleScalarVSMALL),
+                                0.0
+                            )
+                        )
+                    );
+                }
             }
 
             // GUARD: sum of squares >= 0 by construction; clamp for sqrt
@@ -228,6 +247,10 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
 
             ++perf.nIterations;
             perf.finalResidual = std::abs(g[j + 1])/nf;
+            if (diagActive(2))
+            {
+                diag_->krylovResidual(perf.finalResidual);
+            }
 
             if (debug)
             {
@@ -281,6 +304,10 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
         matrix_.residualDouble(r, xd, b);
         beta = doubleReduce::norm2(r, comm);
         perf.finalResidual = beta/nf;
+        if (diagActive(2))
+        {
+            diag_->restartResidual(perf.finalResidual);
+        }
 
         if (debug)
         {

@@ -128,6 +128,39 @@ Foam::labelList Foam::lineSearch::offendingCells
 }
 
 
+void Foam::lineSearch::countViolations
+(
+    const blockScalarUList& dx,
+    const scalar omega,
+    label& nU,
+    label& np
+) const
+{
+    nU = 0;
+    np = 0;
+    const label nCells = dx.size()/blockDim;
+    const scalar limU = fU_*Uref_;
+    const scalar limp = fp_*pref_;
+    for (label celli = 0; celli < nCells; ++celli)
+    {
+        const blockScalar* d = dx.cdata() + celli*blockDim;
+        const scalar dU = omega*std::sqrt
+        (
+            sqr(scalar(d[0])) + sqr(scalar(d[1])) + sqr(scalar(d[2]))
+        );
+        const scalar dp = omega*std::abs(scalar(d[blockP]));
+        if (dU > limU)
+        {
+            ++nU;
+        }
+        if (dp > limp)
+        {
+            ++np;
+        }
+    }
+}
+
+
 void Foam::lineSearch::writeSettings(dictionary& dict) const
 {
     dictionary d;

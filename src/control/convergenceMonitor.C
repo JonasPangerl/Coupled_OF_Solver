@@ -166,6 +166,35 @@ bool Foam::convergenceMonitor::converged(const scalar R) const
 }
 
 
+Foam::scalar Foam::convergenceMonitor::forceCriterionRatio() const
+{
+    if (foName_.empty() || window_ <= 0 || forceTol_ <= 0)
+    {
+        return -1;
+    }
+    scalar worst = 0;
+    for (const DynamicList<scalar>* hp : {&Cd_, &Cl_})
+    {
+        const DynamicList<scalar>& h = *hp;
+        if (h.size() < window_)
+        {
+            return -1;
+        }
+        scalar mn = GREAT, mx = -GREAT, sum = 0;
+        for (label i = h.size() - window_; i < h.size(); ++i)
+        {
+            mn = min(mn, h[i]);
+            mx = max(mx, h[i]);
+            sum += h[i];
+        }
+        // GUARD: |mean| floored at VSMALL
+        const scalar den = forceTol_*max(mag(sum/scalar(window_)), VSMALL);
+        worst = max(worst, (mx - mn)/den);
+    }
+    return worst;
+}
+
+
 void Foam::convergenceMonitor::writeSettings(dictionary& dict) const
 {
     dictionary d;
