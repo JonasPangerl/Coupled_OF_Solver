@@ -30,7 +30,7 @@ solvers
         gammaEW         0.9;
         alphaEW         2;
         minIter         1;
-        maxIter         200;
+        maxIter         400;        // B4 aborted T2 at a 0.29 reduction vs eta 0.225 in 200 its (2026-09-22)
         restart         30;             // GMRES(10) stagnates (D-038); 6 above 40 M cells (B7)
         blockGAMG
         {
