@@ -392,6 +392,38 @@ constexpr doubleScalar volJumpThreshold = 0.98;  // volume ratio > 50
 constexpr bool diagnosticFieldsEnabled = true;
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Amendment D7: precision profile, coupled.precisionProfile (D-064)
+// ---------------------------------------------------------------------------
+// auto = sp if sizeof(scalar) == 4, else dp. The profile sets DEFAULT values
+// only; an explicitly set keyword always wins (precisionProfile.H). In SP the
+// field increment underflows relative to the field value at ~1e-6 relative:
+// tighter targets only produce stagnation (D7).
+constexpr const char* precisionProfile = "auto";     // auto | dp | sp
+namespace dpProfile
+{
+    constexpr doubleScalar residualTol = coupledDefaults::residualTol;
+    constexpr doubleScalar tolerance = coupledDefaults::tolerance;
+    constexpr doubleScalar etaMin = coupledDefaults::etaMin;
+    constexpr doubleScalar boundOmegaMin = coupledDefaults::boundOmegaMin;
+    constexpr doubleScalar kMin = coupledDefaults::kMin;
+    // B7: Anderson disabled above anderson.maxCells
+    constexpr bool andersonAboveMaxCells = false;
+    constexpr label andersonLargeMaxM = 4;
+}
+namespace spProfile
+{
+    constexpr doubleScalar residualTol = 1e-5;
+    constexpr doubleScalar tolerance = 1e-6;
+    constexpr doubleScalar etaMin = 1e-2;
+    constexpr doubleScalar boundOmegaMin = 1e-5;
+    constexpr doubleScalar kMin = 1e-10;
+    // D7/D9: Anderson allowed above anderson.maxCells with m <= 4
+    constexpr bool andersonAboveMaxCells = true;
+    constexpr label andersonLargeMaxM = 4;
+}
+// ---------------------------------------------------------------------------
+
 // Misc (spec 9.1, 10)
 constexpr bool ftz = true;
 constexpr bool writeState = true;

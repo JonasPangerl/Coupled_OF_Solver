@@ -7,6 +7,7 @@
 #include "blockPreconditioner.H"
 #include "doubleReduce.H"
 #include "blockKernels.H"
+#include "precisionProfile.H"
 #include "coupledDefaults.H"
 #include <cmath>
 
@@ -51,7 +52,11 @@ Foam::blockSolver::blockSolver
     controlDict_(dict),
     tolerance_
     (
-        dict.getOrDefault<doubleScalar>("tolerance", coupledDefaults::tolerance)
+        dict.getOrDefault<doubleScalar>
+        (
+            "tolerance",
+            precisionProfile::current().tolerance    // D7
+        )
     ),
     relTol_(dict.getOrDefault<doubleScalar>("relTol", coupledDefaults::relTol)),
     maxIter_(dict.getOrDefault<label>("maxIter", coupledDefaults::maxIter)),

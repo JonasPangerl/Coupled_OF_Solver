@@ -5,6 +5,7 @@
 
 #include "anderson.H"
 #include "coupledDefaults.H"
+#include "precisionProfile.H"
 #include "PstreamReduceOps.H"
 #include <cmath>
 #include <limits>
@@ -62,18 +63,31 @@ Foam::anderson::anderson(const fvMesh& mesh, const dictionary& coupledDict)
     }
 
     // B7 memory table: "Anderson m=4 (optional) +11.5 GB -> not enabled
-    // above 35 M cells"
+    // above 35 M cells". D7 precision profile sp: allowed above the limit
+    // with m <= andersonLargeMaxM. anderson.maxCells overrides the limit.
     if (enabled_)
     {
+        const label maxCells =
+            d.getOrDefault<label>("maxCells", coupledDefaults::andersonMaxCells);
+        const precisionProfile::values& prof = precisionProfile::current();
         const label nTotal = returnReduce(mesh.nCells(), sumOp<label>());
-        if (nTotal > coupledDefaults::andersonMaxCells)
+        if (nTotal > maxCells && !prof.andersonAboveMaxCells)
         {
             WarningInFunction
                 << "anderson.enabled ignored: " << nTotal << " cells > "
-                << coupledDefaults::andersonMaxCells
+                << maxCells
                 << " (amendment B7 memory rule); Anderson acceleration is"
                 << " disabled" << endl;
             enabled_ = false;
+        }
+        else if (nTotal > maxCells && m_ > prof.andersonLargeMaxM)
+        {
+            WarningInFunction
+                << "anderson.m " << m_ << " reduced to "
+                << prof.andersonLargeMaxM << ": " << nTotal << " cells > "
+                << maxCells << " (precision profile " << prof.name
+                << ", amendment D7)" << endl;
+            m_ = prof.andersonLargeMaxM;
         }
     }
 }

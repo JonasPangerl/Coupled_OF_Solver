@@ -5,6 +5,7 @@
 
 #include "convergenceMonitor.H"
 #include "coupledDefaults.H"
+#include "precisionProfile.H"
 #include "functionObjectList.H"
 #include "functionObjectProperties.H"
 #include <limits>
@@ -16,7 +17,7 @@ Foam::convergenceMonitor::convergenceMonitor(const dictionary& coupledDict)
     mode_("any"),
     window_(coupledDefaults::forceCoeffsWindow),
     forceTol_(coupledDefaults::forceCoeffsTol),
-    residualTol_(coupledDefaults::residualTol),
+    residualTol_(precisionProfile::current().residualTol),   // D7
     rmsWindow_(coupledDefaults::forceCoeffsWindow),
     driftTol_(coupledDefaults::forceCoeffsDriftTol),
     driftAbs_(coupledDefaults::forceCoeffsDriftAbs),

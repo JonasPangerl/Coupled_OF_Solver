@@ -60,6 +60,7 @@ Description
 #include "adaptiveTolerance.H"
 #include "startupControl.H"
 #include "diagnostics.H"
+#include "precisionProfile.H"
 #include "mixedFvPatchFields.H"
 #include "SolverPerformance.H"
 #include "Pair.H"
@@ -88,6 +89,10 @@ int main(int argc, char *argv[])
     const dictionary coupledDict(mesh.solutionDict().subOrEmptyDict("coupled"));
     const dictionary& linearDict = mesh.solverDict("coupled");
 
+    // Precision profile of the defaults (amendment D7): before any consumer
+    // (linear solver tolerance, etaMin, residualTol, bounds, Anderson)
+    precisionProfile::select(coupledDict);
+
     const label maxIter =
         coupledDict.getOrDefault<label>("maxIter", coupledDefaults::outerMaxIter);
     const bool potentialInit =
@@ -113,13 +118,18 @@ int main(int argc, char *argv[])
         coupledDict.getOrDefault<bool>("ftz", coupledDefaults::ftz);
 
     const dictionary& boundsDict = coupledDict.subOrEmptyDict("bounds");
+    // D7: precision-profile defaults, explicit keywords win
     const scalar kMin =
-        boundsDict.getOrDefault<scalar>("kMin", coupledDefaults::kMin);
+        boundsDict.getOrDefault<scalar>
+        (
+            "kMin",
+            scalar(precisionProfile::current().kMin)
+        );
     const scalar omegaMinBound =
         boundsDict.getOrDefault<scalar>
         (
             "omegaMin",
-            coupledDefaults::boundOmegaMin
+            scalar(precisionProfile::current().boundOmegaMin)
         );
     const scalar nutMaxFactor =
         boundsDict.getOrDefault<scalar>
@@ -246,6 +256,7 @@ int main(int argc, char *argv[])
 
     {
         dictionary eff;
+        precisionProfile::writeSettings(eff);
         eff.add("maxIter", maxIter);
         eff.add("potentialInit", potentialInit);
         eff.add("potentialClip", potentialClip);

@@ -5,6 +5,7 @@
 
 #include "adaptiveTolerance.H"
 #include "coupledDefaults.H"
+#include "precisionProfile.H"
 #include <cmath>
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
@@ -12,7 +13,11 @@
 Foam::adaptiveTolerance::adaptiveTolerance(const dictionary& d)
 :
     enabled_(d.getOrDefault<bool>("adaptiveRelTol", coupledDefaults::adaptiveRelTol)),
-    etaMin_(d.getOrDefault<doubleScalar>("etaMin", coupledDefaults::etaMin)),
+    // D7: precision-profile default, explicit keyword wins
+    etaMin_
+    (
+        d.getOrDefault<doubleScalar>("etaMin", precisionProfile::current().etaMin)
+    ),
     etaMax_(d.getOrDefault<doubleScalar>("etaMax", coupledDefaults::etaMax)),
     gamma_(d.getOrDefault<doubleScalar>("gammaEW", coupledDefaults::gammaEW)),
     alpha_(d.getOrDefault<doubleScalar>("alphaEW", coupledDefaults::alphaEW)),
