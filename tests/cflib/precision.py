@@ -412,6 +412,8 @@ PROFILE_ENTRIES = ("coupled.convergence.residualTol",
 # Segregated (U|k|omega) solver tolerance in SP: 1e-10 hits the float floor
 # (k solve 1000 sweeps per iteration, T1 4x slower; D-064)
 SP_SEGREGATED_TOL = 1e-6
+# simpleFoam residualControl floor in SP (D-070)
+SP_RESIDUAL_CONTROL = 1e-5
 _SOLVER_BLOCK_RE = re.compile(
     r'(?s)(\n[ \t]*("[^"\n]*"|[A-Za-z_]\w*)[ \t]*\n[ \t]*\{)(.*?)(\n[ \t]*\})')
 
@@ -462,7 +464,36 @@ def sp_solver_settings(case: Path) -> dict:
                        log=case / "log.foamDictionary.sp", nice=False)
         if rc == 0:
             removed.append(e)
-    return {"segregatedTolerance": changed, "profileEntriesRemoved": removed}
+    # (a) force cases: the force window 12.3(ii) decides (D10, D-070)
+    force_stop = None
+    if ((case / "system" / "coupledForcesDict").exists()
+            and "coupled.convergence.residualTol" not in explicit):
+        rc = cfenv.run(["foamDictionary", "-disableFunctionEntries", "-entry",
+                        "coupled.convergence.residualTol", "-set", "0",
+                        "system/fvSolution"], cwd=case,
+                       log=case / "log.foamDictionary.sp", nice=False)
+        force_stop = "coupled.convergence.residualTol 0" if rc == 0 else None
+    # (b) simpleFoam residualControl >= SP_RESIDUAL_CONTROL (D-070)
+    text = f.read_text()
+    raised = []
+
+    def rc_block(m: re.Match) -> str:
+        def val(t: re.Match) -> str:
+            v = float(t.group(2))
+            if v < SP_RESIDUAL_CONTROL:
+                raised.append({"field": t.group(1).strip(), "old": v,
+                               "new": SP_RESIDUAL_CONTROL})
+                return f"{t.group(1)}{SP_RESIDUAL_CONTROL:g};"
+            return t.group(0)
+        body = re.sub(rf'(\n[ \t]*[^\s{{}};]+[ \t]+)({_NUM})\s*;', val,
+                      m.group(2))
+        return m.group(1) + body + m.group(3)
+
+    text2 = re.sub(r"(?s)(residualControl\s*\{)(.*?)(\})", rc_block, text)
+    if text2 != text:
+        f.write_text(text2)
+    return {"segregatedTolerance": changed, "profileEntriesRemoved": removed,
+            "forceWindowStop": force_stop, "residualControlRaised": raised}
 
 
 # --------------------------------------------------------------------------- #

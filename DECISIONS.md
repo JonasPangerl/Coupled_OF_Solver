@@ -2620,3 +2620,26 @@ Cl 0.0818. Rollbacks 0, static cells 2655 (0.75 %), final R 7.6e-3 at CFL
 500. Wall 858 s / 2.39 CPU-h for 800 iterations, 513 s / ~1.43 CPU-h to
 stationarity (under load, with another agent's T4a np10 running part of
 the time; not a timing measurement).
+
+## D-070 - SP run settings for the campaign (lead, 2026-09-23 01:20; to be confirmed by the user)
+
+Decided by the lead overnight so that the SP-vs-DP comparison (D-062/D-063)
+measures precision and not stopping artefacts (D-064/D-065 findings):
+
+1. Force cases in SP set `coupled.convergence.residualTol 0`, so that the
+   force window 12.3(ii) decides, as D10 requires ("converged by 12.3(ii)").
+   With the SP profile residualTol 1e-5, T3-SST stopped at R 9.96e-6 after
+   357 iterations before the forces had settled (Cd 0.38 %, Cl 2.4 % off DP).
+2. simpleFoam `SIMPLE.residualControl` in SP is raised to at least 1e-5
+   (templates: 1e-8, below the float floor, so the SP references never
+   stop and run to endTime) - the analogue of the D7 profile for
+   coupledFoam.
+3. The (U|k|omega) segregated solver tolerance in SP is 1e-6 (D-064: 1e-10
+   makes the k solve run 1000 sweeps per iteration in float).
+4. D5.3 geometry gate: SP checkMesh on T1 reports a boundary-openness value
+   of 1.7e-6 from float rounding in its own area sum (not a mesh defect).
+   By the specification T1 is `SP-geometry-fail`. The gate is NOT loosened;
+   the campaign runs T1 in SP additionally with `CF_SP_GATE_OVERRIDE=
+   "Boundary openness"` and the record carries the override - the report
+   must present that run as informational until the user decides.
+All four apply to SP runs only (tests/cflib/precision.py); DP is unchanged.
