@@ -143,7 +143,7 @@ coupled
             cSpike              0.5;
             nLayers             1;
             nQuietIters         20;
-            stickyAfter         3;      // never released after the 3rd entry (D-055)
+            stickyAfter         0;      // N > 0: never released after the N-th entry (opt-in, D-055)
             releaseIters        0;      // 0 = instant release; N = ramp over N iterations (D-055)
             cflFactor           0.1;
             clipToNeighbourMean yes;
@@ -183,7 +183,7 @@ coupled
         chi             0.5;    // chi* = chi Uref/Lref
         Delta           1.0;    // Delta* = Delta Lref/Uref
         Lref            1.0;
-        deactivateBelowR 1e-4;  // SFD-off after nHold iterations below
+        deactivateBelowR 0;     // never off (spec 1e-4 switches off during the start-up on T3, D-052)
         resetOnFlush    yes;    // Ubar = U with every Anderson flush
         afterStartup    yes;    // activate after the start-up phase (D-052)
         startIter       0;      // earliest activation iteration (0: no delay)

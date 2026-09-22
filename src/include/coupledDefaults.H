@@ -219,7 +219,10 @@ constexpr bool sfdEnabled = false;
 constexpr doubleScalar sfdChi = 0.5;              // chi* = chi Uref/Lref
 constexpr doubleScalar sfdDelta = 1.0;            // Delta* = Delta Lref/Uref
 constexpr doubleScalar sfdLref = 1.0;
-constexpr doubleScalar sfdDeactivateBelowR = 1e-4; // SFD-off after nHold its
+// SFD-off after nHold iterations below (spec value; on T3 the normalised R
+// drops below 1e-4 during the start-up ramp and the limit cycle returns after
+// SFD-off: the case templates use 0 = never, D-052)
+constexpr doubleScalar sfdDeactivateBelowR = 1e-4;
 // Ubar = U whenever the Anderson history is flushed (C3); no = keep the
 // filter state (variant)
 constexpr bool sfdResetOnFlush = true;
@@ -247,8 +250,11 @@ constexpr doubleScalar cSpike = 0.5;
 constexpr label nLayers = 1;
 constexpr label nQuietIters = 20;
 // A cell that entered the dynamic set stickyAfter times stays in it for the
-// rest of the run (D-055); 0 = never (the hysteresis of 8.2 only)
-constexpr label dynamicStickyAfter = 3;
+// rest of the run (D-055); 0 = never (the hysteresis of 8.2 only). Opt-in:
+// sticky cells stay first order at the leading edge of T3 (Cl +7 %
+// vs the clean state), T3-SST converges to the wrong (attached) branch and
+// nDyn == 0 at convergence (spec 13) can no longer hold
+constexpr label dynamicStickyAfter = 0;
 // Release ramp (D-055): a released cell returns to the global beta and to
 // CFL factor 1 over releaseIters iterations (beta linear, CFL factor
 // geometric from dynamic.cflFactor); 0 = instant release of 8.2
