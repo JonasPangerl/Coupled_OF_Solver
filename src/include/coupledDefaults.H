@@ -138,10 +138,14 @@ constexpr doubleScalar smootherRelaxation = 1.0;
 
 // blockILU0 pivot-growth safeguard (D-049): a cell whose ILU-modified pivot
 // inverse is larger than this factor times the inverse of its unmodified
-// diagonal block (max-abs norms) uses the unmodified block. T4b: healthy
-// factorisations 3.7-6.6, the degenerate ones 13-223 (rho spikes up to
-// 3e5, the B4 abort at iteration 65). 0 disables the safeguard.
-constexpr doubleScalar iluPivotGrowthLimit = 5;
+// diagonal block (max-abs norms) uses the unmodified block. Measured
+// maximum growth of healthy factorisations: T4b 3.7-6.6, T2 (CFL 500,
+// non-dominant rows) up to 11.8, T1 below 5; the degenerate T4b pivots
+// were 31-223 (rho spikes up to 3e5, the B4 abort at iteration 65 at 223).
+// A limit of 5 replaced 7-10 % of the T2 pivots and destroyed the
+// preconditioner (25 linear iterations per solve, 60 CFL cuts, R stuck at
+// 1e-4); 20, 50 and 100 leave T2 untouched (0 fallbacks). 0 disables it.
+constexpr doubleScalar iluPivotGrowthLimit = 20;
 
 // Orthogonal-mesh shortcut of nonOrthCorrection: the mesh counts as
 // orthogonal if max |k_f| <= this value, k_f the native (dimensionless)

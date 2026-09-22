@@ -22,8 +22,10 @@ Description
     by up to 1e5 and the preconditioned Krylov solve stagnates. A cell with
     max|D*_c^-1| > pivotGrowthLimit * max|D_c^-1| uses the unmodified block
     D_c instead (keyword pivotGrowthLimit in the smoother/GAMG dictionary,
-    0 = off; default coupledDefaults::iluPivotGrowthLimit = 5). On T4b the
-    healthy factorisations at CFL 500 stay at 3.7-3.9, where nothing changes.
+    0 = off; default coupledDefaults::iluPivotGrowthLimit = 20). Healthy
+    factorisations stay below 12 (T4b 3.7-6.6, T2 at CFL 500 up to 11.8),
+    the degenerate T4b pivots were 31-223; a limit of 5 replaced 7-10 % of
+    the T2 pivots and destroyed the preconditioner there.
 
     Enabled only if Gate B2 shows >= 15 % wall-clock gain on T2 (spec 6.3),
     otherwise available as an option; the decision is in DECISIONS.md.
