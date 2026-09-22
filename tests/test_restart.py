@@ -75,6 +75,14 @@ def test_restart(foam, tag):
         "restartedFromState": "restart from" in text2,
         "timingFull": full_rec["timingAllrun"], "timingPart1": t1,
         "timingPart2": t2,
+        # wall-clock AND CPU-hours: uninterrupted run (solver summary) and
+        # the split run (both Allrun parts)
+        "wallSeconds": full_rec.get("wallSeconds"),
+        "cpuHours": full_rec.get("cpuHours"),
+        "wallSecondsSplit": (t1.get("wallSeconds") or 0.0)
+        + (t2.get("wallSeconds") or 0.0),
+        "cpuHoursSplit": (t1.get("cpuHours") or 0.0)
+        + (t2.get("cpuHours") or 0.0),
     }
     passed = (
         all(r == 0 for r in rec["rc"])

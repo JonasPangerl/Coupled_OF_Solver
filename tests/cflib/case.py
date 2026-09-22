@@ -99,7 +99,14 @@ def get_entry(case: Path, fname: str, entry: str) -> str:
 
 def allrun(case: Path, args: list[str] | None = None, fpe: bool = True,
            timeout: float | None = None, extra_env: dict | None = None) -> int:
-    """Run the case's Allrun. fpe: FOAM_SIGFPE/FOAM_SETNAN (spec 9.1)."""
+    """Run the case's Allrun. fpe: FOAM_SIGFPE/FOAM_SETNAN (spec 9.1).
+
+    Writes <case>/provenance.json first (git commit and dirty flag, the
+    coupledFoam binary and libcoupledFoam.so actually used, host, date,
+    CF_* environment; cflib.provenance), which the report's staleness
+    guard reads (TASK 6)."""
+    from . import provenance  # noqa: PLC0415
+    provenance.write(case, list(args or []))
     env = {
         "FOAM_SIGFPE": "true" if fpe else "false",
         "FOAM_SETNAN": "true" if fpe else "false",

@@ -43,7 +43,15 @@ run and is skipped (its part stays "pending"). If bench/diag_tools.py
 exists (TASK 5 diagnostics) and the run has diagnostics/diag.rank*.jsonl,
 its phase classification is drawn as background bands.
 
-Usage: ~/OF/venv/bin/python bench/plot_histories.py [run ...]
+Staleness guard (TASK 6): a coupledFoam run directory is read only if its
+provenance.json names the target commit (tests/cflib/provenance.py); a
+stale run is treated like a missing one (pending). Called from
+bench/make_report.py the guard of the report run is used; standalone the
+target is --commit (default HEAD), --allow-stale disables the check.
+simpleFoam reference directories are exempt (system OpenFOAM, cached).
+
+Usage: ~/OF/venv/bin/python bench/plot_histories.py [--commit SHA]
+           [--allow-stale] [run ...]
 """
 
 from __future__ import annotations
@@ -65,7 +73,7 @@ RUN = REPO / "run"
 FIG = REPO / "report" / "paper" / "figures"
 sys.path.insert(0, str(REPO / "tests"))
 sys.path.insert(0, str(REPO / "bench"))
-from cflib import logs  # noqa: E402
+from cflib import logs, provenance  # noqa: E402
 import run_bench  # noqa: E402
 
 BUSY_MINUTES = 10.0
@@ -785,7 +793,8 @@ def fig_overview(group: str, runs: list[str], outdir: Path, log=print) -> str | 
     for name in runs:
         cfn, sfn, title, monitor = RUNS[name]
         cfd, sfd = RUN / cfn, RUN / sfn
-        cf = read_cf(cfd) if cfd.is_dir() and not busy(cfd) else None
+        cf = (read_cf(cfd) if cfd.is_dir() and not busy(cfd)
+              and provenance.active().check_run(cfd) else None)
         sf = read_sf(sfd) if sfd.is_dir() and not busy(sfd) else None
         rows.append((title, load_series(cf, sf, cfd, sfd, "forces", None)))
     if not any(r[1] for r in rows):
@@ -1097,6 +1106,13 @@ def run(names: list[str] | None = None, outdir: Path = FIG,
             elif busy(d):
                 status[solver] = "run in progress, skipped (pending)"
                 notes.append(f"histories {name}: {solver} run {d.name} is being written, skipped")
+            elif (solver == "coupledFoam"
+                  and not provenance.active().check_run(d)):
+                # staleness guard: run of another commit or without
+                # provenance.json (listed in the report appendix)
+                status[solver] = ("run not from the report's commit "
+                                  "(pending)")
+                notes.append(f"histories {name}: {d.name} stale, skipped")
         if "coupledFoam" not in status:
             cf = read_cf(cfd)
             if cf is None:
@@ -1159,7 +1175,23 @@ def run(names: list[str] | None = None, outdir: Path = FIG,
     return figs, notes
 
 
-if __name__ == "__main__":
-    f, n = run(sys.argv[1:] or None)
+def _cli(argv: list[str]) -> int:
+    import argparse  # noqa: PLC0415
+    ap = argparse.ArgumentParser()
+    ap.add_argument("runs", nargs="*")
+    ap.add_argument("--commit", default="HEAD")
+    ap.add_argument("--allow-stale", action="store_true")
+    a = ap.parse_args(argv)
+    if not a.allow_stale:
+        target = provenance.git_resolve(a.commit) or a.commit
+        provenance.ACTIVE = provenance.Guard(target)
+    f, n = run(a.runs or None)
     for x in n:
         print("note:", x)
+    for r in provenance.active().rows():
+        print(f"stale: {r['case']} {r['item']} found {r['found']}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_cli(sys.argv[1:]))
