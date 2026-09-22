@@ -45,6 +45,18 @@ Committed state: exact test (f025546).
 
 ### 2. coupledFoam is ~5x SLOWER than simpleFoam on a turbulent case (T1)
 
+STATUS 2026-09-22 (branch precond-research, D-039): fixed for T1 by the
+preconditioner study. With agglomerationWeights combined (pair
+agglomeration on block-matrix weights), nFinestSweeps 1 (two ILU0 sweeps
+amplify: the smoother is a divergent Richardson iteration on this
+saddle-point system), nCellsInCoarsestLevel 20, autoTune no and
+reagglomerateInterval 50, T1 needs 495 outer iterations in 33 s instead of
+518 in 175 s, against 36 s for simpleFoam (np 1, same load; np 2: 31 s
+wall, 60 s CPU). Mean linear iterations 25.4 -> 3.3. The text below is the
+original problem statement; what remains open is listed in D-039 (the rho
+of 6.3.5 is unscaled and misleads autoTune; the startup phase is still the
+most expensive part; T2-T5 and the F1 cases have not been re-measured).
+
 This is the most important open problem. It blocks the project's goal
 (the fastest solver) on every realistic case, the F1 car included.
 
