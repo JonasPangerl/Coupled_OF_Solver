@@ -148,7 +148,10 @@ int main(int argc, char *argv[])
     sfdControl sfd(mesh, coupledDict, ptc.nHold());
 
     // Linear-system dump for offline preconditioner studies
-    // (Test-blockSystem): coupled.dumpLinearSystem (iterations), serial only
+    // (Test-blockSystem): coupled.dumpLinearSystem (iterations). In parallel
+    // every rank writes its local system (without the interface
+    // coefficients) to processorN/linsys, e.g. to compare runs rank by rank
+    // (FABLE_REVIEW 5)
     const labelList dumpIters
     (
         coupledDict.getOrDefault<labelList>("dumpLinearSystem", labelList())
@@ -909,7 +912,7 @@ int main(int argc, char *argv[])
                 linSolver->setRelTol(eta);
             }
 
-            if (!UPstream::parRun() && dumpIters.found(iter) && cuts == 0)
+            if (dumpIters.found(iter) && cuts == 0)
             {
                 const blockLduMatrix4& Am = assembler.matrix();
                 const fileName dumpFile
