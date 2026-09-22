@@ -61,6 +61,7 @@ def test_T1(foam, nprocs):
         and rec["dpRelDiff"] < TOL_DP
         and cfl_max >= CFL_MIN_REACHED and cuts_late == 0
         and rec["rollbacks"] == 0
+        and rec["nPseudoInverse"] == 0
         and rec.get("crossRankDp", 0) < TOL_CROSS
     )
     rec["pass"] = passed
@@ -73,4 +74,5 @@ def test_T1(foam, nprocs):
     assert cfl_max >= CFL_MIN_REACHED, cfl_max
     assert cuts_late == 0, cuts_late
     assert rec["rollbacks"] == 0
+    assert rec["nPseudoInverse"] == 0, rec["nPseudoInverse"]  # C2
     assert rec.get("crossRankDp", 0) < TOL_CROSS

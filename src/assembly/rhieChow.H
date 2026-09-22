@@ -29,6 +29,21 @@ Description
     snGrad). In static cells gradp is cellLimited (D-018), for the average
     gradient and for the non-orthogonal correction corr_f alike.
 
+    Tensorial diffusivity (amendment C2, D-053), coupled.rhieChow.tensorial
+    (default yes): D_P = V_P A_P^-1 with A_P the 3x3 momentum diagonal
+    block (after PTC, incl. implicit MRF Coriolis, excl. the pressure
+    column), in double, once per assembly; block4Ops::invert3, or the
+    Moore-Penrose pseudo-inverse (block4Ops::pseudoInverse3) if
+    |det A_P| < 1e-12 |trace(A_P)/3|^3, counted as nPseudoInverse. Face
+    value D_f = n.interpolate(D)_f.n (n = S_f/|S_f|, linear interpolation
+    of the 9 entries; neighbour values across coupled interfaces from the
+    volTensorField exchange, as for the scalar D); on physical patches
+    D_f = n.D_P.n where p is fixed, 0 elsewhere. D_f then enters g_f and
+    q_f exactly as the scalar D_f does, so the continuity row and the flux
+    update stay identical (D-035). The scalar D = V/abar is still built: it
+    is the row-scaling reference Dref (5.3f) and the written coupledD.
+    tensorial no: the scalar D_f of D = V/abar (bit-identical to before C2).
+
 SourceFiles
     rhieChow.C
 
@@ -77,12 +92,33 @@ class rhieChow
         boolList isStatic_;
         bool anyStatic_;
 
+        //- Tensorial diffusivity (C2)
+        bool tensorial_;
+        doubleScalar detRelTol_;
+        doubleScalar pinvRelTol_;
+
+        //- D = V A^-1 per cell with coupled boundary values (tensorial only)
+        autoPtr<volTensorField> DTPtr_;
+
+        //- Pseudo-inverse fallbacks (global counts): last update, since
+        //  the last takePseudoInverseWindow(), whole run
+        label nPinvLast_;
+        label nPinvWindow_;
+        label nPinvTotal_;
+
+
+    // Private Member Functions
+
+        //- D_f = n.interpolate(DT)_f.n with the boundary policy (C2)
+        void buildDfTensor(const volScalarField& p);
+
 
 public:
 
     // Constructors
 
-        explicit rhieChow(const fvMesh& mesh);
+        //- Construct; reads coupledDict.rhieChow (tensorial, C2)
+        rhieChow(const fvMesh& mesh, const dictionary& coupledDict);
 
 
     // Member Functions
@@ -91,8 +127,43 @@ public:
         //  Rhie-Chow terms uses "cellLimited Gauss linear 1" there
         void setStaticCells(const boolList& isStatic);
 
-        //- Set D from abar (per cell) and build D_f with the boundary policy
+        //- Set D from abar (per cell) and build the scalar D_f with the
+        //  boundary policy (tensorial no; restart fallback)
         void updateD(const scalarField& abar, const volScalarField& p);
+
+        //- Tensorial update (C2): scalar D from abar (row-scaling
+        //  reference), D = V A^-1 from the 3x3 momentum diagonal blocks A
+        //  (double), D_f = n.interpolate(D)_f.n. Collective (the
+        //  pseudo-inverse count is reduced).
+        void updateD
+        (
+            const scalarField& abar,
+            const tensorField& A,
+            const volScalarField& p
+        );
+
+        //- Restore the tensor D (restart consistency check) and rebuild D_f
+        void setDT(const volTensorField& DT, const volScalarField& p);
+
+        //- Tensorial diffusivity selected (coupled.rhieChow.tensorial)
+        bool tensorial() const noexcept { return tensorial_; }
+
+        //- Tensor D (tensorial only)
+        const volTensorField& DT() const { return *DTPtr_; }
+
+        //- Pseudo-inverse fallbacks of the last update (global)
+        label nPseudoInverse() const noexcept { return nPinvLast_; }
+
+        //- Pseudo-inverse fallbacks of the whole run (global)
+        label nPseudoInverseTotal() const noexcept { return nPinvTotal_; }
+
+        //- Pseudo-inverse fallbacks since the previous call (global)
+        label takePseudoInverseWindow()
+        {
+            const label n = nPinvWindow_;
+            nPinvWindow_ = 0;
+            return n;
+        }
 
         //- Set D_f directly (restart consistency check)
         bool valid() const noexcept { return valid_; }

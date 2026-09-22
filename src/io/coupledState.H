@@ -19,8 +19,10 @@ Description
     assembly) and the surfaceScalarField coupledQ (explicit Rhie-Chow face
     term of the last assembly), from which phi is recomputed on restart for
     the consistency check (spec 10; ||phi_read -
-    phi_recomputed||_inf/||phi||_inf). The Anderson history is not part of
-    the state (D-026).
+    phi_recomputed||_inf/||phi||_inf). With rhieChow.tensorial yes (C2)
+    also the volTensorField coupledDT (D = V A^-1), from which D_f is
+    rebuilt for that check. The Anderson history is not part of the state
+    (D-026).
 
     The dictionary is always written in ASCII with round-trip precision
     (max_digits10), independent of writeFormat/writePrecision: a binary
@@ -83,6 +85,12 @@ public:
 
         //- Read coupledD of the current time if present (null tmp otherwise)
         tmp<volScalarField> readD() const;
+
+        //- Write the tensorial Rhie-Chow D (C2) for the current time
+        void writeDT(const volTensorField& DT) const;
+
+        //- Read coupledDT of the current time if present (null tmp otherwise)
+        tmp<volTensorField> readDT() const;
 
         //- Write the explicit Rhie-Chow face term q_f of the last assembly
         //  (the flux of the time directory was built with it, so the
