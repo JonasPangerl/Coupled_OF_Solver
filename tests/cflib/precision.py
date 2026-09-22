@@ -399,6 +399,66 @@ def shift_settings(case: Path, shift) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# SP solver settings (D-064 findings, lead 2026-09-23)
+# --------------------------------------------------------------------------- #
+
+# Precision-profile keywords set explicitly by the templates: removed in SP
+# so that coupled.precisionProfile auto applies (D7, D-064 deviation 2)
+PROFILE_ENTRIES = ("coupled.convergence.residualTol",
+                   "solvers.coupled.tolerance",
+                   "solvers.coupled.etaMin",
+                   "coupled.bounds.omegaMin",
+                   "coupled.bounds.kMin")
+# Segregated (U|k|omega) solver tolerance in SP: 1e-10 hits the float floor
+# (k solve 1000 sweeps per iteration, T1 4x slower; D-064)
+SP_SEGREGATED_TOL = 1e-6
+_SOLVER_BLOCK_RE = re.compile(
+    r'(?s)(\n[ \t]*("[^"\n]*"|[A-Za-z_]\w*)[ \t]*\n[ \t]*\{)(.*?)(\n[ \t]*\})')
+
+
+def _is_turb_or_u(key: str) -> bool:
+    k = key.strip('"')
+    try:
+        return any(re.fullmatch(k, f) for f in ("U", "k", "omega"))
+    except re.error:
+        return False
+
+
+def sp_solver_settings(case: Path) -> dict:
+    """SP settings of system/fvSolution: (U|k|omega) solver tolerance raised
+    to SP_SEGREGATED_TOL (text edit, only if smaller), the five profile
+    keywords removed (foamDictionary -disableFunctionEntries -remove)."""
+    f = case / "system" / "fvSolution"
+    text = f.read_text()
+    changed = []
+
+    def blk(m: re.Match) -> str:
+        if not _is_turb_or_u(m.group(2)):
+            return m.group(0)
+
+        def tol(t: re.Match) -> str:
+            v = float(t.group(2))
+            if v < SP_SEGREGATED_TOL:
+                changed.append({"solver": m.group(2), "old": v,
+                                "new": SP_SEGREGATED_TOL})
+                return f"{t.group(1)}{SP_SEGREGATED_TOL:g};"
+            return t.group(0)
+
+        body = re.sub(rf"(\btolerance\s+)({_NUM})\s*;", tol, m.group(3))
+        return m.group(1) + body + m.group(4)
+
+    f.write_text(_SOLVER_BLOCK_RE.sub(blk, text))
+    removed = []
+    for e in PROFILE_ENTRIES:
+        rc = cfenv.run(["foamDictionary", "-disableFunctionEntries", "-entry",
+                        e, "-remove", "system/fvSolution"], cwd=case,
+                       log=case / "log.foamDictionary.sp", nice=False)
+        if rc == 0:
+            removed.append(e)
+    return {"segregatedTolerance": changed, "profileEntriesRemoved": removed}
+
+
+# --------------------------------------------------------------------------- #
 # controlDict text edits (no foamDictionary: it would re-quantise scalars)
 # --------------------------------------------------------------------------- #
 
@@ -537,6 +597,9 @@ def _prepare(case: Path, args: list[str]) -> dict:
         raise RuntimeError(f"{case}: transformPoints failed (rc {rc})")
     write_mesh_shift(case, shift, dp["bbox"])
     settings = shift_settings(case, shift)
+    # SP solver settings (D-064): only with a real SP build
+    sp_settings = (sp_solver_settings(case) if build_precision() == "SP"
+                   else {})
 
     # 4. checkMesh gate in SP
     rc = cfenv.run(_mpi(nprocs, ["checkMesh", "-allGeometry", "-allTopology",
@@ -565,6 +628,7 @@ def _prepare(case: Path, args: list[str]) -> dict:
         "checkMeshDP": dp, "checkMeshSP": sp,
         "checkMeshDiff": checkmesh_diff(dp, sp),
         "shiftedEntries": settings["shifted"],
+        "spSolverSettings": sp_settings,
         "unclassifiedVectors": settings["unclassifiedVectors"],
         "wallSecondsDPMesh": t_dp,
         "wallSecondsPrepare": time.perf_counter() - t0,
@@ -621,7 +685,7 @@ def annotate(rec: dict, case: Path, metrics: dict | None = None,
     rec["spHarness"] = {k: info.get(k) for k in (
         "bboxCentreDP", "shiftedEntries", "unclassifiedVectors",
         "wallSecondsDPMesh", "wallSecondsPrepare", "reasons",
-        "gateOverridden")}
+        "gateOverridden", "spSolverSettings")}
     rec["spHarness"]["checkMeshFailedDP"] = (info.get("checkMeshDP") or {}).get("failed")
     rec["spHarness"]["checkMeshFailedSP"] = (info.get("checkMeshSP") or {}).get("failed")
 
