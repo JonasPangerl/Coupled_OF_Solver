@@ -1895,3 +1895,27 @@ CONFIG_SCOPE):
   OpenFOAM needed) and checks that the configurations in the scope of every
   case differ in the settings the solver actually uses
   (run_bench.effective_settings) and in their hashes.
+
+### 3. Failed runs are failures, not timings (review M3)
+
+- run_bench.run_one checks the Allrun rc, the solver log (normal "End",
+  no FOAM FATAL; cflib.case.run_failure), the whole budget run (the
+  solver's own stop is disabled in the benchmark) and complete timing
+  reports. A failed run is written with failed true, the reasons
+  (failure) and the log tail, and without any time to convergence. The
+  next invocation reruns it (it is not skipped as "exists"). load_current
+  leaves failed records out; load_failed lists them; summary.json lists
+  "failed" and "missing" (expected case/config/run without a successful
+  record); run_bench exits with rc 4 if a run of the invocation failed.
+  make_report.load_bench lists failed runs in the missing-results
+  appendix. Older records count as failed if rc != 0 or they carry an
+  "error" without a time.
+- rank_times no longer raises KeyError when every report of an
+  application is incomplete; it returns what it can with complete false
+  and incompleteReports.
+- Test helpers: a run that failed without output (e.g. mpirun refused an
+  invalid --cpu-set: rc 1, nothing else) raises with the tail of log.Allrun
+  and of the solver log (refcase.coupled, test_T4.run_solver, T0). Any
+  other failure is flagged in the record (failed, failure, logTail); the
+  T4/T5 tests write the record with pass false and fail loudly
+  (fail_if_failed); the T0-T2 and scaling asserts show the log tail.

@@ -409,6 +409,18 @@ def effective_settings(name: str, cfg: str) -> dict:
     return {"solver": solver, **foamdict.normalise(eff)}
 
 
+def is_failed(rec: dict) -> bool:
+    """True for the record of a failed run (M3): flagged failed, or an
+    older record with a non-zero rc or an "error" and no time to
+    convergence."""
+    if rec.get("failed"):
+        return True
+    if "failed" in rec:
+        return False
+    return bool(rec.get("rc")) or ("error" in rec
+                                   and rec.get("wall_to_conv_s") is None)
+
+
 def is_current(rec: dict) -> bool:
     """True if a result record was produced with the current definition of
     its (case, configuration)."""
@@ -825,12 +837,21 @@ def rank_times(case: Path, solver: str, timing_dir: str = "timing") -> dict:
     (e.g. potentialFoamWallSeconds). Peak RSS is the larger of the solver's
     and the pre-processing's (they never run at the same time); the
     solver's own values are kept as solverPeakRSS_GB_*.
-    Returns {} if the solver left no report (run failed before start)."""
+    Returns {} if the solver left no report (run failed before start).
+    Incomplete reports (a rank killed by MPI_Abort) never raise: the
+    complete ones are used, their names are listed in incompleteReports and
+    `complete` is False; if no report of the solver is complete, only
+    {"ranks", "incompleteReports", "complete": False} is returned."""
     tdir = case / timing_dir
     reps = sorted(tdir.glob(f"{solver}.rank*.time"))
     if not reps:
         return {}
     sol = _parse_time_reports(reps)
+    if "wallSeconds" not in sol:
+        return {"ranks": sol["ranks"],
+                "incompleteReports": sol["incompleteReports"],
+                "complete": False}
+    incomplete = list(sol["incompleteReports"])
     out = {
         "ranks": sol["ranks"],
         "solverWallSeconds": sol["wallSeconds"],
@@ -851,6 +872,10 @@ def rank_times(case: Path, solver: str, timing_dir: str = "timing") -> dict:
         if not preps:
             continue
         p = _parse_time_reports(preps)
+        incomplete += p["incompleteReports"]
+        if "wallSeconds" not in p:
+            out[f"{app}Incomplete"] = True
+            continue
         out["preApps"].append(app)
         out[f"{app}Ranks"] = p["ranks"]
         out[f"{app}WallSeconds"] = p["wallSeconds"]
@@ -867,6 +892,8 @@ def rank_times(case: Path, solver: str, timing_dir: str = "timing") -> dict:
     out["cpuHours"] = out["cpuSeconds"] / 3600.0
     out["peakRSS_GB_sum"] = rss_sum
     out["peakRSS_GB_max_rank"] = rss_max
+    out["incompleteReports"] = incomplete
+    out["complete"] = not incomplete
     return out
 
 
@@ -894,7 +921,7 @@ def progress_fraction(case: Path, solver: str, it: int) -> float | None:
 def to_convergence(rt: dict, frac: float | None) -> dict:
     """Wall seconds and CPU-hours to convergence: pre-processing (fixed
     offset, not scaled) + solver totals x progress fraction."""
-    if not rt or frac is None:
+    if not rt or frac is None or rt.get("solverWallSeconds") is None:
         return {}
     return {
         "wall_to_conv_s": rt.get("preWallSeconds", 0.0)
@@ -936,11 +963,15 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
     chash = config_hash(name, cfg)
     old = results.read("bench", tag)
     if old and not force:
-        if old.get("configHash") == chash:
+        if old.get("configHash") == chash and not is_failed(old):
             print(f"skip {tag} (exists)")
             return old
-        print(f"{tag}: existing result has configHash "
-              f"{old.get('configHash')}, current {chash}: rerun")
+        if old.get("configHash") == chash:
+            print(f"{tag}: existing result is a FAILED run "
+                  f"({'; '.join(old.get('failure') or ['?'])}): rerun")
+        else:
+            print(f"{tag}: existing result has configHash "
+                  f"{old.get('configHash')}, current {chash}: rerun")
     if old:
         _stale_move(tag)
 
@@ -995,12 +1026,33 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
             rec["anderson"] = {k: summ.get(k) for k in (
                 "andersonApplied", "andersonSkipped", "andersonRejected",
                 "andersonFlushed")}
+    # M3: a failed run is recorded as failed, never as a timing (and is
+    # rerun by the next invocation): Allrun rc, normal end of the solver
+    # log, the whole budget run (the solver's own stop is disabled), all
+    # timing reports complete
+    hist: dict = {}
+    failure: list[str] = []
     try:
         hist = monitor_history(case, spec["monitor"])
-    except (FileNotFoundError, IndexError) as err:
-        rec["error"] = f"monitor: {err}"
+    except (FileNotFoundError, IndexError, KeyError, ValueError) as err:
+        failure.append(f"monitor: {err}")
+    n_run = min((len(h) for h in hist.values()), default=0)
+    failure = cfcase.run_failure(case, solver, rc, n_run,
+                                 spec["iters"][solver]) + failure
+    if not rt:
+        failure.append("no timing reports")
+    elif not rt.get("complete", True):
+        failure.append("incomplete timing reports: "
+                       + ", ".join(rt.get("incompleteReports") or []))
+    rec["iterations_run"] = n_run
+    if failure:
+        rec["failed"] = True
+        rec["failure"] = failure
+        rec["logTail"] = cfcase.log_tail(case, solver)
         results.write("bench", tag, rec)
+        print(f"{tag}: FAILED ({'; '.join(failure)})")
         return rec
+    rec["failed"] = False
 
     osc = is_oscillatory(name)
     if osc:
@@ -1020,7 +1072,6 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
         rec["criterion"] = f"window {WINDOW}, tol {TOL} (12.3 ii)"
         it = iters_to_conv(hist)
     rec["iters_to_conv"] = it
-    rec["iterations_run"] = min(len(h) for h in hist.values())
     # final values at the end of the fixed budget (B10 identity check)
     rec.update({f"{k}_final": v[-1] for k, v in hist.items() if v})
     if it is not None and rt:
@@ -1193,9 +1244,52 @@ def b10_evaluate(table: list[dict]) -> list[dict]:
     return out
 
 
+def _bench_records(names: list[str] | None = None,
+                   cfgs: list[str] | None = None) -> list[tuple[str, dict]]:
+    out = []
+    d = results.RESULTS / "bench"
+    for f in sorted(d.glob("*_*_*.json")) if d.is_dir() else []:
+        try:
+            rec = json.loads(f.read_text())
+        except json.JSONDecodeError:
+            continue
+        if "case" not in rec or "config" not in rec:
+            continue
+        if names and rec["case"] not in names:
+            continue
+        if cfgs and rec["config"] not in cfgs:
+            continue
+        out.append((f.stem, rec))
+    return out
+
+
+def load_failed(names: list[str] | None = None,
+                cfgs: list[str] | None = None) -> list[dict]:
+    """Current records of FAILED runs (M3): excluded from load_current and
+    the summary, to be listed as failed/missing in the report and rerun."""
+    return [rec for _, rec in _bench_records(names, cfgs)
+            if is_current(rec) and is_failed(rec)]
+
+
+def expected_runs(names: list[str], cfgs: list[str], repeats: int,
+                  no_scope: bool = False) -> list[tuple[str, str, int]]:
+    """(case, configuration, run) that an invocation with these arguments
+    produces (scope and MAX_REPEATS as in main)."""
+    out = []
+    for name in names:
+        rep = repeats if no_scope else min(repeats,
+                                           MAX_REPEATS.get(name, repeats))
+        for run in range(1, rep + 1):
+            for cfg in cfgs:
+                if no_scope or in_scope(name, cfg):
+                    out.append((name, cfg, run))
+    return out
+
+
 def load_current(names: list[str] | None = None,
                  cfgs: list[str] | None = None) -> tuple[list[dict], list[str]]:
-    """Current benchmark records (optionally filtered) and the stale tags."""
+    """Current benchmark records of successful runs (optionally filtered)
+    and the stale tags. Records of failed runs are left out (load_failed)."""
     recs, stale = [], []
     d = results.RESULTS / "bench"
     for f in sorted(d.glob("*_*_*.json")) if d.is_dir() else []:
@@ -1211,6 +1305,8 @@ def load_current(names: list[str] | None = None,
             continue
         if not is_current(rec):
             stale.append(f.stem)
+            continue
+        if is_failed(rec):
             continue
         recs.append(rec)
     return recs, stale
@@ -1234,10 +1330,30 @@ B10_FIELDS = [
     "cycleTypeFinal", "iters_X", "iters_C", "iters_H"]
 
 
-def summarise(names: list[str], cfgs: list[str]) -> Path:
+def summarise(names: list[str], cfgs: list[str], repeats: int | None = None,
+              no_scope: bool = False) -> Path:
+    """summary.csv, b10_acceptance.csv, summary.json. Failed runs (M3) are
+    excluded from the table and listed under "failed"; with `repeats`, the
+    expected (case, config, run) without a successful current record are
+    listed under "missing"."""
     recs, stale = load_current(names, cfgs)
     for s in stale:
         print(f"summary: stale result {s} excluded (configHash mismatch)")
+    failed = [{"tag": f"{r['case']}_{r['config']}_{r.get('run')}",
+               "failure": r.get("failure") or
+               ([f"rc {r.get('rc')}"] + ([r["error"]] if r.get("error") else []))}
+              for r in load_failed(names, cfgs)]
+    for f in failed:
+        print(f"summary: FAILED run {f['tag']} excluded "
+              f"({'; '.join(map(str, f['failure']))})")
+    missing = []
+    if repeats:
+        have = {(r["case"], r["config"], r.get("run")) for r in recs}
+        missing = [f"{c}_{k}_{r}" for c, k, r in
+                   expected_runs(names, cfgs, repeats, no_scope)
+                   if (c, k, r) not in have]
+        for m in missing:
+            print(f"summary: MISSING run {m} (no successful current record)")
     table = summary_rows(recs)
     b10 = b10_evaluate(table)
     out = results.RESULTS / "bench" / "summary.csv"
@@ -1254,7 +1370,8 @@ def summarise(names: list[str], cfgs: list[str]) -> Path:
             w.writerow({k: t.get(k) for k in B10_FIELDS})
     (out.with_name("summary.json")).write_text(json.dumps(
         {"cases": names, "configs": cfgs, "table": table, "b10": b10,
-         "stale": stale}, indent=2, default=str) + "\n")
+         "stale": stale, "failed": failed, "missing": missing},
+        indent=2, default=str) + "\n")
     return out
 
 
@@ -1300,6 +1417,7 @@ def main() -> int:
         if c not in CONFIGS:
             ap.error(f"unknown configuration {c!r} (known: {','.join(CONFIGS)}"
                      f"; aliases {CONFIG_ALIASES})")
+    n_failed = 0
     if not a.summary_only:
         cfenv.foam_env()
         for name in names:
@@ -1316,8 +1434,13 @@ def main() -> int:
                               "refusing to benchmark; --allow-busy overrides"
                               % (len(st.jobs), st.load))
                         return 3
-                    run_one(name, cfg, run, nprocs, a.force)
-    print("summary:", summarise(names, cfgs))
+                    if run_one(name, cfg, run, nprocs, a.force).get("failed"):
+                        n_failed += 1
+    print("summary:", summarise(names, cfgs, a.repeats, a.no_scope))
+    if n_failed:
+        print(f"{n_failed} benchmark run(s) FAILED (see summary.json "
+              "\"failed\"); they are rerun by the next invocation")
+        return 4
     return 0
 
 

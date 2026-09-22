@@ -6,6 +6,7 @@ Run: pytest tests/test_harness.py
 
 from __future__ import annotations
 
+import json
 import math
 import sys
 
@@ -172,3 +173,123 @@ def test_alias_e_is_c():
     cfgs, notes = run_bench.resolve_configs(["C", "E", "H"])
     assert cfgs == ["C", "H"] and notes
     assert "E" not in run_bench.CONFIGS
+
+
+# --------------------------------------------------------------------------- #
+# M3: failed runs are detected, recorded as failed and rerun
+# --------------------------------------------------------------------------- #
+
+from cflib import case as cfcase  # noqa: E402
+from cflib import results as cfresults  # noqa: E402
+
+TIME_REPORT = """\tCommand being timed: "x"
+\tUser time (seconds): {user}
+\tSystem time (seconds): 0.50
+\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:{wall:05.2f}
+\tMaximum resident set size (kbytes): 102400
+"""
+
+
+def _timing(tmp_path, solver, walls, incomplete=()):
+    t = tmp_path / "timing"
+    t.mkdir(exist_ok=True)
+    for i, w in enumerate(walls):
+        f = t / f"{solver}.rank{i}.time"
+        if i in incomplete:
+            f.write_text('\tCommand being timed: "x"\n')     # killed rank
+        else:
+            f.write_text(TIME_REPORT.format(user=w, wall=w))
+    return tmp_path
+
+
+def test_rank_times_all_incomplete_no_keyerror(tmp_path):
+    case = _timing(tmp_path, "coupledFoam", [10, 11], incomplete=(0, 1))
+    rt = run_bench.rank_times(case, "coupledFoam")
+    assert rt["complete"] is False and "wallSeconds" not in rt
+    assert len(rt["incompleteReports"]) == 2
+    assert run_bench.to_convergence(rt, 0.5) == {}
+
+
+def test_rank_times_partial(tmp_path):
+    case = _timing(tmp_path, "coupledFoam", [10, 12, 11], incomplete=(2,))
+    _timing(tmp_path, "potentialFoam", [2, 2])
+    rt = run_bench.rank_times(case, "coupledFoam")
+    assert rt["complete"] is False
+    assert rt["solverWallSeconds"] == pytest.approx(12)
+    assert rt["wallSeconds"] == pytest.approx(14)
+    (tmp_path / "b").mkdir()
+    full = run_bench.rank_times(_timing(tmp_path / "b", "coupledFoam", [5]),
+                                "coupledFoam")
+    assert full["complete"] is True and full["incompleteReports"] == []
+
+
+def test_run_failure(tmp_path):
+    assert "Allrun rc 1" in cfcase.run_failure(tmp_path, "coupledFoam", 1)
+    assert "no log.coupledFoam" in cfcase.run_failure(tmp_path, "coupledFoam", 1)
+    (tmp_path / "log.coupledFoam").write_text("CF| iter=1\n")
+    r = cfcase.run_failure(tmp_path, "coupledFoam", 0)
+    assert r == ["log.coupledFoam has no normal end"]
+    (tmp_path / "log.coupledFoam").write_text("CF| iter=1\nEnd\n")
+    assert cfcase.run_failure(tmp_path, "coupledFoam", 0) == []
+    assert cfcase.run_failure(tmp_path, "coupledFoam", 0, 500, 800) == \
+        ["500 of 800 iterations"]
+    (tmp_path / "log.coupledFoam").write_text("--> FOAM FATAL ERROR\nEnd\n")
+    assert cfcase.run_failure(tmp_path, "coupledFoam", 0)
+    (tmp_path / "log.Allrun").write_text("mpirun: invalid cpu-set\n")
+    assert "invalid cpu-set" in cfcase.log_tail(tmp_path, "coupledFoam")
+
+
+@pytest.fixture
+def bench_results(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfresults, "RESULTS", tmp_path)
+    (tmp_path / "bench").mkdir()
+    return tmp_path / "bench"
+
+
+def _write_bench(d, case, cfg, run, **kw):
+    rec = {"case": case, "config": cfg, "run": run,
+           "configHash": run_bench.config_hash(case, cfg)}
+    rec.update(kw)
+    (d / f"{case}_{cfg}_{run}.json").write_text(json.dumps(rec))
+    return rec
+
+
+def test_failed_records_excluded_and_listed(bench_results):
+    _write_bench(bench_results, "T1", "C", 1, failed=False,
+                 wall_to_conv_s=10.0, cpu_to_conv_h=0.01, iters_to_conv=300)
+    _write_bench(bench_results, "T1", "A", 1, failed=True, rc=1,
+                 failure=["Allrun rc 1"])
+    _write_bench(bench_results, "T1", "H", 1, rc=1, error="monitor: x")  # old style
+    recs, stale = run_bench.load_current(["T1"])
+    assert [r["config"] for r in recs] == ["C"] and not stale
+    failed = {r["config"] for r in run_bench.load_failed(["T1"])}
+    assert failed == {"A", "H"}
+    out = run_bench.summarise(["T1"], ["A", "C", "H"], repeats=1)
+    s = json.loads(out.with_name("summary.json").read_text())
+    assert {f["tag"] for f in s["failed"]} == {"T1_A_1", "T1_H_1"}
+    assert set(s["missing"]) == {"T1_A_1", "T1_H_1"}
+    assert [t["config"] for t in s["table"]] == ["C"]
+
+
+def test_failed_record_is_rerun(bench_results, monkeypatch):
+    class _Stop(Exception):
+        pass
+
+    def _prepare(*a, **k):
+        raise _Stop
+
+    class _State:
+        def as_dict(self):
+            return {}
+
+    monkeypatch.setattr(run_bench.cfcase, "prepare", _prepare)
+    monkeypatch.setattr(run_bench.cfenv, "machine_state", lambda: _State())
+    ok = _write_bench(bench_results, "T1", "C", 1, failed=False,
+                      wall_to_conv_s=1.0)
+    assert run_bench.run_one("T1", "C", 1, 1, force=False) == ok
+    _write_bench(bench_results, "T1", "C", 2, failed=True,
+                 failure=["Allrun rc 1"])
+    with pytest.raises(_Stop):
+        run_bench.run_one("T1", "C", 2, 1, force=False)
+    # the failed record was moved aside, not kept as a result
+    assert not (bench_results / "T1_C_2.json").exists()

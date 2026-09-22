@@ -328,6 +328,22 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
     }
 
     hist = force_history(case)
+    # M3: a failed run must fail loudly, with the log tail. A run that left
+    # nothing to evaluate (e.g. mpirun refused an invalid --cpu-set: rc 1,
+    # no output) raises here; any other failure is flagged in the record
+    # (rec["failed"], rec["failure"], rec["logTail"]) for the caller
+    failure = cfcase.run_failure(case, solver, rc)
+    if ranks and not ranks.get("complete", True):
+        failure.append("incomplete timing reports: "
+                       + ", ".join(ranks.get("incompleteReports") or []))
+    rec["failed"] = bool(failure)
+    rec["failure"] = failure
+    if failure:
+        rec["logTail"] = cfcase.log_tail(case, solver)
+        if not hist:
+            raise AssertionError(
+                f"{solver} run {name} failed ({'; '.join(failure)}) and left "
+                f"no force history:\n{rec['logTail']}")
     it = evaluate_history(rec, case, solver, hist, ranks, oscillatory,
                           case_name)
 
@@ -415,9 +431,23 @@ def reference(template: str, mesh: Path, name: str, mesh_args: list[str],
                            sets, fpe=False, oscillatory=oscillatory,
                            case_name=case_name)
     meta.write_text(json.dumps(results._clean(rec), indent=2) + "\n")
-    assert rec["rc"] == 0 and cfcase.solver_ok(case, "simpleFoam"), \
-        f"simpleFoam reference {name} failed"
+    assert not rec.get("failed"), \
+        (f"simpleFoam reference {name} failed "
+         f"({'; '.join(rec.get('failure') or [])}):\n{rec.get('logTail')}")
     return case, rec
+
+
+def fail_if_failed(name: str, rec: dict, extra: dict | None = None) -> None:
+    """A failed coupledFoam run: write its record (pass False, with the
+    failure reasons and the log tail) and fail the test loudly."""
+    if not rec.get("failed"):
+        return
+    rec.update(extra or {})
+    rec["pass"] = False
+    results.write("tests", name, rec)
+    pytest.fail(f"coupledFoam run {name} failed "
+                f"({'; '.join(rec.get('failure') or [])}):\n"
+                f"{rec.get('logTail')}", pytrace=False)
 
 
 # ---------------------------------------------------------------------------
@@ -745,6 +775,7 @@ def test_T4(foam, variant):
         TEMPLATE, mesh, name, "coupledFoam", mesh_args,
         budget_sets("coupledFoam", budget["coupledFoam"]), oscillatory=osc,
         case_name=f"T4{variant}")
+    fail_if_failed(name, rec, {"case": f"T4{variant}", "reference": ref})
 
     # mean-field delta comparison (D-042 addendum); a cached reference
     # without mean fields is continued once with averaging

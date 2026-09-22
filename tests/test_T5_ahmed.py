@@ -36,8 +36,8 @@ from cflib import case as cfcase
 from cflib import results
 
 from test_T4_motorBike import (NP, assert_checks, budget_sets, compare,
-                               mean_field_comparison, mesh_dir, reference,
-                               run_solver)
+                               fail_if_failed, mean_field_comparison,
+                               mesh_dir, reference, run_solver)
 
 TEMPLATE = "T5_ahmed"
 CD_EXP = 0.285
@@ -102,6 +102,8 @@ def test_T5(foam):
         TEMPLATE, mesh, name, "coupledFoam", mesh_args,
         budget_sets("coupledFoam", BUDGET["coupledFoam"]), extra_env=env,
         oscillatory=osc, case_name="T5")
+    fail_if_failed(name, rec, {"case": "T5", "meshVariant": variant,
+                               "reference": ref})
 
     # mean-field delta comparison (D-042 addendum), as in T4
     field = (mean_field_comparison(case, rec, ref_case, ref, "T5")

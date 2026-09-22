@@ -287,6 +287,12 @@ def load_bench() -> list[dict]:
     for s in stale:
         notes.append(f"benchmark record {s} is stale (configHash mismatch), "
                      "excluded")
+    # failed runs (M3): never a timing; listed as missing in the appendix
+    for r in run_bench.load_failed():
+        why = "; ".join(map(str, r.get("failure") or [f"rc {r.get('rc')}"]))
+        tag = f"bench {r.get('case')} {r.get('config')} run {r.get('run', '?')}"
+        notes.append(f"benchmark run {tag} FAILED ({why}), excluded")
+        GUARD.missing(tag, "benchmark run", f"run failed: {why}"[:120])
     return recs
 
 

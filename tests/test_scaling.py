@@ -103,7 +103,9 @@ def test_scaling(foam):
             rec.pop("history", None)
             rec.update(time_per_iteration(case, solver))
             runs[solver][n] = rec
-            assert rec["rc"] == 0, f"{name} failed (rc {rec['rc']})"
+            assert rec["rc"] == 0 and not rec.get("failed"), \
+                (f"{name} failed ({'; '.join(rec.get('failure') or [])}):\n"
+                 f"{rec.get('logTail')}")
 
     n0 = rs[0]
     summary: dict = {"mesh": f"T4{variant}", "ranks": rs, "baseRanks": n0, "iterations": N_ITER,
