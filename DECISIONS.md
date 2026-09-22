@@ -1763,6 +1763,60 @@ earlier iteration from which they consider it converged. Decision details:
   criteria. Table `convergence_choice` lists automatic and user points side
   by side; the load plots mark the user point with a solid line.
 
+## D-061 - Mild treatment of pre-selected cells; wallStarved off by default (user, 2026-09-22)
+
+With the amendment-C static criteria (C1), T4a failed its Cl check.
+Measured on T4a (354k cells, 10 ranks, 800 iterations, D-042 window means)
+against the simpleFoam reference Cd 0.3964 / Cl 0.0768 (Cl tolerance
+max(2 %, 0.01) abs):
+
+| run | Cd | Cl | Cl check |
+|---|---|---|---|
+| main 6acc150 default (static set incl. C1 wallStarved, full treatment) | 0.4026 | 0.0630 | FAIL |
+| same, tensorial Rhie-Chow off | 0.4025 | 0.0602 | FAIL (not the cause) |
+| same, wallStarved off | 0.4010 | 0.0818 | pass |
+
+The 12 wallStarved cells sit on the body surface, where the forces are
+integrated. The full static treatment moves Cl by -18 %: upwind (beta 0),
+the forced gradient limiter, the non-orthogonal limiter and the halved
+step.
+
+User decision:
+- wallStarved is **off** by default.
+- Cells that are selected in advance by criteria that are not really cell
+  quality get a much **milder** treatment than cells that actually
+  misbehave. This covers wall cells found by topology or by patch, and
+  processor-boundary cells.
+
+The mild treatment is a full convection scheme (beta 1), no forced
+gradient limiter, no non-orthogonal limiter, and half the local step
+(cflFactor 0.5).
+
+The pre-release implementation of this decision (a separate `mild` tier)
+was replaced before it reached main. The categories of D-066 implement it:
+the `processor` and `wall` categories are mild by default, and
+`meshQuality` and `badMesh` keep the full treatment.
+
+T4a with the D-066 build (rem-cat, 10 ranks, CF_MPI_BIND=none on a loaded
+machine, so the times are not benchmark times):
+
+| run | settings | static cells (mQ/bM/proc/wall) | Cd | Cl | dCd | dCl abs | rollbacks | wall [s] | CPU-h |
+|---|---|---|---|---|---|---|---|---|---|
+| (a) default | wall.wallStarved no | 2655 (2655/526/0/0) | 0.40097 | 0.08184 | 1.15 % | 0.0051 | 0 | 1479 | 4.05 |
+| (b) wsMild | wall.wallStarved yes, mild | 2667 (2655/526/0/12) | 0.40076 | 0.07927 | 1.10 % | 0.0025 | 0 | 1210 | 3.35 |
+| (c) wsFull | wall.wallStarved yes, beta 0, both limiters | 2667 (2655/526/0/12) | 0.40265 | 0.06299 | 1.58 % | 0.0138 (FAIL) | 0 | 1143 | 3.17 |
+
+All three runs are stationary from iteration 450.
+- (a) reproduces main with wallStarved off **bit for bit** (Cd
+  0.400973343261846, Cl 0.08183868934854022).
+- (c) reproduces main's default bit for bit (Cd 0.40264586623459353, Cl
+  0.06299018718761695). The category machinery is therefore exact, and the
+  full treatment of the 12 wall cells alone is what shifts Cl.
+- With the mild treatment (b), the 12 wallStarved cells no longer degrade
+  Cl. It is even the closest of the three runs to the reference.
+
+The mild defaults (beta 1, cflFactor 0.5, no limiters) are kept.
+
 ## D-062 - Amendment D (full single precision) adopted with deviations (user, 2026-09-22)
 
 The user supplied amendment set D (SPEC_amendment_D.md, verbatim) and asked
@@ -1796,3 +1850,134 @@ for SP to be built and tested against the maximum precision available.
   switchable and tunable in the case dictionaries (D-061 follow-up).
 - Every setting that may need changing must be a run-time keyword, not a
   compile-time constant.
+
+## D-066 - Remediation cell categories; every tunable is a run-time keyword (user, 2026-09-22)
+
+User request (D-063): the pre-selected remediation cells get separate,
+switchable and tunable settings per category, as in the user's previous
+solver. Nothing a user may want to change may need a recompile.
+
+**Categories.** `coupled.remediation.{meshQuality, badMesh, processor, wall}`
+replace `remediation.static` and the pre-release mild tier of D-061:
+
+| category | criteria | default treatment |
+|---|---|---|
+| meshQuality | the 8.1 quality criteria (nonOrth 85, skew 6, volRatio 30, aspect 2000; D-047) | full: beta 0, cflFactor 0.5, gradLimiter yes, nonOrthLimiter yes |
+| badMesh | C1 volumeJump (0.98); open cells, closednessThreshold 1e-6 (the checkMesh value, new); optional severe nonOrthThreshold/skewThreshold (0 = off, new) | full |
+| processor | C1 procAMI; optional `nLayers` layers from the processor patches (default 0, new) | mild: beta 1, cflFactor 0.5, no limiters |
+| wall | C1 wallStarved (default **off**, D-061); optional `patches` (wordRes) + `nLayers` (new) | mild |
+
+Every category has `enabled` and the four treatment keywords.
+- Precedence: a cell in several categories gets min beta, min cflFactor and
+  the OR of the two limiter switches.
+- The dynamic set (8.2, D-055) always overrides with beta 0 and
+  dynamic.cflFactor. The zonal factors (8.3/B6/C5) multiply on top.
+- The limiter values are `remediation.limitedNonOrthCoeff` (0.2, the former
+  static.nonOrthLimiter) and `remediation.limitedGradScheme`
+  ("cellLimited Gauss linear 1", D-018; before this it was a string
+  literal).
+- `coupledAssembler::setLimitedCells(gradLimited, nonOrthLimited)` replaces
+  setStaticCells(isStatic): the per-cell gradient-limiter switch goes to
+  rhieChow, the non-orthogonal switch to nonOrthCorrection.
+
+Why closedness: primitiveMeshTools::cellClosedness is already evaluated for
+the aspect ratio, so the check is free. An open cell (|sum S_f|/sum|S_f| >
+1e-6) fails checkMesh and makes the Gauss sums inconsistent. It marks 0
+cells on T0-T4a.
+
+Backward compatibility:
+- `remediation.static.*` still works and prints one deprecation note. The
+  mapping is in docs/KEYWORDS.md. static.wallStarved now means the mild
+  wall treatment.
+- The same setting in both layouts with different values is a
+  FatalIOError. An old-style override must not be silently ignored by an
+  explicit new-layout template value.
+- The pre-release `remediation.mild` is rejected.
+- The case templates use the new layout, and run_bench E-nonOrth60/65 set
+  meshQuality.nonOrthThreshold.
+
+Output:
+- remediationFlag bits: 1 static (any category), 2 dynamic,
+  4 wallStarved, 8 procAMI, 16 volumeJump (as C1), 32 meshQuality,
+  64 badMesh, 128 processor, 256 wall, 512 closedness, 1024 severe quality,
+  2048 processor layer, 4096 wall layer. The pre-release bit 32 "mild" of
+  the D-061 WIP is gone.
+- cellSets remediationStatic (union), remediationDynamic,
+  remediationMeshQuality, remediationBadMesh, remediationProcessor,
+  remediationWall. They are also written into `<iter>_lastValid`.
+- One log line per category. summary.json `staticCategories`, and at
+  diagnostics level >= 1 `controls.remediation.nStatCat`.
+- `nStat`/`staticCells` stay the union of all categories, so the T4/T5
+  static-set limit (1.5 %, D-047) keeps its meaning.
+- Built-in zonal sets `_remediationMeshQuality`, `_remediationBadMesh`,
+  `_remediationProcessor`, `_remediationWall`.
+- Restart state is unchanged: the sets are rebuilt from the mesh at every
+  start (test_restart[T1] passes).
+
+Verification (serial, CF| lines without timings compared with main 6acc150
+built in a private platform):
+- T0 Re100, T0 Re1000, T1, T2, T3-SST and T3-GEKO are **bit-identical**:
+  none of them has a wallStarved, procAMI or open cell.
+- On the T4a mesh the categories give meshQuality 2655 and badMesh 526
+  (all of them inside meshQuality) = 2655 static cells. This equals main
+  with wallStarved off; main with wallStarved on had 2667.
+- Parallel (10 ranks) the counts are the same. processor nLayers 2 marks
+  50383 cells; wall patches (motorBikeGroup) nLayers 2 marks 80136. Both are
+  opt-in.
+- T4a, 10 ranks (D-061 table): the defaults reproduce main with
+  wallStarved off bit for bit. wall.wallStarved yes with the full treatment
+  reproduces main's default bit for bit.
+- Unit (block4Ops, blockMatrix, blockGAMG V/K np1+np4), T0-T3,
+  test_diagnostics and test_restart[T1] pass. Two failures are unchanged
+  from main 6acc150 (same assertion, same numbers):
+  - T3-GEKO, the Cd deviation.
+  - test_blockGAMG_cycles, "K <= W <= V" (K 11, W 7).
+
+**Configurability audit.** Every constant of coupledDefaults.H and every
+numeric or string literal in src/ and applications/coupledFoam was checked.
+Newly read from the dictionaries:
+- `sc.blockGAMG`: tuneRhoHigh/Low/Demote/Fail, tuneConsecutiveWindows,
+  nPostSweepsMin, coarsestPreconditioner, coarsestAbsTolerance,
+  coarsestMinIter, coarsestMaxRestarts.
+- `sc.restartLarge` and `sc.restartLargeCells`. This implements the B7 rule
+  "restart 6 above 40 M cells", which had been declared but never applied.
+- `sc.nSweeps`, `sc.smoother` of the smoother preconditioner.
+- `coupled.guards.refFluxBalanceTol`, `coupled.UrefFallbackFactor`,
+  `coupled.orthogonalityTolerance` (default 0 = the exact test,
+  FABLE_REVIEW item 1).
+- `coupled.rhieChow.pinvMaxSweeps` and `coupled.rhieChow.warnInterval`.
+- `coupled.anderson.maxCells` and `coupled.anderson.rankTol`.
+- `coupled.diagnostics.stallWindow`, `asymptoticResidualFactor`,
+  `asymptoticForceFactor` and `topLimited`.
+- `coupled.sfd.nHold` (default ptc.nHold).
+- `coupled.convergence.forceCoeffs`: the function object to use; empty =
+  auto-detect.
+- `remediation.limitedGradScheme`.
+
+The string defaults (cflStrategy, convergence mode, preconditioner,
+cycleType, agglomerator, processorAgglomerator, smoother, coarsestSolver,
+smootherPreconSmoother, simpleMode) are now constants in coupledDefaults.H.
+Their values are unchanged.
+
+Other changes:
+- `kCycleMaxSteps` outside {1, 2} is now a FatalIOError. Before, values
+  above 2 were silently treated as 2.
+- The clamp warning prints the effective `guards.clampValue`.
+- `startupStagnationTrigger` and `diagnostics.topLimited` appear in the
+  effective settings.
+- `maxCopAttempts` was never used and was removed.
+
+Stay compile-time, with the reason listed in docs/KEYWORDS.md:
+- kernelChunk and the SIMD/alignment/block layout constants: performance
+  and data layout.
+- The Test-kernelBandwidth gates: test thresholds, which change only by a
+  user decision.
+- diagMaxLevel: the number of implemented diagnostics levels.
+- The remediationFlag bit values: output format.
+- The "Gauss linear uncorrected" momentum Laplacian: the design of D-014.
+- The guard epsilons: amendment D replaces them with typed constants.
+- The coupledFieldCompare tolerances: a utility, not the solver.
+
+docs/KEYWORDS.md is the complete reference, with keyword, default, range,
+meaning, decision and constant. tests/test_keywords.py fails if a
+coupledDefaults.H constant has no entry there.
