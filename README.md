@@ -69,6 +69,40 @@ default is listed in spec Section 11 and printed at start-up under
     report/         generated REPORT.md, LaTeX paper and figures
     scripts/        developer tools (syntax check, environment helpers)
 
+## Report figures
+
+`bench/make_report.py` writes every figure of the two LaTeX documents
+(`report/paper/paper.pdf`, `report/paper/paper_tutorial.pdf`) into
+`report/paper/figures/`; a figure whose data do not exist yet is shown as a
+boxed "results pending" placeholder, so the papers build at every stage.
+
+- **2D flow fields** (`bench/plot_fields2d.py`, matplotlib, vector PDF):
+  for T0 (Re 100, 1000), T1, T2, T3 (SST, GEKO) the fields of coupledFoam
+  and the simpleFoam reference on the same mesh, same colour scale, plus the
+  difference field (`fields_<case>_U.pdf`, `fields_<case>_p.pdf`) and line
+  plots (`profiles_<case>.pdf`: velocity profiles, T2 skin friction, T3
+  surface C_p). Fields are read read-only with VTK's `vtkOpenFOAMReader`
+  from the venv (`/home/jonas/OF/venv`, needs the `vtk` module); nothing is
+  written under `run/`.
+- **3D renders** (`bench/render_fields.py`, ParaView `pvbatch`, PNG): body
+  surface mesh, |U| and C_p slices, surface C_p, and after the heavy runs
+  the window-mean fields and the `coupledFieldCompare` delta fields of T4a,
+  T4b, T5 (`render_<case>_*.png`). Decomposed cases are read in place.
+  Camera, planes and colour ranges are fixed in the script. A case whose
+  logs changed in the last 10 minutes is skipped (live run);
+  `--reference-only` renders only the simpleFoam side.
+- **Speed-up** (`make_report.py:fig_speed`): residual vs wall-clock time,
+  wall time and CPU-hours to convergence with speed-up factors, cost per
+  outer iteration, iterations vs time trade-off (`speed_*.pdf`), from
+  `results/tests/*.json` and the run logs.
+
+Re-render and rebuild:
+
+    ~/OF/venv/bin/python bench/make_report.py     # all figures, calls pvbatch
+    CF_NO_RENDER=1 ~/OF/venv/bin/python bench/make_report.py   # without 3D
+    nice -n 19 pvbatch --force-offscreen-rendering bench/render_fields.py --cases T4b
+    cd report/paper && nice -n 19 make -B
+
 ## License
 
 GPL-3.0-or-later (the code links against OpenFOAM, which is GPL-3.0).

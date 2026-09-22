@@ -68,13 +68,17 @@
     \rule{0pt}{1.5ex}}}\par}
 
 % \cffigure[width]{file stem}{caption}{label}
+% (figures/<stem>.pdf, else figures/<stem>.png - the ParaView
+% renders -, else the pending box)
 \newcommand{\cffigure}[4][0.95]{%
   \begin{figure}[tbp]
     \centering
     \IfFileExists{figures/#2.pdf}%
       {\includegraphics[width=#1\linewidth]{figures/#2.pdf}}%
-      {\pending{Figure \texttt{figures/\detokenize{#2}.pdf} is written by
-        \texttt{bench/make\_report.py} once its data exist.}}
+      {\IfFileExists{figures/#2.png}%
+        {\includegraphics[width=#1\linewidth]{figures/#2.png}}%
+        {\pending{Figure \texttt{figures/\detokenize{#2}} is written by
+          \texttt{bench/make\_report.py} once its data exist.}}}
     \caption{#3}\label{#4}
   \end{figure}}
 
@@ -1765,6 +1769,174 @@ peak during the early, violent iterations, then decay to (nearly) zero as
 the flow settles. A set that stays large, or grows late in the run, points
 at a persistent local problem (mesh or boundary condition).
 
+\clearpage
+\subsection{Looking at the flow: pictures of the two solutions}\label{sec:flowpics}
+
+Numbers such as a drag coefficient can agree by luck, when two errors
+cancel. The honest check is to look at the whole flow. This section shows
+the solutions of both solvers side by side and, as a third picture, their
+difference. Everything is computed from the result files of the runs by
+\code{bench/plot\_fields2d.py} (2D cases) and \code{bench/render\_fields.py}
+(3D cases, rendered with ParaView).\pro{Flow fields}
+
+\paragraph{How to read the field pictures.} Each figure has three panels.
+The first two show the same quantity for coupledFoam and for
+\code{simpleFoam}, with the \emph{same} colour scale, so equal colours mean
+equal values. The white lines in the velocity pictures are streamlines:
+lines that follow the flow direction, so vortices appear as closed loops.
+The third panel is the difference coupledFoam minus \code{simpleFoam}; its
+colour scale is centred on zero: white means ``no difference'', red means
+coupledFoam is higher, blue means it is lower. Look at the numbers on its
+colour bar: the scale is chosen from the data, so even tiny differences
+look colourful. The title gives the RMS (a typical size) and the maximum of
+the difference. All values are made dimensionless: the velocity divided by
+a reference speed $U_{ref}$ (the lid speed, the inlet speed or the
+free-stream speed), the pressure as the pressure coefficient
+$C_p=(p-p_0)/(\tfrac12U_{ref}^2)$, where $C_p=1$ is the pressure at a
+stagnation point and negative values are suction. \emph{Good} means: the
+first two panels look identical and the difference is small compared with
+one.
+
+\paragraph{T0, the cavity.} The big vortex fills the box; the difference
+between the solvers is about \cfnum{FldTZeroReOneZeroZeroURms} of the lid
+speed on average, i.e.\ invisible. The only coloured spots in the difference
+panel are the two upper corners, where the sliding lid meets the fixed
+walls. There the flow is forced to jump from lid speed to zero, the pressure
+becomes very large, and every solver is least accurate.
+
+\cffigure{fields_T0_Re100_U}{T0, $Re=100$: speed with streamlines,
+coupledFoam (left), simpleFoam (middle), difference (right).}{fig:fldTzeroU}
+\cffigure{fields_T0_Re100_p}{T0, $Re=100$: pressure coefficient and
+difference.}{fig:fldTzeroP}
+\cffigure{fields_T0_Re1000_U}{T0, $Re=1000$: speed with streamlines and
+difference.}{fig:fldTzerothousandU}
+\cffigure{fields_T0_Re1000_p}{T0, $Re=1000$: pressure coefficient and
+difference.}{fig:fldTzerothousandP}
+
+\clearpage
+\paragraph{T1, pitzDaily.} Long, flat pictures, so the three panels are
+stacked: coupledFoam on top, \code{simpleFoam} in the middle, the difference
+at the bottom. The dark region behind the step is the recirculation zone,
+where the flow turns around (closed streamlines). The difference is about
+\cfnum{FldTOneURms} of the inlet speed on average.
+
+\paragraph{How to read the profile pictures.} Figure~\ref{fig:prTone} cuts
+the channel at several positions behind the step (labelled by their
+distance in step heights, $x/h$). At each position the horizontal velocity
+is drawn as a curve starting from the thin vertical line: the further the
+curve bulges to the right, the faster the flow at that height; a bulge to
+the left of the line is backflow. Thick grey is \code{simpleFoam}, dashed
+blue is coupledFoam. \emph{Good} means: you see only one curve.
+
+\cffigure{fields_T1_U}{T1 pitzDaily: speed with streamlines, coupledFoam
+(top), simpleFoam (middle), difference (bottom).}{fig:fldToneU}
+\cffigure{fields_T1_p}{T1 pitzDaily: pressure coefficient and
+difference.}{fig:fldToneP}
+\cffigure{profiles_T1}{T1 pitzDaily: velocity profiles behind the
+step.}{fig:prTone}
+
+\clearpage
+\paragraph{T2, backward-facing step.} The flow detaches at the corner of
+the step, forms a long, flat recirculation bubble and reattaches further
+downstream. The largest difference between the solvers is in the thin
+shear layer that leaves the step corner, where the velocity changes very
+quickly over a short distance. The lower picture of
+Figure~\ref{fig:prTtwo} shows the skin friction $C_f$ on the floor: positive
+where the flow near the floor moves downstream, negative inside the bubble.
+Where it crosses zero after the step, the flow reattaches: that point is
+the ``reattachment length'' of the test. Both curves cross at the same
+place. (The narrow grey spike near $x/h\approx1.4$ exists only in the
+\code{simpleFoam} run, which never reached its residual target.)
+
+\cffigure{fields_T2_U}{T2 backward-facing step: speed with streamlines,
+coupledFoam (top), simpleFoam (middle), difference (bottom).}{fig:fldTtwoU}
+\cffigure{fields_T2_p}{T2 backward-facing step: pressure coefficient and
+difference.}{fig:fldTtwoP}
+\cffigure{profiles_T2}{T2: velocity profiles (top) and skin friction on the
+floor (bottom).}{fig:prTtwo}
+
+\clearpage
+\paragraph{T3, the airfoil: where the pictures show a problem.} Here the
+pictures are more useful than the table. With the GEKO turbulence model the
+flow around the airfoil looks the same in both solvers, but the surface
+pressure (Figure~\ref{fig:prTthreegeko}) differs near the front of the upper
+side: coupledFoam produces a higher suction peak. The upper curve is the
+suction side (it carries the lift), so a difference there means a
+difference in lift, and this is the lift difference that fails the test in
+Table~\ref{tab:validation}. With the SST model the coupledFoam run did not
+converge: above the airfoil it shows a region of large vortices that the
+\code{simpleFoam} solution does not have, and the difference panel is
+coloured almost everywhere. These pictures show the current state of the
+test records, not a solved problem.
+
+\paragraph{How to read the airfoil pressure plot.} The horizontal axis runs
+along the chord from the nose ($x/c=0$) to the tail ($x/c=1$). The vertical
+axis is $-C_p$, drawn upside down on purpose, so that suction points up.
+The upper curve is the upper (suction) side, the lower curve the lower
+(pressure) side; the area between them is proportional to the lift.
+
+\cffigure{fields_T3_GEKO_U}{T3 airfoil, GEKO: speed with streamlines around
+the airfoil, coupledFoam (top), simpleFoam (middle), difference
+(bottom).}{fig:fldTthreegekoU}
+\cffigure{fields_T3_GEKO_p}{T3 airfoil, GEKO: pressure coefficient and
+difference.}{fig:fldTthreegekoP}
+\cffigure{profiles_T3_GEKO}{T3 airfoil, GEKO: surface pressure along the
+chord.}{fig:prTthreegeko}
+\cffigure{fields_T3_kOmegaSST_U}{T3 airfoil, SST: speed with streamlines;
+the coupledFoam run did not converge.}{fig:fldTthreesstU}
+\cffigure{profiles_T3_kOmegaSST}{T3 airfoil, SST: surface pressure along
+the chord.}{fig:prTthreesst}
+
+\clearpage
+\paragraph{T4 and T5: 3D pictures.} For the motorbike and the Ahmed body
+the pictures are rendered with ParaView. The first picture shows the body
+with the surface mesh drawn on it: every small polygon is the face of one
+cell touching the body, so you can see where the mesh generator placed fine
+and coarse cells. The slice pictures cut the flow with two flat planes, a
+vertical one through the middle of the body (side view) and a horizontal
+one at 20\,\% of the body height (top view); the body itself is drawn in
+grey. The left column is \code{simpleFoam}, the right column coupledFoam;
+a grey panel saying ``results pending'' means that run has not finished
+yet, and the picture fills in automatically when the report is regenerated.
+The colour ranges are fixed (speed from 0 to 1.3 times the free-stream
+speed, $C_p$ from $-1.5$ to 1), so pictures of different runs can be
+compared directly. The dark band behind the body is the wake, the slow
+region the body leaves behind. The wake of these bodies keeps moving from
+iteration to iteration, even in \code{simpleFoam}, so the fair comparison is
+between the \emph{averaged} fields; the last picture of each case shows the
+size of the difference of the averages (black: no difference, bright: up
+to 20\,\% of the free-stream speed) and the difference of the averaged
+surface pressure.
+
+\cffigure{render_T4a_geometry}{T4a motorbike (coarse mesh): body surface
+mesh.}{fig:rTfouraGeo}
+\cffigure{render_T4a_slice_U}{T4a: speed on the vertical mid-plane (top)
+and the horizontal plane (bottom), simpleFoam (left) and coupledFoam
+(right).}{fig:rTfouraU}
+\cffigure{render_T4a_surface_Cp}{T4a: pressure coefficient on the
+body.}{fig:rTfouraCp}
+\cffigure{render_T4a_delta}{T4a: difference of the averaged fields,
+both planes and the body.}{fig:rTfouraDelta}
+\clearpage
+\cffigure{render_T4b_geometry}{T4b motorbike (fine mesh): body surface
+mesh.}{fig:rTfourbGeo}
+\cffigure{render_T4b_slice_U}{T4b: speed on the vertical mid-plane (top)
+and the horizontal plane (bottom), simpleFoam (left) and coupledFoam
+(right).}{fig:rTfourbU}
+\cffigure{render_T4b_slice_p}{T4b: pressure coefficient on the two
+planes.}{fig:rTfourbP}
+\cffigure{render_T4b_surface_Cp}{T4b: pressure coefficient on the body:
+red is high pressure (the flow runs into the surface), blue is
+suction.}{fig:rTfourbCp}
+\cffigure{render_T4b_delta}{T4b: difference of the averaged fields,
+both planes and the body.}{fig:rTfourbDelta}
+\clearpage
+\cffigure{render_T5_slice_U}{T5 Ahmed body: speed on the two planes, both
+solvers.}{fig:rTfiveU}
+\cffigure{render_T5_delta}{T5: difference of the averaged
+fields.}{fig:rTfiveDelta}
+\clearpage
+
 % =============================================================================
 \section{Performance: is it faster?}\label{sec:perf}
 % =============================================================================
@@ -1964,6 +2136,69 @@ iterations and wall time.}{fig:anderson}
 \paragraph{Anderson (Figure~\ref{fig:anderson}).} Pairs of bars, off and on,
 for iterations (left) and wall time (right). Anderson is worth its memory
 only if the right panel shows a clear gain.
+
+\clearpage
+\subsection{Speed on the test cases: time, not iterations}\label{sec:speedtests}
+
+The benchmark above is the careful measurement. The test runs give a first
+look already now: single runs on one core of a shared machine, so treat
+the numbers as indicative.\pro{Speed-up measured on the test runs} Each
+solver stops at its own test criterion, and the two residuals are
+normalised differently (Section~\ref{sec:residual}), so the picture to
+trust is the one with \emph{time} on the horizontal axis.
+
+\cffigure{speed_residual_wall}{Residual against wall-clock time, both
+solvers on the same axes.}{fig:speedres}
+
+\paragraph{How to read Figure~\ref{fig:speedres}.} One small plot per case.
+The vertical axis is the residual (``how wrong is the current answer''), on
+a log scale: each grid step down means ten times smaller. The horizontal
+axis is the time on the clock since the start. Blue is coupledFoam, grey
+\code{simpleFoam} (solid: pressure, dashed: velocity). The solver whose
+curve reaches the bottom further \emph{left} is the faster one. Do not
+compare the heights of the two curves at the same moment, only how quickly
+each one falls.
+
+\cffigure{speed_time_to_conv}{Wall-clock time and CPU-hours to convergence
+with the speed-up factors.}{fig:speedconv}
+
+\paragraph{How to read Figure~\ref{fig:speedconv}.} Left: seconds on the
+clock until each solver was done; right: the same as CPU-hours, i.e.\ the
+computing time of all cores added up (the unit you pay for on a cluster).
+Here every run used one core, so the two panels look alike. The number
+above each pair is the speed-up: \code{simpleFoam} time divided by
+coupledFoam time. On the cavity at $Re=100$ coupledFoam was
+\cfnum{SpeedWallTZeroReOneZeroZero} times faster, on T1
+\cfnum{SpeedWallTOne} times (\cfnum{SpeedWallCfTOne}\,s instead of
+\cfnum{SpeedWallSfTOne}\,s). A hatched bar means that run never reached its
+criterion; the bar is then the whole run, and a speed-up written as
+``$\geq$'' is a lower bound (T2: \code{simpleFoam} had not converged after
+\cfnum{SpeedItersSfTTwo} iterations). ``not conv.'' marks T3, where
+coupledFoam did not converge either.
+
+\cffigure{speed_iteration_cost}{What one outer iteration costs.}{fig:speediter}
+
+\paragraph{How to read Figure~\ref{fig:speediter}.} Left: what a coupledFoam
+iteration spends its time on, as shares of one bar. Dark blue, solving the
+big coupled system, dominates in most cases (\cfnum{SpeedSolveShareTTwo}\,\%
+on T2); this is why so much of this project is about the linear solver.
+Right: the time of one iteration of each solver (log scale) and how many
+times more expensive a coupled iteration is (\cfnum{SpeedIterCostRatioTTwo}
+times on T2).
+
+\cffigure{speed_tradeoff}{The trade-off: fewer but more expensive
+iterations.}{fig:speedtrade}
+
+\paragraph{How to read Figure~\ref{fig:speedtrade}.} Every case appears
+twice: a grey dot for \code{simpleFoam} and a blue square for coupledFoam,
+joined by an arrow. Right means more iterations, up means more time. The
+thin diagonal lines are ``same cost per iteration'' lines: moving along one
+changes only the number of iterations. The arrows point far to the left
+(coupledFoam needs many fewer iterations) and jump to a higher diagonal
+(each iteration is more expensive). Whether the solver wins is simply
+whether the arrow ends lower than it started: pointing down-left is a win,
+pointing up is a loss. This is the fair comparison of
+Section~\ref{sec:fair} in one picture.
 
 % =============================================================================
 \section{What this means for the F1 half-car}\label{sec:f1}

@@ -52,13 +52,17 @@
     \rule{0pt}{1.5ex}}}\par}
 
 % \cffigure[width]{file stem}{caption}{label}
+% (figures/<stem>.pdf, else figures/<stem>.png - the ParaView
+% renders -, else the pending box)
 \newcommand{\cffigure}[4][0.95]{%
   \begin{figure}[tbp]
     \centering
     \IfFileExists{figures/#2.pdf}%
       {\includegraphics[width=#1\linewidth]{figures/#2.pdf}}%
-      {\pending{Figure \texttt{figures/\detokenize{#2}.pdf} is written by
-        \texttt{bench/make\_report.py} once its data exist.}}
+      {\IfFileExists{figures/#2.png}%
+        {\includegraphics[width=#1\linewidth]{figures/#2.png}}%
+        {\pending{Figure \texttt{figures/\detokenize{#2}} is written by
+          \texttt{bench/make\_report.py} once its data exist.}}}
     \caption{#3}\label{#4}
   \end{figure}}
 
@@ -1227,6 +1231,162 @@ their relative differences.}{tab:validation}
 \cffigure{remediation_history}{Remediation set sizes and rollbacks over the
 iterations for T4 and T5.}{fig:remediation}
 
+
+\clearpage
+\subsection{Flow fields}\label{sec:flowfields}
+
+Integral quantities can agree through a compensation of errors, so the
+converged fields of the two solvers are also compared directly. For every
+2D case with a coupledFoam run and a \code{simpleFoam} reference on the same
+mesh, the figures of this section show the velocity magnitude
+$|\Uv|/U_{ref}$ with streamlines and the pressure coefficient
+$C_p=(p-p_0)/(\tfrac12U_{ref}^2)$ of both solvers on one colour scale, and
+the pointwise difference coupledFoam$-$\code{simpleFoam} on a diverging
+colour scale. The fields are read from the latest time directory of each
+run with the OpenFOAM reader of VTK, interpolated to the mesh points and cut
+at mid-depth (\code{bench/plot\_fields2d.py}); the meshes are identical, so
+the difference is evaluated node by node, and the quoted RMS is weighted
+with the area. $U_{ref}$ is the lid speed (T0), the inlet speed (T1:
+\SI{10}{m/s}, T2: \SI{44.2}{m/s}) or the free-stream speed (T3:
+\SI{26}{m/s}); $p_0$ is the outlet pressure, except in the closed cavity,
+where the area-weighted mean pressure is removed from both fields.
+
+\paragraph{T0.} The velocity differences are at the level of the converged
+profile differences: RMS \cfnum{FldTZeroReOneZeroZeroURms} at $Re=100$ and
+\cfnum{FldTZeroReOneZeroZeroZeroURms} at $Re=1000$
+(Figures~\ref{fig:fldTzeroU}--\ref{fig:fldTzerothousandP}). The largest
+differences sit in the two upper corners, where the moving lid meets the
+walls: the pressure is singular there and both solutions are least
+resolved.
+
+\cffigure{fields_T0_Re100_U}{T0, $Re=100$: $|\Uv|/U_{lid}$ with streamlines,
+coupledFoam (left) and simpleFoam (middle) on one colour scale, and the
+difference (right).}{fig:fldTzeroU}
+\cffigure{fields_T0_Re100_p}{T0, $Re=100$: pressure coefficient (mean
+removed) of both solvers and the difference.}{fig:fldTzeroP}
+\cffigure{fields_T0_Re1000_U}{T0, $Re=1000$: $|\Uv|/U_{lid}$ with
+streamlines and the difference.}{fig:fldTzerothousandU}
+\cffigure{fields_T0_Re1000_p}{T0, $Re=1000$: pressure coefficient and the
+difference.}{fig:fldTzerothousandP}
+
+\clearpage
+\paragraph{T1.} The recirculation behind the step, its length and the
+velocity profiles coincide (Figures~\ref{fig:fldToneU}--\ref{fig:prTone});
+the RMS differences are \cfnum{FldTOneURms} in $|\Uv|/U_{ref}$ and
+\cfnum{FldTOnePRms} in $C_p$, consistent with the pressure-drop difference
+of Table~\ref{tab:validation}.
+
+\cffigure{fields_T1_U}{T1 pitzDaily: $|\Uv|/U_{ref}$ with streamlines,
+coupledFoam (top), simpleFoam (middle), difference (bottom).}{fig:fldToneU}
+\cffigure{fields_T1_p}{T1 pitzDaily: pressure coefficient and the
+difference.}{fig:fldToneP}
+\cffigure{profiles_T1}{T1 pitzDaily: streamwise velocity profiles at the
+stations $x/h$ downstream of the step ($h$ step height), simpleFoam thick
+grey, coupledFoam dashed blue.}{fig:prTone}
+
+\clearpage
+\paragraph{T2.} Separation at the step corner, the recirculation bubble and
+the recovery agree (Figures~\ref{fig:fldTtwoU}--\ref{fig:prTtwo}); the RMS
+difference in $|\Uv|/U_{ref}$ is \cfnum{FldTTwoURms}, the maximum
+(\cfnum{FldTTwoUMax}) sits in the thin shear layer leaving the step corner.
+The lower-wall skin friction crosses zero at the same point, which is the
+reattachment-length test. The \code{simpleFoam} skin friction has a narrow
+spike near $x/h\approx1.4$ that coupledFoam does not have; the
+\code{simpleFoam} run did not reach the residual target in 20\,000
+iterations (Table~\ref{tab:tests}), so the spike is not interpreted
+further.
+
+\cffigure{fields_T2_U}{T2 backward-facing step: $|\Uv|/U_{ref}$ with
+streamlines, coupledFoam (top), simpleFoam (middle), difference
+(bottom).}{fig:fldTtwoU}
+\cffigure{fields_T2_p}{T2 backward-facing step: pressure coefficient and
+the difference.}{fig:fldTtwoP}
+\cffigure{profiles_T2}{T2 backward-facing step: velocity profiles at the
+stations $x/h$ (top) and lower-wall skin friction $C_f$ (bottom); the zero
+crossing downstream of the step is the reattachment point.}{fig:prTtwo}
+
+\clearpage
+\paragraph{T3.} With GEKO the fields agree away from the airfoil (RMS
+\cfnum{FldTThreeGEKOURms} in $|\Uv|/U_{ref}$), but the suction peak of
+coupledFoam is higher and the suction-side pressure plateau near
+$x/c\approx0.1$--$0.2$ is missing (Figure~\ref{fig:prTthreegeko}); this is
+the source of the lift difference of Table~\ref{tab:validation}. With SST
+the coupledFoam run of the test record did not converge (3000 iterations,
+Table~\ref{tab:tests}); its field shows a large separated region with
+vortices above the suction side that the \code{simpleFoam} solution does not
+have (Figure~\ref{fig:fldTthreesstU}; RMS difference
+\cfnum{FldTThreeKOmegaSSTURms}). The figures show the state of the test
+records at the time of writing, not a converged comparison.
+
+\cffigure{fields_T3_GEKO_U}{T3 airFoil2D, GEKO: $|\Uv|/U_\infty$ with
+streamlines around the airfoil, coupledFoam (top), simpleFoam (middle),
+difference (bottom).}{fig:fldTthreegekoU}
+\cffigure{fields_T3_GEKO_p}{T3 airFoil2D, GEKO: pressure coefficient and
+the difference.}{fig:fldTthreegekoP}
+\cffigure{profiles_T3_GEKO}{T3 airFoil2D, GEKO: surface pressure
+coefficient $-C_p$ over the chord.}{fig:prTthreegeko}
+\cffigure{fields_T3_kOmegaSST_U}{T3 airFoil2D, SST: $|\Uv|/U_\infty$ with
+streamlines; the coupledFoam run of this record did not
+converge.}{fig:fldTthreesstU}
+\cffigure{fields_T3_kOmegaSST_p}{T3 airFoil2D, SST: pressure coefficient
+and the difference.}{fig:fldTthreesstP}
+\cffigure{profiles_T3_kOmegaSST}{T3 airFoil2D, SST: surface pressure
+coefficient.}{fig:prTthreesst}
+
+\clearpage
+\paragraph{T4 and T5 (3D).} The 3D cases are rendered with ParaView
+(\code{bench/render\_fields.py}, \code{pvbatch}, decomposed cases read in
+place): the body surface mesh, $|\Uv|/U_\infty$ and $C_p$ on the vertical
+mid-plane $y=y_c$ and on a horizontal plane at 20\,\% of the body height,
+and $C_p$ on the body, each for \code{simpleFoam} and coupledFoam with
+fixed colour ranges ($|\Uv|/U_\infty\in[0,1.3]$, $C_p\in[-1.5,1]$,
+identical for both solvers). Because the wake does not settle
+(D-042), the decisive comparison is between the window-mean fields
+\code{UMean}, \code{pMean} and their differences written by
+\code{coupledFieldCompare} ($|\Delta\Uv_{mean}|/U_\infty\in[0,0.2]$,
+$\Delta C_{p,mean}\in[-0.2,0.2]$). Panels whose run has not finished are
+drawn as ``results pending''.
+
+\cffigure{render_T4a_geometry}{T4a motorBike, 354\,k cells: body surface
+mesh.}{fig:rTfouraGeo}
+\cffigure{render_T4a_slice_U}{T4a: $|\Uv|/U_\infty$ on the mid-plane (top)
+and the horizontal plane (bottom), simpleFoam (left) and coupledFoam
+(right).}{fig:rTfouraU}
+\cffigure{render_T4a_slice_p}{T4a: $C_p$ on the mid-plane and the horizontal
+plane.}{fig:rTfouraP}
+\cffigure{render_T4a_surface_Cp}{T4a: surface $C_p$ on the
+body.}{fig:rTfouraCp}
+\cffigure{render_T4a_mean_U}{T4a: window-mean velocity magnitude on the
+mid-plane, both solvers.}{fig:rTfouraMean}
+\cffigure{render_T4a_delta}{T4a: mean-field differences: $|\Delta
+\Uv_{mean}|/U_\infty$ on both planes (top) and $\Delta C_{p,mean}$ on the
+body (bottom).}{fig:rTfouraDelta}
+\clearpage
+\cffigure{render_T4b_geometry}{T4b motorBike, 1.70\,M cells: body surface
+mesh.}{fig:rTfourbGeo}
+\cffigure{render_T4b_slice_U}{T4b: $|\Uv|/U_\infty$ on the mid-plane (top)
+and the horizontal plane (bottom), simpleFoam (left) and coupledFoam
+(right).}{fig:rTfourbU}
+\cffigure{render_T4b_slice_p}{T4b: $C_p$ on the mid-plane and the horizontal
+plane.}{fig:rTfourbP}
+\cffigure{render_T4b_surface_Cp}{T4b: surface $C_p$ on the
+body.}{fig:rTfourbCp}
+\cffigure{render_T4b_mean_U}{T4b: window-mean velocity magnitude on the
+mid-plane, both solvers.}{fig:rTfourbMean}
+\cffigure{render_T4b_delta}{T4b: mean-field differences: $|\Delta
+\Uv_{mean}|/U_\infty$ on both planes (top) and $\Delta C_{p,mean}$ on the
+body (bottom).}{fig:rTfourbDelta}
+\clearpage
+\cffigure{render_T5_geometry}{T5 Ahmed body: body surface
+mesh.}{fig:rTfiveGeo}
+\cffigure{render_T5_slice_U}{T5: $|\Uv|/U_\infty$ on the mid-plane and the
+horizontal plane, both solvers.}{fig:rTfiveU}
+\cffigure{render_T5_surface_Cp}{T5: surface $C_p$ on the
+body.}{fig:rTfiveCp}
+\cffigure{render_T5_delta}{T5: mean-field differences on both planes and
+on the body.}{fig:rTfiveDelta}
+\clearpage
+
 % =============================================================================
 \section{Performance}\label{sec:perf}
 % =============================================================================
@@ -1428,6 +1588,63 @@ cavity mesh, serial, solved to $10^{-9}$ (D-023).}{fig:cycles}
 
 \cffigure{eta_rho_history}{Eisenstat--Walker forcing term $\eta_n$ and
 preconditioner efficiency $\rho$ with the controller events.}{fig:etarho}
+
+\clearpage
+\subsection{Speed-up measured on the test runs}\label{sec:speedtests}
+
+Until the benchmark matrix has run, the test records give a first
+measurement of the speed-up (single serial runs on the shared machine, not
+benchmark quality; D-007). Each solver is stopped by its own test criterion:
+coupledFoam at the residual target of the test ($R<10^{-8}$ for T0,
+$10^{-5}$ for T1 and T2), \code{simpleFoam} at its \code{residualControl}.
+The residual normalisations differ (Section~\ref{sec:norms}), so the time
+axis, not the residual level, is the comparable quantity; the field
+comparisons of Section~\ref{sec:flowfields} show that both runs end at the
+same solution. Serial runs make CPU-hours and wall-clock time nearly
+proportional; both are reported.
+
+Figure~\ref{fig:speedres} plots the residuals against wall-clock time.
+Figure~\ref{fig:speedconv} gives the time and CPU-hours to convergence:
+coupledFoam is faster by a factor of \cfnum{SpeedWallTZeroReOneZeroZero}
+in wall-clock time (\cfnum{SpeedCpuTZeroReOneZeroZero} in CPU-hours) on T0
+at $Re=100$, \cfnum{SpeedWallTZeroReOneZeroZeroZero}
+(\cfnum{SpeedCpuTZeroReOneZeroZeroZero}) at $Re=1000$ and
+\cfnum{SpeedWallTOne} (\cfnum{SpeedCpuTOne}) on T1
+(\cfnum{SpeedWallCfTOne}\,s against \cfnum{SpeedWallSfTOne}\,s). On T2
+\code{simpleFoam} did not reach the target within
+\cfnum{SpeedItersSfTTwo} iterations, so the factor
+\cfnum{SpeedWallTTwo} (\cfnum{SpeedCpuTTwo} in CPU-hours) is a lower
+bound. On T3 neither solver reached its residual criterion within its
+iteration limit; there the bars compare the run lengths only.
+Figure~\ref{fig:speediter} shows why the iteration count alone is
+misleading: one coupled iteration costs \cfnum{SpeedIterCostRatioTTwo}
+times a \code{simpleFoam} iteration on T2 and
+\cfnum{SpeedIterCostRatioTThreeGEKO} times on T3-GEKO, and the linear
+solve takes \cfnum{SpeedSolveShareTTwo}\,\% (T2) to
+\cfnum{SpeedSolveShareTThreeGEKO}\,\% (T3-GEKO) of the iteration.
+Figure~\ref{fig:speedtrade} places both effects in one picture.
+
+\cffigure{speed_residual_wall}{Residual against wall-clock time (symmetric
+log time axis): coupledFoam combined residual $R$ and simpleFoam initial
+residuals of $p$ and $U_x$. Normalisations differ; the time axis is the
+comparable quantity. Cases whose coupledFoam run is not finished show the
+reference only.}{fig:speedres}
+
+\cffigure{speed_time_to_conv}{Wall-clock time (left) and CPU-hours (right)
+to convergence, simpleFoam and coupledFoam, test records, serial. Numbers:
+speed-up simpleFoam/coupledFoam. Hatched bars: the criterion was not
+reached, the bar is the whole run; $\geq$: lower bound.}{fig:speedconv}
+
+\cffigure{speed_iteration_cost}{Time per outer iteration. Left: share of
+assembly, linear solve and turbulence in a coupledFoam iteration. Right:
+wall time per iteration of both solvers and the cost ratio
+coupledFoam/simpleFoam.}{fig:speediter}
+
+\cffigure{speed_tradeoff}{Iterations against wall-clock time. Each arrow
+leads from simpleFoam to coupledFoam for one case; diagonals are lines of
+constant time per iteration. coupledFoam trades far fewer iterations for
+more expensive ones; it is faster where the arrow points
+down.}{fig:speedtrade}
 
 % =============================================================================
 \section{Discussion and limitations}\label{sec:discussion}

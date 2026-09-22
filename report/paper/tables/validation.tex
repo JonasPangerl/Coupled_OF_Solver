@@ -1,18 +1,20 @@
 \begin{table}[tbp]
 \centering
 \small
-\caption{Validation: integral quantities, coupledFoam vs. simpleFoam on identical meshes and schemes; wake cases T4 and T5 compared by window means (D-042).}
+\caption{Validation: integral quantities, coupledFoam vs. simpleFoam on identical meshes and schemes; wake cases T4 and T5 compared by window means and mean-field deltas (D-042 addendum).}
 \label{tab:validation}
-\begin{tabular}{lrrrrrr}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lrrrrrrr}
 \toprule
-case & quantity & coupledFoam & simpleFoam & rel. diff. & tolerance & pass \\
+case & quantity & coupledFoam & simpleFoam & rel. diff. & tolerance & field RMS dU / dp & pass \\
 \midrule
-T1\_np1 & dp & -5.7287 & -5.7254 & 5.72e-04 & 0.01 & NO \\
-T2\_np1 & x\_r/h & 6.4265 & 6.391 & 5.56e-03 & 0.02 & NO \\
-T3\_kOmegaSST\_np1 & Cd & -0.014659 & 0.090727 & 1.16e+00 & 0.005 & NO \\
-T3\_kOmegaSST\_np1 & Cl & -0.45645 & 0.25267 & 2.81e+00 & 0.005 & NO \\
-T3\_GEKO\_np1 & Cd & 0.032969 & 0.034296 & 3.87e-02 & 0.005 & NO \\
-T3\_GEKO\_np1 & Cl & 0.91365 & 0.83781 & 9.05e-02 & 0.005 & NO \\
+T1\_np1 & dp & -5.7287 & -5.7254 & 5.72e-04 & 0.01 &  & yes \\
+T2\_np1 & x\_r/h & 6.4348 & 6.391 & 6.85e-03 & 0.02 &  & yes \\
+T3\_kOmegaSST\_np1 & Cd & -0.014659 & 0.090727 & 1.16e+00 & 0.005 &  & NO \\
+T3\_kOmegaSST\_np1 & Cl & -0.45645 & 0.25267 & 2.81e+00 & 0.005 &  & NO \\
+T3\_GEKO\_np1 & Cd & 0.032969 & 0.034296 & 3.87e-02 & 0.005 &  & NO \\
+T3\_GEKO\_np1 & Cl & 0.91365 & 0.83781 & 9.05e-02 & 0.005 &  & NO \\
 \bottomrule
 \end{tabular}
+}
 \end{table}

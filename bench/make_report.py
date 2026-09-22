@@ -25,6 +25,7 @@ Usage: bench/make_report.py            (no OpenFOAM environment needed)
 
 from __future__ import annotations
 
+import functools
 import json
 import subprocess
 import sys
@@ -771,6 +772,403 @@ def table_b10(rows: list[dict]) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# speed-up figures from the test records and the run logs
+# --------------------------------------------------------------------------- #
+
+# (label, test record, coupledFoam run dir, simpleFoam reference dir)
+SPEED_CASES = [
+    ("T0 Re100", "T0_Re100_np1", "T0_Re100_np1", "ref_T0_Re100"),
+    ("T0 Re1000", "T0_Re1000_np1", "T0_Re1000_np1", "ref_T0_Re1000"),
+    ("T1", "T1_np1", "T1_np1", "ref_T1"),
+    ("T2", "T2_np1", "T2_np1", "ref_T2"),
+    ("T3 SST", "T3_kOmegaSST_np1", "T3_kOmegaSST_np1", "ref_T3_kOmegaSST"),
+    ("T3 GEKO", "T3_GEKO_np1", "T3_GEKO_np1", "ref_T3_GEKO"),
+    ("T4a", "T4a_np10", "T4a_np10", "ref_T4a_np10"),
+    ("T4b", "T4b_np10", "T4b_np10", "ref_T4b_np10"),
+    ("T5", "T5_np10", "T5_np10", "ref_T5_np10"),
+]
+BUSY_MINUTES = 10.0   # a log written less than this ago belongs to a live run
+_RES_LINE = logs._RES
+_EXEC_LINE = logs._EXEC
+
+
+def _busy(case: Path) -> bool:
+    import time  # noqa: PLC0415
+    return any(time.time() - f.stat().st_mtime < BUSY_MINUTES * 60
+               for f in case.glob("log.*"))
+
+
+@functools.lru_cache(maxsize=None)
+def cf_timeline(case: Path) -> dict | None:
+    """coupledFoam per-iteration R, tAsm/tSolve/tTurb and the wall time axis
+    (cumulative tIter, scaled so that its end equals the solver wall time of
+    postProcessing/coupledFoam/summary.json when it exists)."""
+    log = case / "log.coupledFoam"
+    if not log.exists() or _busy(case):
+        return None
+    rows = [r for r in logs.parse_cf(log) if "R" in r and "tIter" in r]
+    if not rows:
+        return None
+    t = np.cumsum([r["tIter"] for r in rows])
+    summ = logs.coupled_summary(case)
+    if not summ:
+        return None      # unfinished or aborted run: no summary.json
+    wall = summ.get("wallSeconds")
+    if wall and t[-1] > 0:
+        t = t * (wall / t[-1])
+    return {
+        "iter": np.array([r["iter"] for r in rows]),
+        "R": np.array([r["R"] for r in rows]),
+        "t": t,
+        "tAsm": np.array([r.get("tAsm", np.nan) for r in rows]),
+        "tSolve": np.array([r.get("tSolve", np.nan) for r in rows]),
+        "tTurb": np.array([r.get("tTurb", np.nan) for r in rows]),
+        "tIter": np.array([r["tIter"] for r in rows]),
+        "summary": summ,
+    }
+
+
+@functools.lru_cache(maxsize=None)
+def sf_timeline(case: Path) -> dict | None:
+    """simpleFoam per-iteration initial residuals (first solve of each field)
+    and the wall time axis: ExecutionTime per iteration, scaled so that its
+    end equals the final ClockTime (ClockTime itself is in whole seconds)."""
+    log = case / "log.simpleFoam"
+    if not log.exists() or _busy(case):
+        return None
+    res: dict[str, list[float]] = {}
+    ex, clk = [], []
+    seen: set[str] = set()
+    with open(log, errors="replace") as fh:
+        for line in fh:
+            if line.startswith("Time = "):
+                seen = set()
+                continue
+            m = _RES_LINE.match(line)
+            if m:
+                f = m.group(2)
+                if f not in seen:
+                    res.setdefault(f, []).append(float(m.group(3)))
+                    seen.add(f)
+                continue
+            m = _EXEC_LINE.search(line)
+            if m:
+                ex.append(float(m.group(1)))
+                clk.append(float(m.group(2)))
+    if not ex:
+        return None
+    t = np.array(ex)
+    if clk[-1] > 0 and t[-1] > 0:
+        t = t * (clk[-1] / t[-1])
+    n = len(t)
+    return {"t": t, "res": {k: np.array(v[:n]) for k, v in res.items()},
+            "n": n}
+
+
+def _speed_record(tests: dict, rec: str, cfd: str, sfd: str) -> dict | None:
+    """Wall time and CPU-hours to convergence of both solvers for one case,
+    with flags for 'did not reach the criterion' (then: whole run, a lower
+    bound for the time to convergence)."""
+    d = tests.get(rec)
+    if not d:
+        return None
+    ref = d.get("reference") or {}
+    n_cf = d.get("iterations")
+    it_cf = d.get("iterationsToR") or d.get("iterationsToR_coupled")
+    wall_cf_run = d.get("wallSecondsSolver") or d.get("wallSeconds")
+    cpu_cf_run = d.get("cpuHoursSolver") or d.get("cpuHours")
+    if not (n_cf and wall_cf_run and cpu_cf_run):
+        return None
+    # records without an iteration count to the residual target (T3: the
+    # residual target was not reached in the 3000 iterations) count as not
+    # converged; the bar is then the whole run
+    conv_cf = bool(it_cf)
+    cft = cf_timeline(RUN / cfd)
+    if conv_cf and cft is not None and it_cf <= len(cft["t"]):
+        frac = cft["t"][it_cf - 1] / cft["t"][-1]
+    elif conv_cf:
+        frac = it_cf / n_cf
+    else:
+        frac = 1.0
+    it_sf = ref.get("convergedAt")
+    n_sf = ref.get("iterations")
+    conv_sf = it_sf is not None
+    ta = ref.get("timingAllrun") or {}
+    wall_sf = ref.get("wallSecondsSolver") or ref.get("wallSeconds") \
+        or ta.get("wallSeconds")
+    cpu_sf = ta.get("cpuHours") or ref.get("cpuHours")
+    nproc_sf = ref.get("nProcs") or 1
+    if cpu_sf is None and wall_sf:
+        cpu_sf = wall_sf * nproc_sf / 3600.0   # serial reference: CPU = wall
+    if not wall_sf:
+        return None
+    return {
+        "wall_cf": wall_cf_run * frac, "cpu_cf": cpu_cf_run * frac,
+        "it_cf": it_cf if conv_cf else n_cf, "conv_cf": conv_cf,
+        "wall_sf": wall_sf, "cpu_sf": cpu_sf,
+        "it_sf": it_sf if conv_sf else n_sf, "conv_sf": conv_sf,
+        "np_cf": d.get("nProcs") or 1, "np_sf": nproc_sf,
+    }
+
+
+def fig_speed(tests: dict) -> None:
+    """Speed-up section: residual vs wall time, time and CPU-hours to
+    convergence with speed-up factors, time per iteration breakdown and the
+    iterations/cost trade-off."""
+    # ---- (a) residual against wall-clock time
+    avail = []
+    for lab, rec, cfd, sfd in SPEED_CASES:
+        cft, sft = cf_timeline(RUN / cfd), sf_timeline(RUN / sfd)
+        if cft is not None or sft is not None:
+            avail.append((lab, rec, cft, sft))
+        elif (RUN / cfd).is_dir() and _busy(RUN / cfd):
+            notes.append(f"speed-up: {lab} is running, skipped")
+    if avail:
+        ncol = 3
+        nrow = int(np.ceil(len(avail) / ncol))
+        fig, axs = plt.subplots(nrow, ncol, figsize=(6.5, 2.1 * nrow),
+                                squeeze=False)
+        for ax, (lab, rec, cft, sft) in zip(axs.flat, avail):
+            if sft is not None:
+                for f, ls in (("p", "-"), ("Ux", "--")):
+                    r = sft["res"].get(f)
+                    if r is not None and len(r):
+                        ax.semilogy(sft["t"][:len(r)], r, color=C_NATIVE,
+                                    ls=ls, lw=0.8,
+                                    label=f"simpleFoam {f}")
+            if cft is not None:
+                ax.semilogy(cft["t"], cft["R"], color=C_COUPLED, lw=1.1,
+                            label="coupledFoam $R$")
+            else:
+                ax.text(0.5, 0.5, "coupledFoam\npending", ha="center",
+                        va="center", transform=ax.transAxes, fontsize=7,
+                        color=C_COUPLED)
+            ax.set_xscale("symlog", linthresh=1.0)
+            ax.set_title(lab, fontsize=8)
+            ax.set_xlabel("wall-clock time [s]", fontsize=7)
+            ax.tick_params(labelsize=6)
+        for ax in list(axs.flat)[len(avail):]:
+            ax.axis("off")
+        for r in range(nrow):
+            axs[r, 0].set_ylabel("residual", fontsize=7)
+        axs.flat[0].legend(fontsize=6, loc="lower left")
+        save(fig, "speed_residual_wall",
+             "Residual against wall-clock time on the same axes: "
+             "coupledFoam combined residual $R$ (blue) and simpleFoam "
+             "initial residuals of $p$ and $U_x$ (grey). The two residual "
+             "normalisations differ (Section 3.2); the time axis is the "
+             "comparable quantity.")
+
+    # ---- (b) wall time and CPU-hours to convergence with speed-ups
+    recs = [(lab, _speed_record(tests, rec, cfd, sfd))
+            for lab, rec, cfd, sfd in SPEED_CASES]
+    recs = [(lab, r) for lab, r in recs if r]
+    if recs:
+        fig, axs = plt.subplots(1, 2, figsize=(6.5, 3.0))
+        x = np.arange(len(recs))
+        w = 0.38
+        for ax, key, ylab in ((axs[0], "wall", "wall-clock time [s]"),
+                              (axs[1], "cpu", "CPU time [CPU-h]")):
+            for j, (s, col, name) in enumerate((("sf", C_NATIVE, "simpleFoam"),
+                                                ("cf", C_COUPLED, "coupledFoam"))):
+                vals = [r[f"{key}_{s}"] for _, r in recs]
+                hatch = ["" if r[f"conv_{s}"] else "////" for _, r in recs]
+                bars = ax.bar(x + (j - 0.5) * w, vals, w, color=col,
+                              label=name, edgecolor="white", linewidth=0.5)
+                for b, h in zip(bars, hatch):
+                    b.set_hatch(h)
+            for i, (_, r) in enumerate(recs):
+                a, b = r[f"{key}_sf"], r[f"{key}_cf"]
+                if not r["conv_cf"]:
+                    txt = "not conv."
+                else:
+                    txt = f"{'≥' if not r['conv_sf'] else ''}{a / b:.1f}×"
+                ax.text(i, max(a, b) * 1.25, txt, ha="center", va="bottom",
+                        fontsize=6)
+            ax.set_yscale("log")
+            ax.set_xticks(x)
+            ax.set_xticklabels([lab for lab, _ in recs], fontsize=6,
+                               rotation=30)
+            ax.set_ylabel(ylab, fontsize=7)
+            ax.tick_params(labelsize=6)
+            lo, hi = ax.get_ylim()
+            ax.set_ylim(lo, hi * 3)
+        axs[0].legend(fontsize=6, loc="upper left")
+        save(fig, "speed_time_to_conv",
+             "Wall-clock time (left) and CPU-hours (right) to convergence, "
+             "simpleFoam (grey) and coupledFoam (blue), serial runs; "
+             "numbers: speed-up simpleFoam/coupledFoam. Hatched: the run "
+             "did not reach its criterion, the bar is the whole run "
+             "(for simpleFoam a lower bound, so the speed-up is marked "
+             "$\\geq$).")
+        for lab, r in recs:
+            k = lab.replace(" ", "")
+            if r["conv_cf"]:
+                num(f"speed wall {k}", r["wall_sf"] / r["wall_cf"], "{:.1f}")
+                num(f"speed cpu {k}", r["cpu_sf"] / r["cpu_cf"], "{:.1f}")
+            num(f"speed wall cf {k}", r["wall_cf"], "{:.4g}")
+            num(f"speed wall sf {k}", r["wall_sf"], "{:.4g}")
+            num(f"speed cpuh cf {k}", r["cpu_cf"], "{:.2g}")
+            num(f"speed cpuh sf {k}", r["cpu_sf"], "{:.2g}")
+            num(f"speed iters cf {k}", r["it_cf"], "{}")
+            num(f"speed iters sf {k}", r["it_sf"], "{}")
+
+    # ---- (c) time per outer iteration: breakdown and cost vs simpleFoam
+    br = []
+    for lab, rec, cfd, sfd in SPEED_CASES:
+        cft = cf_timeline(RUN / cfd)
+        sft = sf_timeline(RUN / sfd)
+        if cft is None:
+            continue
+        per_sf = (sft["t"][-1] / sft["n"]) if sft and sft["n"] else None
+        br.append((lab, np.nanmean(cft["tAsm"]), np.nanmean(cft["tSolve"]),
+                   np.nanmean(cft["tTurb"]), np.nanmean(cft["tIter"]), per_sf))
+    if br:
+        fig, axs = plt.subplots(1, 2, figsize=(6.5, 2.7))
+        x = np.arange(len(br))
+        a = np.array([b[1] for b in br])
+        s = np.array([b[2] for b in br])
+        t = np.array([b[3] for b in br])
+        tot = np.array([b[4] for b in br])
+        other = np.clip(tot - a - s - t, 0, None)
+        axs[0].bar(x, a / tot, color="#9ecae1", label="assembly $t_{asm}$",
+                   edgecolor="white", linewidth=0.5)
+        axs[0].bar(x, s / tot, bottom=a / tot, color=C_COUPLED,
+                   label="linear solve $t_{solve}$", edgecolor="white",
+                   linewidth=0.5)
+        axs[0].bar(x, t / tot, bottom=(a + s) / tot, color="#fdae6b",
+                   label="turbulence $t_{turb}$", edgecolor="white",
+                   linewidth=0.5)
+        axs[0].bar(x, other / tot, bottom=(a + s + t) / tot, color="#d9d9d9",
+                   label="other", edgecolor="white", linewidth=0.5)
+        axs[0].set_ylabel("share of the iteration time", fontsize=7)
+        axs[0].set_ylim(0, 1.0)
+        axs[0].legend(fontsize=6, loc="upper center",
+                      bbox_to_anchor=(0.5, -0.25), ncol=2)
+        w = 0.38
+        per_sf = np.array([b[5] if b[5] else np.nan for b in br])
+        axs[1].bar(x - w / 2, per_sf, w, color=C_NATIVE, label="simpleFoam")
+        axs[1].bar(x + w / 2, tot, w, color=C_COUPLED, label="coupledFoam")
+        for i in range(len(br)):
+            if np.isfinite(per_sf[i]) and per_sf[i] > 0:
+                axs[1].text(i, max(per_sf[i], tot[i]) * 1.3,
+                            f"{tot[i] / per_sf[i]:.1f}×", ha="center",
+                            fontsize=6)
+        axs[1].set_yscale("log")
+        lo, hi = axs[1].get_ylim()
+        axs[1].set_ylim(lo, hi * 3)
+        axs[1].set_ylabel("wall time per outer iteration [s]", fontsize=7)
+        axs[1].legend(fontsize=6, loc="upper left")
+        for ax in axs:
+            ax.set_xticks(x)
+            ax.set_xticklabels([b[0] for b in br], fontsize=6, rotation=30)
+            ax.tick_params(labelsize=6)
+        save(fig, "speed_iteration_cost",
+             "coupledFoam time per outer iteration: share of assembly, "
+             "linear solve and turbulence (left, mean over the run); wall "
+             "time per iteration of both solvers with the cost ratio "
+             "coupledFoam/simpleFoam (right).")
+        for b in br:
+            k = b[0].replace(" ", "")
+            num(f"speed iter cost ratio {k}",
+                b[4] / b[5] if b[5] else None, "{:.1f}")
+            num(f"speed solve share {k}", 100 * b[2] / b[4], "{:.0f}")
+
+    # ---- (d) iterations vs wall time trade-off
+    if recs:
+        fig, ax = plt.subplots(figsize=(6.5, 3.2))
+        xs = [r["it_sf"] for _, r in recs] + [r["it_cf"] for _, r in recs]
+        ys = [r["wall_sf"] for _, r in recs] + [r["wall_cf"] for _, r in recs]
+        lx = np.logspace(np.log10(min(xs) / 2), np.log10(max(xs) * 2), 10)
+        ytop = max(ys) * 2
+        for per in (1e-3, 1e-2, 1e-1, 1, 10):
+            ax.plot(lx, per * lx, color="k", lw=0.4, alpha=0.25)
+            # label where the diagonal leaves the plot (right or top edge)
+            xm = min(lx[-1], ytop / per) / 1.15
+            if lx[0] < xm and min(ys) / 2 < per * xm:
+                ax.text(xm, per * xm, f"{per:g} s/it", fontsize=5,
+                        alpha=0.6, ha="right", va="bottom")
+        for lab, r in recs:
+            ax.annotate("", xy=(r["it_cf"], r["wall_cf"]),
+                        xytext=(r["it_sf"], r["wall_sf"]),
+                        arrowprops=dict(arrowstyle="->", color="#9e9e9e",
+                                        lw=0.7))
+            ax.plot(r["it_sf"], r["wall_sf"], "o", color=C_NATIVE, ms=5,
+                    mfc="white" if not r["conv_sf"] else C_NATIVE)
+            ax.plot(r["it_cf"], r["wall_cf"], "s", color=C_COUPLED, ms=5,
+                    mfc="white" if not r["conv_cf"] else C_COUPLED)
+            ax.text(r["it_cf"] * 0.8, r["wall_cf"], lab, fontsize=6,
+                    ha="right", va="center")
+        ax.plot([], [], "o", color=C_NATIVE, label="simpleFoam")
+        ax.plot([], [], "s", color=C_COUPLED, label="coupledFoam")
+        ax.plot([], [], "o", color="k", mfc="white",
+                label="criterion not reached (whole run)")
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_ylim(min(ys) / 2, max(ys) * 2)
+        ax.set_xlim(min(xs) / 2, max(xs) * 2)
+        ax.set_xlabel("outer iterations (to convergence or run length)",
+                      fontsize=7)
+        ax.set_ylabel("wall-clock time [s]", fontsize=7)
+        ax.tick_params(labelsize=6)
+        ax.legend(fontsize=6, loc="upper left")
+        save(fig, "speed_tradeoff",
+             "Iterations against wall-clock time: each arrow goes from "
+             "simpleFoam to coupledFoam for one case. Diagonal lines are "
+             "constant time per iteration; coupledFoam moves far to the "
+             "left (fewer iterations) and up to a more expensive diagonal. "
+             "It is faster where the arrow points down.")
+
+
+def fig_fields() -> None:
+    """2D flow-field comparisons (bench/plot_fields2d.py, always) and the
+    ParaView renders of the 3D cases (bench/render_fields.py, if pvbatch
+    exists and CF_NO_RENDER is not set)."""
+    import os  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+    try:
+        import plot_fields2d  # noqa: PLC0415
+    except ImportError as e:
+        notes.append(f"fields 2D: {e}")
+        return
+    figs, stats, nts = plot_fields2d.run(log=lambda s: print(s, flush=True))
+    notes.extend(nts)
+    for stem, cap in figs:
+        figures_pdf_only.append((stem, cap))
+    for k, v in stats.items():
+        if k.endswith(("_rms", "_max")):
+            num(f"fld {k}", v, "{:.1e}")
+    pv = shutil.which("pvbatch")
+    if os.environ.get("CF_NO_RENDER"):
+        notes.append("3D renders: CF_NO_RENDER set, skipped")
+    elif not pv:
+        notes.append("3D renders: pvbatch not found, skipped (figures keep "
+                     "their previous state or show the placeholder)")
+    else:
+        cmd = ["nice", "-n", "19", pv, "--force-offscreen-rendering",
+               str(REPO / "bench" / "render_fields.py"),
+               "--out", str(FIG_PDF)]
+        try:
+            p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
+                               timeout=3600)
+            # pvbatch may route python output to stderr: scan both
+            for line in (p.stdout + "\n" + p.stderr).splitlines():
+                if line.startswith("wrote"):
+                    print("render:", line)
+            nf = FIG_PDF / "render_fields_notes.json"
+            if nf.exists():
+                for n in json.loads(nf.read_text()):
+                    notes.append("3D renders: " + n)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            notes.append(f"3D renders failed: {e}")
+
+
+# figures written by the helper modules (PDF/PNG in report/paper/figures
+# only, not in report/figures); listed in REPORT.md without an image
+figures_pdf_only: list[tuple[str, str]] = []
+
+
+# --------------------------------------------------------------------------- #
 # exploratory numbers (bench/exploratory_numbers.py)
 # --------------------------------------------------------------------------- #
 
@@ -853,8 +1251,10 @@ def main() -> int:
     levels_md = table_gamg_levels(tests, bench)
     b10_md = table_b10(bench)
     exploratory_numbers()
+    fig_speed(tests)
+    fig_fields()
 
-    t0 = tests.get("T0_Re100_np1", {})
+    t0 =tests.get("T0_Re100_np1", {})
     num("T0 Re100 iterations", t0.get("iterations"), "{}")
     num("T0 Re100 l2u", t0.get("l2rel_u"), "{:.1e}")
     num("T0 Re100 l2v", t0.get("l2rel_v"), "{:.1e}")
@@ -908,6 +1308,11 @@ def main() -> int:
     ]
     for name, cap in figures:
         md += [f"![{name}](figures/{name}.png)", "", f"*{cap}*", ""]
+    for name, cap in figures_pdf_only:
+        md += [f"- `paper/figures/{name}.pdf`: {cap}"]
+    if figures_pdf_only:
+        md += ["", "3D renders (ParaView, `bench/render_fields.py`): "
+               "`paper/figures/render_*.png`.", ""]
     md += ["## Limitations and Phase 2", "",
            "See `DECISIONS.md` and the paper, Section 6.", "",
            "## Reproduction", "",
