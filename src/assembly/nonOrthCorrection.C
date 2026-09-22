@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "nonOrthCorrection.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "PstreamReduceOps.H"
 #include "syncTools.H"
@@ -149,11 +150,12 @@ Foam::nonOrthCorrection::correctionFromGrad
     // static limiter)
     auto limit = [](const scalar lambda, const scalar snf, scalar& cf)
     {
-        // GUARD: denominator >= SMALL, as native limitedSnGrad
+        // GUARD: denominator >= cfVSmall (native limitedSnGrad uses the
+        // precision-dependent small constant, D3)
         const scalar l =
             min
             (
-                lambda*mag(snf)/((1 - lambda)*mag(cf) + SMALL),
+                lambda*mag(snf)/((1 - lambda)*mag(cf) + cfVSmall<scalar>()),
                 scalar(1)
             );
         cf *= l;

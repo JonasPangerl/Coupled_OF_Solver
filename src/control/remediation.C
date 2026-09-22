@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "remediation.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "polyMeshTools.H"
 #include "primitiveMeshTools.H"
@@ -553,7 +554,7 @@ void Foam::remediation::buildStatic()
 
     const scalar cosThreshold = std::cos(degToRad(nonOrthThreshold_));
     // volRatio is min/max <= 1; GUARD: threshold > 0
-    const scalar volRatioMin = 1.0/max(volRatioThreshold_, VSMALL);
+    const scalar volRatioMin = 1.0/max(volRatioThreshold_, cfVSmall<scalar>());
 
     const labelUList& own = mesh_.faceOwner();
     const labelUList& nei = mesh_.faceNeighbour();
@@ -827,7 +828,7 @@ Foam::tmp<Foam::scalarField> Foam::remediation::cflFactor() const
                 f[celli],
                 std::pow
                 (
-                    max(dynamicCflFactor_, VSMALL),
+                    max(dynamicCflFactor_, cfVSmall<scalar>()),
                     scalar(rampLeft_[celli])/scalar(releaseIters_ + 1)
                 )
             );
@@ -860,7 +861,7 @@ Foam::label Foam::remediation::clipIncrement
     const vectorField& Ui = U.primitiveField();
     const scalar lim = cSpike_*Uref;
     // GUARD: omega > 0 (>= omegaMin)
-    const scalar rOmega = 1.0/max(omega, VSMALL);
+    const scalar rOmega = 1.0/max(omega, cfVSmall<scalar>());
 
     label nClipped = 0;
 

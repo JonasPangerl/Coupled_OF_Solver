@@ -8,8 +8,8 @@ Class
 Description
     Physicality line search (spec 7.2).
 
-        omega_U = min_P (1, fU Ustep / max(|dU_P|, VSMALL))
-        omega_p = min_P (1, fp pstep / max(|dp_P|, VSMALL))
+        omega_U = min_P (1, fU Ustep / max(|dU_P|, cfVSmall))
+        omega_p = min_P (1, fp pstep / max(|dp_P|, cfVSmall))
         omega   = min(omega_U, omega_p), global minimum
 
     with the step scale Ustep, pstep = Ustep^2/2 (D-057, below; Ustep = Uref

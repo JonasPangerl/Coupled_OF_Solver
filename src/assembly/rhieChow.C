@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "rhieChow.H"
+#include "coupledConstants.H"
 #include "nonOrthCorrection.H"
 #include "fvcGrad.H"
 #include "calculatedFvPatchFields.H"
@@ -171,7 +172,7 @@ void Foam::rhieChow::updateD
     forAll(Di, celli)
     {
         // GUARD: abar > 0 for a PTC-augmented momentum diagonal; guard anyway
-        Di[celli] = V[celli]/max(abar[celli], VSMALL);
+        Di[celli] = V[celli]/max(abar[celli], cfVSmall<scalar>());
     }
     D_.correctBoundaryConditions();
 
@@ -250,7 +251,7 @@ void Foam::rhieChow::updateD
     forAll(Di, celli)
     {
         // GUARD: abar > 0 for a PTC-augmented momentum diagonal
-        Di[celli] = V[celli]/max(abar[celli], VSMALL);
+        Di[celli] = V[celli]/max(abar[celli], cfVSmall<scalar>());
     }
     D_.correctBoundaryConditions();
 

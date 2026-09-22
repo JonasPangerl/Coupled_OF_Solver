@@ -65,7 +65,7 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
 
     matrix_.residual(r, x, b);
 
-    // GUARD: nf >= SMALL by construction (normFactor adds SMALL)
+    // GUARD: nf >= cfVSmall by construction (normFactor adds cfVSmall)
     perf.initialResidual = doubleReduce::norm2(r, comm)/nf;
     perf.finalResidual = perf.initialResidual;
 

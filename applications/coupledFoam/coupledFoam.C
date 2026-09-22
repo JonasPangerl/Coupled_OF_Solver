@@ -33,6 +33,7 @@ Description
 \*---------------------------------------------------------------------------*/
 
 #include "fvCFD.H"
+#include "coupledConstants.H"
 #include "singlePhaseTransportModel.H"
 #include "turbulentTransportModel.H"
 #include "bound.H"
@@ -381,7 +382,7 @@ int main(int argc, char *argv[])
             if (tD.valid())
             {
                 const scalarField& Dc = tD().primitiveField();
-                scalarField abar(mesh.V()/max(Dc, VSMALL));  // GUARD
+                scalarField abar(mesh.V()/max(Dc, cfVSmall<scalar>()));  // GUARD
                 assembler.rc().updateD(abar, p);
                 if (assembler.rc().tensorial())
                 {
@@ -433,7 +434,7 @@ int main(int argc, char *argv[])
                 reduce(dmax, maxOp<scalar>());
                 reduce(pmax, maxOp<scalar>());
                 // GUARD
-                phiConsistency = dmax/max(pmax, VSMALL);
+                phiConsistency = dmax/max(pmax, cfVSmall<scalar>());
                 Info<< "coupledFoam: restart phi consistency "
                     << phiConsistency << endl;
             }
@@ -742,8 +743,8 @@ int main(int argc, char *argv[])
             }
             reduce(dev, maxOp<scalar>());
             // Uniform on every rank, but different values across ranks
-            vector Umin = (Ui.size() ? U0 : vector::uniform(GREAT));
-            vector Umax = (Ui.size() ? U0 : vector::uniform(-GREAT));
+            vector Umin = (Ui.size() ? U0 : vector::uniform(cfGreat<scalar>()));
+            vector Umax = (Ui.size() ? U0 : vector::uniform(-cfGreat<scalar>()));
             reduce(Umin, minOp<vector>());
             reduce(Umax, maxOp<vector>());
             const bool nonUniform = dev > 0 || mag(Umax - Umin) > 0;
@@ -815,9 +816,9 @@ int main(int argc, char *argv[])
                 std::vector<doubleScalar> dts(std::size_t(rDTV.size()));
                 forAll(rDTV, celli)
                 {
-                    // GUARD: rDeltaTV >= VSMALL by construction (5.4)
+                    // GUARD: rDeltaTV > 0 by construction (5.4)
                     dts[std::size_t(celli)] =
-                        V[celli]/max(rDTV[celli], VSMALL);
+                        V[celli]/max(rDTV[celli], cfVSmall<scalar>());
                 }
                 if (!dts.empty())
                 {
@@ -857,8 +858,8 @@ int main(int argc, char *argv[])
 
             // Eisenstat-Walker inner tolerance (amendment B2)
             {
-                // GUARD: R1 >= VSMALL (9.2)
-                const doubleScalar Rn = Rraw/max((R1 > 0 ? R1 : Rraw), VSMALL);
+                // GUARD: R1 >= cfVSmall (9.2)
+                const doubleScalar Rn = Rraw/max((R1 > 0 ? R1 : Rraw), cfVSmall<doubleScalar>());
                 eta = ew.eta(Rn, startupDone);
                 linSolver->setRelTol(eta);
             }
@@ -1025,12 +1026,12 @@ int main(int argc, char *argv[])
             flushHistory(skipStep ? "skipStep" : "cflCut");
         }
 
-        // GUARD: R1 >= VSMALL before division (9.2)
+        // GUARD: R1 >= cfVSmall before division (9.2)
         if (R1 < 0)
         {
-            R1 = max(Rraw, VSMALL);
+            R1 = max(Rraw, cfVSmall<doubleScalar>());
         }
-        const doubleScalar R = Rraw/max(R1, VSMALL);
+        const doubleScalar R = Rraw/max(R1, cfVSmall<doubleScalar>());
         const label nClamped = returnReduce(assembler.nClamped(), sumOp<label>());
         if (nClamped)
         {
@@ -1417,7 +1418,7 @@ int main(int argc, char *argv[])
             j.add
             (
                 "growth",
-                doubleScalar(ptc.CFL()/max(CFLstart, VSMALL))
+                doubleScalar(ptc.CFL()/max(CFLstart, cfVSmall<doubleScalar>()))
             );
             j.add("strategy", std::string(ptc.strategyName()));
             j.add("hold", ptc.holdRemaining());

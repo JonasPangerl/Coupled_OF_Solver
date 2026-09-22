@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "blockSolver.H"
+#include "coupledConstants.H"
 #include "blockPreconditioner.H"
 #include "doubleReduce.H"
 #include "blockKernels.H"
@@ -232,8 +233,8 @@ Foam::reduceScalar Foam::blockSolver::normFactor
         s += std::abs(toDouble(AxPtr[i])) + std::abs(toDouble(bPtr[i]));
     }
 
-    // GUARD: normFactor >= SMALL (spec 9.2)
-    return doubleReduce::parSum(s, matrix_.comm()) + doubleScalarSMALL;
+    // GUARD: normFactor >= cfVSmall (spec 9.2, D3)
+    return doubleReduce::parSum(s, matrix_.comm()) + cfVSmall<reduceScalar>();
 }
 
 
@@ -256,7 +257,7 @@ Foam::reduceScalar Foam::blockSolver::measureRho
     // GUARD: ||r|| > 0
     return
         doubleReduce::norm2(Az, matrix_.comm())
-       /max(doubleReduce::norm2(r, matrix_.comm()), doubleScalarVSMALL);
+       /max(doubleReduce::norm2(r, matrix_.comm()), cfVSmall<reduceScalar>());
 }
 
 

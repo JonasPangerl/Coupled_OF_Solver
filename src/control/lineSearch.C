@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "lineSearch.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "PstreamReduceOps.H"
 #include "DynamicList.H"
@@ -196,7 +197,7 @@ void Foam::lineSearch::setReference(const volVectorField& U)
     }
 
     // GUARD: a zero reference would make every omega zero
-    Uref_ = max(Umax, VSMALL);
+    Uref_ = max(Umax, cfVSmall<scalar>());
     pref_ = 0.5*sqr(Uref_);
     Ufield0_ = max(Ufield, Ubnd);
     refSet_ = true;
@@ -319,8 +320,8 @@ Foam::doubleScalar Foam::lineSearch::omega(const blockScalarUList& dx) const
         const scalar dp = std::abs(scalar(d[blockP]));
 
         // GUARD: line-search denominators (9.2)
-        om = min(om, doubleScalar(limU/max(dU, VSMALL)));
-        om = min(om, doubleScalar(limp/max(dp, VSMALL)));
+        om = min(om, doubleScalar(limU/max(dU, cfVSmall<scalar>())));
+        om = min(om, doubleScalar(limp/max(dp, cfVSmall<scalar>())));
     }
 
     reduce(om, minOp<doubleScalar>());
@@ -335,8 +336,8 @@ Foam::labelList Foam::lineSearch::offendingCells
 {
     const label nCells = dx.size()/blockDim;
     // GUARD: omegaMin > 0 by construction of the dictionary checks
-    const scalar limU = scalar(fU_*UstepEff_/max(omegaMin_, VSMALL));
-    const scalar limp = scalar(fp_*pstepEff_/max(omegaMin_, VSMALL));
+    const scalar limU = scalar(fU_*UstepEff_/max(omegaMin_, cfVSmall<doubleScalar>()));
+    const scalar limp = scalar(fp_*pstepEff_/max(omegaMin_, cfVSmall<doubleScalar>()));
 
     DynamicList<label> cells;
     for (label celli = 0; celli < nCells; ++celli)

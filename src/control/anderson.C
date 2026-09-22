@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "anderson.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "precisionProfile.H"
 #include "PstreamReduceOps.H"
@@ -310,9 +311,9 @@ Foam::anderson::status Foam::anderson::apply
 
     allocate();
 
-    // GUARD: reference values floored at VSMALL before inversion
-    const doubleScalar sU = 1/static_cast<doubleScalar>(max(Uref, VSMALL));
-    const doubleScalar sP = 1/static_cast<doubleScalar>(max(pref, VSMALL));
+    // GUARD: reference values floored at cfVSmall before inversion
+    const doubleScalar sU = 1/static_cast<doubleScalar>(max(Uref, cfVSmall<scalar>()));
+    const doubleScalar sP = 1/static_cast<doubleScalar>(max(pref, cfVSmall<scalar>()));
 
     // The least-squares norm must be the same for the whole history
     if (hasPrev_ && (sU != sU_ || sP != sP_))
@@ -526,7 +527,7 @@ Foam::doubleScalar Foam::anderson::conditionEstimate() const
         return 0;
     }
     doubleScalar mx = 0;
-    doubleScalar mn = GREAT;
+    doubleScalar mn = cfGreat<doubleScalar>();
     for (label j = 0; j < nHist_; ++j)
     {
         const doubleScalar r = std::fabs(R(j, j));
@@ -534,7 +535,7 @@ Foam::doubleScalar Foam::anderson::conditionEstimate() const
         mn = std::fmin(mn, r);
     }
     // GUARD: accepted columns have R(j, j) > 0 (rank test)
-    return mx/std::fmax(mn, doubleScalarVSMALL);
+    return mx/std::fmax(mn, cfVSmall<doubleScalar>());
 }
 
 

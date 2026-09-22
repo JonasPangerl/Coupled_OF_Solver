@@ -98,7 +98,7 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
     reduceScalar beta = doubleReduce::norm2(r, comm);
     const reduceScalar beta0 = beta;
 
-    perf.initialResidual = beta/nf;  // GUARD: nf >= SMALL
+    perf.initialResidual = beta/nf;  // GUARD: nf >= cfVSmall
     perf.finalResidual = perf.initialResidual;
 
     if (converged(perf.initialResidual, perf.initialResidual, 0))

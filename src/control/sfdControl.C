@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "sfdControl.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "PstreamReduceOps.H"
 #include <cmath>
@@ -108,9 +109,9 @@ void Foam::sfdControl::setReference(const scalar Uref)
         return;
     }
 
-    // GUARD: Uref, Lref > 0 (Uref >= VSMALL from lineSearch)
+    // GUARD: Uref, Lref > 0 (Uref >= cfVSmall from lineSearch)
     chiStar_ = chi_*Uref/Lref_;
-    DeltaStar_ = Delta_*Lref_/max(Uref, VSMALL);
+    DeltaStar_ = Delta_*Lref_/max(Uref, cfVSmall<scalar>());
 
     Info<< "coupledFoam: SFD (7.6) chi* = chi Uref/Lref = " << chiStar_
         << " 1/s, Delta* = Delta Lref/Uref = " << DeltaStar_ << " s"
@@ -177,8 +178,8 @@ void Foam::sfdControl::update
 
     forAll(ub, celli)
     {
-        // GUARD: V/dt >= VSMALL (5.4); dt/(Delta* + dt) in [0, 1]
-        const scalar dt = V[celli]/max(rDeltaTV[celli], VSMALL);
+        // GUARD: V/dt > 0 (5.4); dt/(Delta* + dt) in [0, 1]
+        const scalar dt = V[celli]/max(rDeltaTV[celli], cfVSmall<scalar>());
         const scalar a = dt/(DeltaStar_ + dt);
         ub[celli] += a*(u[celli] - ub[celli]);
     }
@@ -219,8 +220,8 @@ Foam::scalar Foam::sfdControl::maxDeviation
     }
     const scalar m =
         max(mag(U.primitiveField() - UbarPtr_->primitiveField())());
-    // GUARD: Uref >= VSMALL
-    return m/max(Uref, VSMALL);
+    // GUARD: Uref > 0
+    return m/max(Uref, cfVSmall<scalar>());
 }
 
 

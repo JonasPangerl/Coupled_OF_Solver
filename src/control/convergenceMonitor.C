@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "convergenceMonitor.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "precisionProfile.H"
 #include "functionObjectList.H"
@@ -73,7 +74,7 @@ bool Foam::convergenceMonitor::windowConverged
         return false;
     }
 
-    doubleScalar mn = GREAT, mx = -GREAT, sum = 0;
+    doubleScalar mn = cfGreat<doubleScalar>(), mx = -cfGreat<doubleScalar>(), sum = 0;
     for (label i = h.size() - window_; i < h.size(); ++i)
     {
         mn = min(mn, h[i]);
@@ -369,15 +370,15 @@ Foam::doubleScalar Foam::convergenceMonitor::forceCriterionRatio() const
         {
             return -1;
         }
-        doubleScalar mn = GREAT, mx = -GREAT, sum = 0;
+        doubleScalar mn = cfGreat<doubleScalar>(), mx = -cfGreat<doubleScalar>(), sum = 0;
         for (label i = h.size() - window_; i < h.size(); ++i)
         {
             mn = min(mn, h[i]);
             mx = max(mx, h[i]);
             sum += h[i];
         }
-        // GUARD: |mean| floored at VSMALL
-        const doubleScalar den = forceTol_*max(mag(sum/doubleScalar(window_)), VSMALL);
+        // GUARD: |mean| floored at cfVSmall
+        const doubleScalar den = forceTol_*max(mag(sum/doubleScalar(window_)), cfVSmall<doubleScalar>());
         worst = max(worst, (mx - mn)/den);
     }
     return worst;

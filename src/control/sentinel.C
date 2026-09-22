@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "sentinel.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "calculatedFvPatchFields.H"
 #include "PstreamReduceOps.H"
@@ -113,9 +114,9 @@ Foam::sentinel::checkResult Foam::sentinel::check
     const scalarField& pi = p.primitiveField();
 
     scalar maxU = 0;
-    scalar minP = GREAT, maxP = -GREAT;
-    scalar minK = GREAT, maxK = -GREAT;
-    scalar minW = GREAT, maxW = -GREAT;
+    scalar minP = cfGreat<scalar>(), maxP = -cfGreat<scalar>();
+    scalar minK = cfGreat<scalar>(), maxK = -cfGreat<scalar>();
+    scalar minW = cfGreat<scalar>(), maxW = -cfGreat<scalar>();
     label nNonFinite = 0;
 
     const scalar Ulim = UFactor_*Uref;

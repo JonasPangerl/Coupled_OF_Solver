@@ -39,7 +39,7 @@ Description
     in every build (D2.2a, D-012).
 
     Norms (after row scaling), see DECISIONS.md D-016:
-        normFactor = sum_i |(A x)_i| + |b_i| + SMALL  (all rows except the
+        normFactor = sum_i |(A x)_i| + |b_i| + cfVSmall (all rows except the
                                                        replaced row of the
                                                        pressure reference,
                                                        D-021)

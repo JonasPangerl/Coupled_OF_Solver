@@ -9,7 +9,7 @@ Description
     Pseudo-transient continuation (spec 5.4, 7.1, 7.3).
 
     Local time step (5.4), as V_P/dt_P:
-        V/dt = max(1/2 sum_f |phi_f| + nuEff_P V_P^(1/3), VSMALL)
+        V/dt = max(1/2 sum_f |phi_f| + nuEff_P V_P^(1/3), cfVSmall)
                / (CFL * cflFactor_P)
     cflFactor_P from remediation (static 0.5, dynamic 0.1, else 1).
 

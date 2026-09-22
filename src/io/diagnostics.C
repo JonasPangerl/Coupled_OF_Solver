@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "diagnostics.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "Time.H"
 #include "OSspecific.H"
@@ -810,7 +811,7 @@ Foam::diagPhase::diagPhase()
     forceFactor_(coupledDefaults::diagAsymptoticForceFactor),
     ring_(),
     head_(0),
-    bestBefore_(GREAT)
+    bestBefore_(cfGreat<doubleScalar>())
 {}
 
 
@@ -841,9 +842,9 @@ const char* Foam::diagPhase::classify
     }
 
     // 2. stalled: no new minimum within the last window iterations
-    if (ring_.size() == window_ && bestBefore_ < GREAT)
+    if (ring_.size() == window_ && bestBefore_ < cfGreat<doubleScalar>())
     {
-        doubleScalar wmin = GREAT;
+        doubleScalar wmin = cfGreat<doubleScalar>();
         for (const doubleScalar r : ring_)
         {
             wmin = min(wmin, r);

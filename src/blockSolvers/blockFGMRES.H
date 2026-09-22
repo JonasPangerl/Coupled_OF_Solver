@@ -14,7 +14,7 @@ Description
     Arnoldi with modified Gram-Schmidt; every inner product through
     doubleReduce. The Hessenberg matrix, the Givens rotations and the
     least-squares solve are in double. Happy-breakdown guard: if
-    h_(j+1,j) < VSMALL*||r0|| the cycle stops and the small system is solved.
+    h_(j+1,j) < cfVSmall*||r0|| the cycle stops and the small system is solved.
 
     The first Arnoldi step of every solve also yields the preconditioner
     efficiency rho = ||v1 - A M^-1 v1|| (autoTune, 6.3.5) at the cost of one

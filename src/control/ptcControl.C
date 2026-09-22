@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "ptcControl.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "PstreamReduceOps.H"
 #include "DynamicList.H"
@@ -163,12 +164,12 @@ Foam::tmp<Foam::scalarField> Foam::ptcControl::rDeltaTV
 
     forAll(r, celli)
     {
-        // GUARD: pow argument V > 0; denominator >= VSMALL (5.4)
+        // GUARD: pow argument V > 0; denominator >= cfVSmall (5.4)
         const scalar lambda =
             0.5*sumPhi[celli]
-          + nu[celli]*std::cbrt(max(V[celli], VSMALL));
-        const scalar cfl = max(scalar(CFL_*cflFactor[celli]), VSMALL);
-        r[celli] = max(lambda, VSMALL)/cfl;
+          + nu[celli]*std::cbrt(max(V[celli], cfVSmall<scalar>()));
+        const scalar cfl = max(scalar(CFL_*cflFactor[celli]), cfVSmall<scalar>());
+        r[celli] = max(lambda, cfVSmall<scalar>())/cfl;
     }
 
     return tr;
@@ -236,29 +237,29 @@ Foam::label Foam::ptcControl::applyLocalLimit
         // Memoryless limiter (7.3); implicit: |r| / (V/dt + a_P)
         forAll(rDeltaTV, celli)
         {
-            // dU = |r| dt/V = |r| / (V/dt); GUARD: rDeltaTV >= VSMALL/CFL
+            // dU = |r| dt/V = |r| / (V/dt); GUARD: rDeltaTV >= cfVSmall/CFL
             const scalar dU =
                 mag(rMom[celli])
                /max
                 (
                     rDeltaTV[celli] + (localImplicit_ ? aMom[celli] : 0),
-                    VSMALL
+                    cfVSmall<scalar>()
                 );
             if (ratio)
             {
-                (*ratio)[celli] = dU/max(dUmax, VSMALL);
+                (*ratio)[celli] = dU/max(dUmax, cfVSmall<scalar>());
             }
             if (dU > dUmax)
             {
                 if (localImplicit_)
                 {
                     rDeltaTV[celli] =
-                        mag(rMom[celli])/max(dUmax, VSMALL) - aMom[celli];
+                        mag(rMom[celli])/max(dUmax, cfVSmall<scalar>()) - aMom[celli];
                 }
                 else
                 {
                     // dt <- dt*dUmax/dU  <=>  V/dt <- V/dt * dU/dUmax
-                    rDeltaTV[celli] *= dU/max(dUmax, VSMALL);
+                    rDeltaTV[celli] *= dU/max(dUmax, cfVSmall<scalar>());
                 }
                 ++nLocalLimited_;
             }
@@ -276,15 +277,15 @@ Foam::label Foam::ptcControl::applyLocalLimit
     forAll(rDeltaTV, celli)
     {
         // GUARD: f_P in (0, 1] by construction
-        const scalar f = max(localFactor0_[celli], VSMALL);
+        const scalar f = max(localFactor0_[celli], cfVSmall<scalar>());
         localFactor_[celli] = f;
         rDeltaTV[celli] /= f;
 
         const scalar aP = (localImplicit_ ? aMom[celli] : 0);
-        const scalar dU = mag(rMom[celli])/max(rDeltaTV[celli] + aP, VSMALL);
+        const scalar dU = mag(rMom[celli])/max(rDeltaTV[celli] + aP, cfVSmall<scalar>());
         if (ratio)
         {
-            (*ratio)[celli] = dU/max(dUmax, VSMALL);
+            (*ratio)[celli] = dU/max(dUmax, cfVSmall<scalar>());
         }
         if (dU > dUmax)
         {
@@ -292,8 +293,8 @@ Foam::label Foam::ptcControl::applyLocalLimit
             // that makes |r|/(V/dt + a_P) = dUmax, i.e. |r|/dUmax - a_P
             // (> V/dt since dU > dUmax)
             const scalar rDT0 = rDeltaTV[celli];
-            rDeltaTV[celli] = mag(rMom[celli])/max(dUmax, VSMALL) - aP;
-            const scalar cut = rDT0/max(rDeltaTV[celli], VSMALL);
+            rDeltaTV[celli] = mag(rMom[celli])/max(dUmax, cfVSmall<scalar>()) - aP;
+            const scalar cut = rDT0/max(rDeltaTV[celli], cfVSmall<scalar>());
             localFactor_[celli] = f*cut;
             localHoldRemaining_[celli] = localHold_;
             if (!localLimitedNow_[celli])
@@ -331,7 +332,7 @@ void Foam::ptcControl::update(const doubleScalar R)
     }
 
     // GUARD: R > 0 before division
-    const doubleScalar ratio = Rold/max(R, VSMALL);
+    const doubleScalar ratio = Rold/max(R, cfVSmall<doubleScalar>());
 
     doubleScalar CFLnew = CFL_;
 

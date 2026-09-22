@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "coupledAssembler.H"
+#include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "doubleReduce.H"
 #include "fvCFD.H"
@@ -160,7 +161,7 @@ void Foam::coupledAssembler::checkReferenceFluxBalance
     if
     (
         std::abs(sums[0])
-      > coupledDefaults::refFluxBalanceTol*max(sums[1], VSMALL)
+      > coupledDefaults::refFluxBalanceTol*max(sums[1], cfVSmall<reduceScalar>())
     )
     {
         WarningInFunction
@@ -552,10 +553,10 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
     rc_.updateExplicit(p, noc_);
     const doubleScalar tr1 = (timing_ ? diagnostics::clock() : 0);
 
-    // --- Continuity row scale s_p (5.3f); GUARD: s_p <= 1/VSMALL. Every
+    // --- Continuity row scale s_p (5.3f); GUARD: s_p <= 1/cfVSmall. Every
     //     row-3 coefficient is scaled in double before it is narrowed, so
     //     the clamp and the single rounding apply to the scaled value.
-    sp_ = 1.0/max(rc_.Dref(), VSMALL);
+    sp_ = 1.0/max(rc_.Dref(), cfVSmall<doubleScalar>());
     const doubleScalar sp = sp_;
     const surfaceScalarField& q = rc_.q();
 
@@ -868,11 +869,11 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
 
     doubleReduce::parSum(sums, 6, mesh_.comm());
 
-    // GUARD: normFactor >= SMALL (9.2)
-    normFactor_ = sums[1] + SMALL;
+    // GUARD: normFactor >= cfVSmall (9.2, D3)
+    normFactor_ = sums[1] + cfVSmall<reduceScalar>();
     residualL2_ = std::sqrt(max(sums[0], 0.0))/normFactor_;
-    rU_ = sums[2]/(sums[3] + SMALL);
-    rp_ = sums[4]/(sums[5] + SMALL);
+    rU_ = sums[2]/(sums[3] + cfVSmall<reduceScalar>());
+    rp_ = sums[4]/(sums[5] + cfVSmall<reduceScalar>());
 
     A_.markUpdated();
 
