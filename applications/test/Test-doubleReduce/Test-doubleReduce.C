@@ -17,6 +17,11 @@ Description
     The distance of the exact sum to 1e4 (representation error of 1e-4 in
     float, 2.5e-8 relative) is reported for completeness.
 
+    Field data (amendment D4, D-064): the same values stored as scalar
+    (float in SP, double in DP), at most 1e7 per rank, through the
+    templated doubleReduce::sum / average / weightedSum (weights 1): each
+    must equal the exact sum (count) to 1e-9 relative.
+
 Usage
     Test-doubleReduce [-parallel] [-json <file>] [-n <N>]
 
@@ -26,6 +31,7 @@ Usage
 #include "doubleReduce.H"
 #include "jsonWriter.H"
 #include "PstreamReduceOps.H"
+#include "scalarList.H"
 #include <cmath>
 
 using namespace Foam;
@@ -91,7 +97,29 @@ int main(int argc, char *argv[])
     const reduceScalar relFloat = std::abs(toDouble(floatSum) - exact)/exact;
     const reduceScalar relRepr = std::abs(exact - nominal)/nominal;
 
-    const bool pass = (relDouble < tolDouble) && (relFloat > minFloatError);
+    // Field data (D4): scalar lists through the templated reductions
+    const label nField = min(nLocal, label(10000000));
+    const scalarList af(nField, scalar(v));
+    const scalarList wf(nField, scalar(1));
+    const reduceScalar nFieldGlobal =
+        doubleReduce::parSum(reduceScalar(nField), UPstream::worldComm);
+    const reduceScalar exactField = nFieldGlobal*toDouble(v);
+    const reduceScalar fieldSum = doubleReduce::sum(af);
+    const reduceScalar fieldAvg = doubleReduce::average(af);
+    const reduceScalar fieldWSum = doubleReduce::weightedSum(wf, af);
+    const reduceScalar relField = max
+    (
+        std::abs(fieldSum - exactField)/exactField,
+        max
+        (
+            std::abs(fieldAvg - toDouble(v))/toDouble(v),
+            std::abs(fieldWSum - exactField)/exactField
+        )
+    );
+
+    const bool pass =
+        (relDouble < tolDouble) && (relFloat > minFloatError)
+     && (relField < tolDouble);
 
     Info<< "N = " << nGlobal << " on " << nProcs << " ranks" << nl
         << "exact sum of stored floats = " << exact << nl
@@ -100,6 +128,9 @@ int main(int argc, char *argv[])
         << "float-accumulated sum      = " << floatSum
         << "  rel. error " << relFloat << nl
         << "representation error vs " << nominal << " = " << relRepr << nl
+        << "field data (D4): sum " << fieldSum << ", average " << fieldAvg
+        << ", weighted sum " << fieldWSum << "  max rel. error " << relField
+        << nl
         << (pass ? "PASS" : "FAIL") << endl;
 
     if (args.found("json"))
@@ -115,6 +146,11 @@ int main(int argc, char *argv[])
         j.add("relErrorFloat", relFloat);
         j.add("relRepresentationError", relRepr);
         j.add("toleranceDouble", tolDouble);
+        j.add("fieldN", label(nFieldGlobal));
+        j.add("fieldSum", fieldSum);
+        j.add("fieldAverage", fieldAvg);
+        j.add("fieldWeightedSum", fieldWSum);
+        j.add("relErrorField", relField);
         j.add("pass", pass);
         j.write(args.get<fileName>("json"));
     }
