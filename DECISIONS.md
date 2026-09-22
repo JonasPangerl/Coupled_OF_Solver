@@ -1944,3 +1944,19 @@ and n_cf / n_sf. Read-only check on main's records and runs: T1 1.04x
 reaches 1e-5), T3 from the old 3000-iteration runs 0.07x / 0.02x
 (coupledFoam never met 12.3(ii) there; rerun pending), T4a 0.42x (per-run
 window 1.40x).
+
+### 5. T4b/T5 speed-up against the cached reference as data (review M2)
+
+The D-059 comparison (T4b and T5 are benchmarked with C only; their
+simpleFoam side is the cached test reference) was produced nowhere. Now
+the T4/T5 test records carry speedupWall / speedupCpu (common window) and
+speedupWall_perRun / speedupCpu_perRun, speedupBasis, referenceTimingDate
+and the fairness flags of run_bench.reference_timing_flags, which the
+report must state: referenceNoPotentialStart (the references ran without
+the tutorial's potentialFoam start; true for ref_T4a/T4b/T5),
+referenceTimingConditionsUnknown (the cached reference records have no
+machine state; true for all three) and referenceSingleConfig (one native
+configuration, not the best of A/B). make_report._speed_record passes the
+same flags for T4a/T4b/T5. run_solver now records the machine state
+before every run (machineBefore) and nativePotentialStart, so a
+reference computed from now on has known timing conditions.

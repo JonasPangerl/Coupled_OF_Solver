@@ -37,7 +37,8 @@ from cflib import results
 
 from test_T4_motorBike import (NP, assert_checks, budget_sets, compare,
                                fail_if_failed, mean_field_comparison,
-                               mesh_dir, reference, run_solver)
+                               mesh_dir, reference, run_solver,
+                               speedup_record)
 
 TEMPLATE = "T5_ahmed"
 CD_EXP = 0.285
@@ -130,6 +131,7 @@ def test_T5(foam):
                          and info["CdExpRelDiff"] <= TOL_EXP
                          and info["CdExpRelDiffRef"] <= TOL_EXP)
     rec.update(cmp)
+    rec.update(speedup_record(ref_case, ref))
     rec.update(info)
     results.write("tests", name, rec)
     assert_checks(cmp, rec, ref)

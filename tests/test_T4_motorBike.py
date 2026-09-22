@@ -312,6 +312,8 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
     if fpe is None:
         fpe = solver == "coupledFoam"
     args = ["-solver", solver, "-np", str(nprocs)] + list(mesh_args)
+    # timing conditions of the run (load, other jobs; review M2)
+    machine = cfenv.machine_state().as_dict()
     rc = cfcase.allrun(case, args, fpe=fpe, extra_env=env)
 
     ranks = run_bench.rank_times(case, solver)
@@ -319,6 +321,10 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
         "solver": solver, "rc": rc, "nProcs": nprocs, "args": args,
         "meshCells": mesh_cells(mesh), "meshVariant": info.get("variant"),
         "timingAllrun": cfenv.last_timing.as_dict(),
+        "machineBefore": machine,
+        "nativePotentialStart": (extra_env or {}).get(
+            "CF_NATIVE_POTENTIAL") == "yes" if solver != "coupledFoam"
+        else None,
         "ranks": ranks,
         "wallSeconds": ranks.get("wallSeconds"),
         "cpuHours": ranks.get("cpuHours"),
@@ -435,6 +441,23 @@ def reference(template: str, mesh: Path, name: str, mesh_args: list[str],
         (f"simpleFoam reference {name} failed "
          f"({'; '.join(rec.get('failure') or [])}):\n{rec.get('logTail')}")
     return case, rec
+
+
+def speedup_record(ref_case: Path, ref: dict) -> dict:
+    """Fields that make the speed-up of the test run against the cached
+    simpleFoam reference usable as report data (D-059; review M2): the
+    speed-ups themselves are speedupWall / speedupCpu (common window,
+    D-068) and *_perRun (compare); these are the basis and the fairness
+    flags (run_bench.reference_timing_flags) the report must state."""
+    out = {"speedupBasis": "coupledFoam test run vs the cached simpleFoam "
+                           "reference on the same mesh and ranks (D-059), "
+                           "D-042 stationary point, common window (D-068)",
+           "referenceTimingDate": (json.loads((ref_case / "provenance.json")
+                                              .read_text()).get("date")
+                                   if (ref_case / "provenance.json").exists()
+                                   else None)}
+    out.update(run_bench.reference_timing_flags(ref_case, ref))
+    return out
 
 
 def fail_if_failed(name: str, rec: dict, extra: dict | None = None) -> None:
@@ -784,6 +807,7 @@ def test_T4(foam, variant):
     cmp = compare(rec, ref, oscillatory=osc, field=field)
     meshing = cfcase.RUN_ROOT / f"T4{variant}_mesh" / "meshing.json"
     rec.update(cmp)
+    rec.update(speedup_record(ref_case, ref))
     rec.update({
         "case": f"T4{variant}", "meshDir": str(mesh),
         "meshing": json.loads(meshing.read_text()) if meshing.exists() else None,

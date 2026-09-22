@@ -329,3 +329,16 @@ def test_simplefoam_residual_iteration_all_fields():
     assert it == int(np.nonzero(k < 1e-5)[0][0]) + 1
     assert mr._sf_residual_iteration(sft, 1e-12) is None
     assert mr._frac(sft, it, n) == pytest.approx(it / n)
+
+
+# --------------------------------------------------------------------------- #
+# M2: fairness flags of the speed-up against a cached reference
+# --------------------------------------------------------------------------- #
+
+def test_reference_timing_flags(tmp_path):
+    f = run_bench.reference_timing_flags(tmp_path, {})
+    assert f["referenceNoPotentialStart"] and f["referenceTimingConditionsUnknown"]
+    (tmp_path / "log.potentialFoam").write_text("End\n")
+    f = run_bench.reference_timing_flags(tmp_path, {"machineBefore": {"loadavg": 1}})
+    assert not f["referenceNoPotentialStart"]
+    assert not f["referenceTimingConditionsUnknown"]
