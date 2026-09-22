@@ -7,10 +7,19 @@
 \toprule
 test & pass & iterations & final R & wall [s] & CPU-h & key metric \\
 \midrule
-T0\_Re1000\_np1 & yes & 58 & 7.35e-09 & 17.9 & n/a & l2rel\_u = 1.43e-05 \\
-T0\_Re100\_np1 & yes & 58 & 5.25e-09 & 9.62 & n/a & l2rel\_u = 2.89e-06 \\
+T0\_Re1000\_np1 & yes & 111 & 9.69e-09 & 26.1 & 0.00726 & l2rel\_u = 1.43e-05 \\
+T0\_Re1000\_np4 & yes & 257 & 5.88e-09 & 98.7 & 0.11 & l2rel\_u = 1.41e-05 \\
+T0\_Re100\_np1 & yes & 57 & 4.25e-09 & 6.21 & 0.00177 & l2rel\_u = 2.89e-06 \\
+T0\_Re100\_np4 & yes & 60 & 9.83e-09 & 8.65 & 0.01 & l2rel\_u = 2.86e-06 \\
+T1\_np1 & NO & 400 & 6.35e-06 & 35.9 & 0.01 & dpRelDiff = 5.72e-04 \\
+T1\_np4 & NO & 400 & 6.28e-06 & 25.4 & 0.0291 & dpRelDiff = 5.73e-04 \\
+T2\_np1 & NO & 1000 & 0.0001 & 884 & 0.245 & xrRelDiff = 5.56e-03 \\
+T3\_GEKO\_np1 & NO & 3000 & 0.000231 & 822 & 0.228 & CdRelDiff = 3.87e-02 \\
+T3\_kOmegaSST\_np1 & NO & 3000 & 0.0149 & 684 & 0.19 & CdRelDiff = 1.16e+00 \\
 Test-block4Ops & yes & n/a & n/a & n/a & n/a & maxInverseError = 6.24e-08 \\
-Test-blockGAMG & yes & n/a & n/a & n/a & n/a & crossRankRelDiff = 1.08e-06 \\
+Test-blockFGMRES & yes & n/a & n/a & n/a & n/a &  \\
+Test-blockGAMG & yes & n/a & n/a & n/a & n/a & crossRankRelDiff = 4.48e-06 \\
+Test-blockGAMG\_cycles & NO &  & n/a &  & n/a &  \\
 Test-blockGAMG\_np1 & yes & n/a & n/a & 0.132 & n/a &  \\
 Test-blockGAMG\_np4 & yes & n/a & n/a & 0.136 & n/a &  \\
 Test-blockMatrix & yes & n/a & n/a & n/a & n/a & crossRankRelDiff = 1.71e-09 \\

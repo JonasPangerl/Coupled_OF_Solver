@@ -145,3 +145,42 @@ Correctness-critical, worth a careful independent read:
   background - the user wants to learn from it).
 - Parallel subagents are welcome to speed up work (give them exclusive
   files; the lead integrates, builds and commits).
+
+## 7. State at model handover, 2026-09-22 ~07:40 (by Fable)
+
+Read FABLE_REVIEW.md first - it carries the live issue list. Summary:
+
+Done tonight (all committed, main, pushed):
+- Bugs fixed: MPI_ERR_TRUNCATE (per-patch collectives), FGMRES/GMRES
+  float stall (mixed-precision refinement), parallel restart (per-rank
+  state; ASCII header), nut cap 1e5->1e8 (D-040, T3 root cause),
+  T4/T5 #include -> #sinclude, B4 linear budgets 200->400 on T2-T5.
+- D-039 preconditioner study merged: matrix-weighted agglomeration,
+  1 finest ILU0 sweep -> T1 33 s vs simpleFoam 36 s (was ~5x slower).
+- B11 kernels merged (D-041): fused SIMD kernels, ~37 % faster linear
+  iterations; gate phase_A PASS (Amul 85.6 % of STREAM).
+- T0 Re100/1000 x np1/np4 all PASS (Re100 np1: 57 its, 6.2 s).
+  T0-Re1000 iteration counts are chaotic (~2x scatter) - do not quote
+  single runs (FABLE item 1).
+- T4a mesh (354k) + reference (3000 its, 1516 s, 4.2 CPU-h) and
+  T4b mesh (1.70 M) + reference (4000 its, 11876 s, 33.0 CPU-h) cached
+  in run/. Both references fail criterion 12.3(ii) - physically
+  oscillating wakes (FABLE item 2c, user decision needed).
+- Both papers rebuilt from generated numbers (report/paper/*.pdf).
+
+Open, in priority order (details in FABLE_REVIEW item 4):
+1. D-039 settings are not robust off T1: B4 aborts on T2 (fixed by
+   maxIter 400), T3 (both probes), T4a (0.64x reduction in 400 its at
+   CFL 500). A conservative T4b attempt (V cycle, ILU0 x2, geometric,
+   CFLmax 100) is RUNNING in run/T4b_conservative - check its log.
+2. T3-SST limit cycle (nut cap fixed, cycle remains); T3-GEKO 3.9 % Cd.
+3. T1 495 its vs 400-it budget; T2 xr 0.56 % vs 0.5 %, R stalls 1e-4.
+4. Not run: T5 (mesh pending), T-scaling, benchmark A-H, T-restart/
+   T-fpe pytest (slow-case variants), DP-Debug build.
+5. Report items: exploratory eta/rho figures fill once E/F/G/H run.
+
+Processes possibly still alive from tonight: run/T4b_conservative
+(mpirun np10). Nothing else. All agent worktrees (/home/jonas/cf_precond,
+/home/jonas/cf_b11, cf_b11_base*, cf_precond_platform...) are merged and
+can be deleted with git worktree remove --force + rm -rf of the
+_platform dirs.
