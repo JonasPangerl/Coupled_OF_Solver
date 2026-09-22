@@ -8,11 +8,13 @@ Class
 Description
     Finite checks, rollback and last-valid output (spec 9.3).
 
-    store() keeps copies of U, p, phi and the turbulence fields (k, omega,
-    nut, when present) of the previous iteration. check() computes in one
-    pass gMin/gMax of p, |U|, k, omega and the number of non-finite values.
-    Fail condition: nNonFinite > 0, gMax|U| > UFactor*Uref or
-    max|p| > pFactor*pref.
+    store() keeps copies of U, p, phi and of every turbulence field of the
+    previous iteration (all registered AUTO_WRITE volScalarFields except p:
+    k, omega, epsilon, nuTilda, ReThetat, gammaInt, nut, ... - or the list
+    sentinel.turbulenceFields; D-069 F3). check() computes in one pass
+    gMin/gMax of p, |U|, k, omega and the number of non-finite values of U,
+    p and all turbulence fields. Fail condition: nNonFinite > 0,
+    gMax|U| > UFactor*Uref or max|p| > pFactor*pref.
 
     The turbulence fields are restored verbatim, internal AND boundary
     values, without evaluating their boundary conditions (D-056): the
@@ -41,7 +43,8 @@ Description
     put the fields of iteration n into the directory of iteration n + 1.
 
     Dictionary: coupled.sentinel { maxRollbacks UFactor pFactor cflFactor
-    maxReport }.
+    maxReport turbulenceFields }. The object must be constructed after the
+    turbulence model (its fields are detected in the constructor).
 
 SourceFiles
     sentinel.C
@@ -96,19 +99,22 @@ private:
         label consecutive_;
         label nRollbacks_;
 
+        //- Names of the turbulence fields that are stored, restored and
+        //  checked: every registered volScalarField the solver writes
+        //  (AUTO_WRITE) except p, i.e. all fields the turbulence model owns
+        //  (k, omega, epsilon, nuTilda, ReThetat, gammaInt, nut, ...), or
+        //  the list sentinel.turbulenceFields (D-069 F3)
+        wordList turbNames_;
+
         //- Copies of the previous iteration
         vectorField U0_;
         scalarField p0_;
         scalarField phi0_;
         List<scalarField> phi0Boundary_;
-        scalarField k0_;
-        scalarField omega0_;
-        scalarField nut0_;
-        //- Boundary values of the turbulence fields (restored verbatim,
-        //  D-056)
-        List<scalarField> k0Boundary_;
-        List<scalarField> omega0Boundary_;
-        List<scalarField> nut0Boundary_;
+        //- Turbulence fields (turbNames_ order), internal and boundary
+        //  values (restored verbatim, D-056)
+        List<scalarField> turb0_;
+        List<List<scalarField>> turb0Boundary_;
         bool stored_;
 
 
@@ -142,6 +148,10 @@ public:
     // Member Functions
 
         scalar cflFactor() const noexcept { return cflFactor_; }
+        const wordList& turbulenceFields() const noexcept
+        {
+            return turbNames_;
+        }
         label nRollbacks() const noexcept { return nRollbacks_; }
         label consecutive() const noexcept { return consecutive_; }
         label maxRollbacks() const noexcept { return maxRollbacks_; }

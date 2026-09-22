@@ -31,6 +31,51 @@ Foam::sentinel::sentinel(const fvMesh& mesh, const dictionary& coupledDict)
     pFactor_ = d.getOrDefault<scalar>("pFactor", pFactor_);
     cflFactor_ = d.getOrDefault<scalar>("cflFactor", cflFactor_);
     maxReport_ = d.getOrDefault<label>("maxReport", maxReport_);
+
+    // Turbulence fields (D-069 F3): every volScalarField the solver writes
+    // except p - the model's own fields (k, omega, epsilon, nuTilda,
+    // ReThetat, gammaInt, ...) and nut. sortedNames: identical order on all
+    // ranks.
+    if (d.found("turbulenceFields"))
+    {
+        turbNames_ = d.get<wordList>("turbulenceFields");
+        // k, omega and nut are always included (D-056)
+        for (const char* nm : {"k", "omega", "nut"})
+        {
+            if
+            (
+                mesh_.foundObject<volScalarField>(nm)
+             && !turbNames_.found(word(nm))
+            )
+            {
+                turbNames_.append(word(nm));
+            }
+        }
+        for (const word& nm : turbNames_)
+        {
+            if (!mesh_.foundObject<volScalarField>(nm))
+            {
+                FatalIOErrorInFunction(d)
+                    << "sentinel.turbulenceFields: no volScalarField "
+                    << nm << " registered" << exit(FatalIOError);
+            }
+        }
+    }
+    else
+    {
+        DynamicList<word> names;
+        for (const word& nm : mesh_.sortedNames<volScalarField>())
+        {
+            const volScalarField& f = mesh_.lookupObject<volScalarField>(nm);
+            if (nm != "p" && f.writeOpt() == IOobject::AUTO_WRITE)
+            {
+                names.append(nm);
+            }
+        }
+        turbNames_.transfer(names);
+    }
+    Info<< "coupledFoam: sentinel turbulence fields " << flatOutput(turbNames_)
+        << endl;
 }
 
 
@@ -54,9 +99,18 @@ void Foam::sentinel::store
     {
         phi0Boundary_[patchi] = phi.boundaryField()[patchi];
     }
-    if (k) storeTurbulence(*k, k0_, k0Boundary_);
-    if (omega) storeTurbulence(*omega, omega0_, omega0Boundary_);
-    if (nut) storeTurbulence(*nut, nut0_, nut0Boundary_);
+    // All turbulence fields (k, omega, nut among them), D-069 F3
+    turb0_.resize(turbNames_.size());
+    turb0Boundary_.resize(turbNames_.size());
+    forAll(turbNames_, i)
+    {
+        storeTurbulence
+        (
+            mesh_.lookupObject<volScalarField>(turbNames_[i]),
+            turb0_[i],
+            turb0Boundary_[i]
+        );
+    }
     stored_ = true;
 }
 
@@ -123,6 +177,17 @@ Foam::sentinel::checkResult Foam::sentinel::check
 
     DynamicList<label> bad;
 
+    // Turbulence fields other than k and omega (checked below with min/max)
+    DynamicList<const volScalarField*> others;
+    for (const word& nm : turbNames_)
+    {
+        const volScalarField* f = mesh_.cfindObject<volScalarField>(nm);
+        if (f && f != k && f != omega)
+        {
+            others.append(f);
+        }
+    }
+
     forAll(Ui, celli)
     {
         bool cellBad = false;
@@ -157,6 +222,17 @@ Foam::sentinel::checkResult Foam::sentinel::check
             const scalar wv = (*omega)[celli];
             if (!std::isfinite(wv)) { ++nNonFinite; cellBad = true; }
             else { minW = min(minW, wv); maxW = max(maxW, wv); }
+        }
+
+        // The other turbulence fields (epsilon, nuTilda, nut, ...): finite
+        // values only (D-069 F3)
+        for (const volScalarField* f : others)
+        {
+            if (!std::isfinite((*f)[celli]))
+            {
+                ++nNonFinite;
+                cellBad = true;
+            }
         }
 
         if (cellBad)
@@ -218,18 +294,16 @@ void Foam::sentinel::restore
     U.correctBoundaryConditions();
     p.correctBoundaryConditions();
 
-    // Turbulence fields: verbatim, without boundary evaluation (D-056)
-    if (k && k0Boundary_.size())
+    // All turbulence fields: verbatim, without boundary evaluation (D-056,
+    // D-069 F3)
+    forAll(turb0_, i)
     {
-        restoreTurbulence(*k, k0_, k0Boundary_);
-    }
-    if (omega && omega0Boundary_.size())
-    {
-        restoreTurbulence(*omega, omega0_, omega0Boundary_);
-    }
-    if (nut && nut0Boundary_.size())
-    {
-        restoreTurbulence(*nut, nut0_, nut0Boundary_);
+        restoreTurbulence
+        (
+            mesh_.lookupObjectRef<volScalarField>(turbNames_[i]),
+            turb0_[i],
+            turb0Boundary_[i]
+        );
     }
 
     ++consecutive_;
@@ -284,9 +358,11 @@ void Foam::sentinel::writeLastValid
     writeCopy(U);
     writeCopy(p);
     writeCopy(phi);
-    if (k) writeCopy(*k);
-    if (omega) writeCopy(*omega);
-    if (nut) writeCopy(*nut);
+    // All turbulence fields (k, omega, nut among them), D-069 F3
+    for (const word& nm : turbNames_)
+    {
+        writeCopy(mesh_.lookupObject<volScalarField>(nm));
+    }
 
     volScalarField flag
     (
@@ -362,6 +438,7 @@ void Foam::sentinel::writeSettings(dictionary& dict) const
     d.add("pFactor", pFactor_);
     d.add("cflFactor", cflFactor_);
     d.add("maxReport", maxReport_);
+    d.add("turbulenceFields", turbNames_);
     dict.add("sentinel", d);
 }
 
