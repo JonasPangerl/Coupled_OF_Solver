@@ -6,6 +6,8 @@
 #include "blockGMRES.H"
 #include "blockPreconditioner.H"
 #include "doubleReduce.H"
+#include "blockKernels.H"
+#include "alignedList.H"
 #include "coupledDefaults.H"
 #include "addToRunTimeSelectionTable.H"
 #include <cmath>
@@ -64,13 +66,18 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
     const reduceScalar nf =
         (normFactorIn > 0 ? normFactorIn : normFactor(x, b));
 
-    blockScalarList r(n);
-    blockScalarList w(n);
-    List<blockScalarList> V(m + 1);
-    blockScalarList z(n);
+    // Work vectors 64-byte aligned (6.5.3)
+    alignedList<blockScalar> r(n);
+    alignedList<blockScalar> w(n);
+    List<alignedList<blockScalar>> V(m + 1);
+    List<const blockScalar*> vPtr(m + 1);
+    alignedList<blockScalar> z(n);
+    alignedList<blockScalar> Vy(n);
+    List<blockScalar> yb(m);
     for (label j = 0; j <= m; ++j)
     {
-        V[j].resize(n);
+        V[j].resize_nocopy(n);
+        vPtr[j] = V[j].cdata();
     }
 
     // Hessenberg (m+1) x m, Givens rotations, rhs of the LSQ problem
@@ -82,15 +89,8 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
 
     // Iterate in double (iterative refinement as blockFGMRES, see the class
     // description)
-    reduceScalarList xd(n);
-    {
-        const blockScalar* __restrict__ xp = x.cdata();
-        reduceScalar* __restrict__ xdp = xd.data();
-        for (label k = 0; k < n; ++k)
-        {
-            xdp[k] = toDouble(xp[k]);
-        }
-    }
+    alignedList<reduceScalar> xd(n);
+    blockKernels::widen(n, x.cdata(), xd.data());
 
     matrix_.residualDouble(r, xd, b);
     reduceScalar beta = doubleReduce::norm2(r, comm);
@@ -111,12 +111,7 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
         {
             // GUARD: beta > 0 here (otherwise converged above / below)
             const blockScalar rb = narrow(1.0/std::max(beta, doubleScalarVSMALL));
-            blockScalar* __restrict__ v0 = V[0].data();
-            const blockScalar* __restrict__ rp = r.cdata();
-            for (label i = 0; i < n; ++i)
-            {
-                v0[i] = rb*rp[i];
-            }
+            blockKernels::scale(n, rb, r.cdata(), V[0].data());
         }
 
         g = Zero;
@@ -131,22 +126,60 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
             matrix_.Amul(w, z);
 
             // rho on the first preconditioner application (6.3.5):
-            // ||v0 - w||^2 = 1 - 2 v0.w + w.w  (v0 has unit norm)
+            // ||v0 - w||^2 = 1 - 2 v0.w + w.w  (v0 has unit norm); w.w is
+            // taken in the same pass as h_0j
             const bool measure = (j == 0 && perf.rho < 0);
-            const reduceScalar ww =
-                measure ? doubleReduce::sumSqr(w, comm) : 0;
+            reduceScalar ww = 0;
 
-            // Modified Gram-Schmidt
+            // Modified Gram-Schmidt, fused (6.5.2): the pass that subtracts
+            // h_ij v_i from w also forms h_(i+1)j = <w, v_(i+1)>, the last
+            // pass forms ||w||^2. Same values as the unfused MGS (the dot
+            // uses the updated w), one reduction per basis vector.
+            reduceScalar hij = 0;
+            if (measure)
+            {
+                const blockKernels::sumPair s =
+                    blockKernels::dot_sumSqr(n, w.cdata(), V[0].cdata());
+                reduceScalar sums[2] = {s.first, s.second};
+                doubleReduce::parSum(sums, 2, comm);
+                hij = sums[0];
+                ww = sums[1];
+            }
+            else
+            {
+                hij = doubleReduce::parSum
+                (
+                    blockKernels::dot(n, w.cdata(), V[0].cdata()),
+                    comm
+                );
+            }
+
+            reduceScalar wwNext = 0;
             for (label i = 0; i <= j; ++i)
             {
-                const reduceScalar hij = doubleReduce::dot(w, V[i], comm);
                 H[i][j] = hij;
                 const blockScalar h = narrow(hij);
-                blockScalar* __restrict__ wp = w.data();
-                const blockScalar* __restrict__ vi = V[i].cdata();
-                for (label k = 0; k < n; ++k)
+                if (i < j)
                 {
-                    wp[k] -= h*vi[k];
+                    hij = doubleReduce::parSum
+                    (
+                        blockKernels::mgs_axpy_dot
+                        (
+                            n, h, V[i].cdata(), w.data(), V[i + 1].cdata()
+                        ),
+                        comm
+                    );
+                }
+                else
+                {
+                    wwNext = doubleReduce::parSum
+                    (
+                        blockKernels::update_residual_norm
+                        (
+                            n, h, V[i].cdata(), w.data()
+                        ),
+                        comm
+                    );
                 }
             }
 
@@ -155,7 +188,8 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
                 perf.rho = std::sqrt(max(1 - 2*H[0][0] + ww, 0.0));
             }
 
-            const reduceScalar hNext = doubleReduce::norm2(w, comm);
+            // GUARD: sum of squares >= 0 by construction; clamp for sqrt
+            const reduceScalar hNext = std::sqrt(wwNext > 0 ? wwNext : 0);
             H[j + 1][j] = hNext;
 
             // Happy breakdown (B1): the Krylov space is invariant
@@ -165,12 +199,7 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
                 // GUARD: lucky breakdown gives hNext = 0; V[j+1] unused then
                 const blockScalar rh =
                     narrow(1.0/std::max(hNext, doubleScalarVSMALL));
-                blockScalar* __restrict__ vn = V[j + 1].data();
-                const blockScalar* __restrict__ wp = w.cdata();
-                for (label k = 0; k < n; ++k)
-                {
-                    vn[k] = rh*wp[k];
-                }
+                blockKernels::scale(n, rh, w.cdata(), V[j + 1].data());
             }
 
             // Apply previous rotations to column j
@@ -236,19 +265,18 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
         // correction is formed in blockScalar (it only needs the accuracy of
         // one refinement step), the update of the double iterate in double
         {
-            blockScalarList Vy(n, Zero);
+            // V y in one chunked pass (6.5.2), per entry in the order
+            // i = 0 .. j-1 as the former j passes
             for (label i = 0; i < j; ++i)
             {
-                const blockScalar yi = narrow(yv[i]);
-                const blockScalar* __restrict__ vi = V[i].cdata();
-                for (label k = 0; k < n; ++k)
-                {
-                    Vy[k] += yi*vi[k];
-                }
+                yb[i] = narrow(yv[i]);
             }
+            Vy.setZero();
+            blockKernels::axpyMulti(n, j, yb.cdata(), vPtr.cdata(), Vy.data());
             precondition(z, Vy);
             reduceScalar* __restrict__ xdp = xd.data();
             const blockScalar* __restrict__ zp = z.cdata();
+            #pragma omp simd
             for (label k = 0; k < n; ++k)
             {
                 xdp[k] += toDouble(zp[k]);
@@ -286,14 +314,7 @@ Foam::blockSolverPerformance Foam::blockGMRES::solve
     }
 
     // Return the double iterate rounded to blockScalar
-    {
-        const reduceScalar* __restrict__ xdp = xd.cdata();
-        blockScalar* __restrict__ xp = x.data();
-        for (label k = 0; k < n; ++k)
-        {
-            xp[k] = narrow(xdp[k]);
-        }
-    }
+    blockKernels::narrowCopy(n, xd.cdata(), x.data());
 
     return perf;
 }

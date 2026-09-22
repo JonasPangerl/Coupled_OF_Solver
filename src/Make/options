@@ -7,7 +7,7 @@ COUPLEDFOAM_MARCH ?= -march=native
 WM_OSTYPE ?= POSIX
 
 EXE_INC = \
-    -Wfloat-conversion -Werror -fno-math-errno $(COUPLEDFOAM_MARCH) \
+    -Wfloat-conversion -Werror -fno-math-errno -fopenmp-simd $(COUPLEDFOAM_MARCH) \
     -Iinclude \
     -isystem $(LIB_SRC)/OpenFOAM/lnInclude \
     -isystem $(LIB_SRC)/OSspecific/$(WM_OSTYPE)/lnInclude \

@@ -31,10 +31,10 @@ is dropped silently (spec rule 0.3). Status: `todo`, `code` (written, builds),
 
 | item | what | status | where |
 |---|---|---|---|
-| B11 6.5.1 | no Field algebra / tmp<> in solver kernels (flat solveScalar arrays) | todo | blockMatrix, blockSolvers |
-| B11 6.5.2 | fused kernels: axpy_dot, update_residual_norm, fused MGS; double reductions | todo | blockMatrix, Krylov solvers |
-| B11 6.5.3 | omp simd (-fopenmp-simd), __restrict__, 64-byte alignedList, fixed-trip 4x4 matvec | todo | blockMatrix, Make/options |
+| B11 6.5.1 | no Field algebra / tmp<> in solver kernels (flat blockScalar arrays) | done (audit: no Field/tmp<> was present; the remaining List operations are flat fills/copies) | blockMatrix, blockSolvers |
+| B11 6.5.2 | fused kernels: axpy_dot, update_residual_norm, fused MGS; double reductions | done | blockMatrix/blockKernels.H, blockBiCGStab, blockGMRES, blockFGMRES |
+| B11 6.5.3 | omp simd (-fopenmp-simd), __restrict__, 64-byte alignedList, fixed-trip 4x4 matvec | done (Krylov work vectors alignedList; matrix arrays keep List, v2606 aligns them to 256 B, checked at runtime by the gate) | blockMatrix/alignedList.H, block4Ops.H, Make/options |
 | B11 6.5.4 | block AoS layout stays (no SoA) | holds already (5.2) | - |
-| B11 6.5.5 | assembly writes flat arrays in one owner/neighbour pass; fvm:: only to obtain coefficients | verify | coupledAssembler |
-| B11 6.5.6 | Test-kernelBandwidth: 5 M cells, Amul >= 60 % STREAM, axpy_dot >= 80 % -> results/gates/phase_A.json, report 15.5 | todo | applications/test, bench |
-| B11 6.5.7 | DECISIONS entry: expression templates out of scope | todo | DECISIONS.md |
+| B11 6.5.5 | assembly writes flat arrays in one owner/neighbour pass; fvm:: only to obtain coefficients | verified, see FABLE_REVIEW / final report of the B11 session | coupledAssembler |
+| B11 6.5.6 | Test-kernelBandwidth: 5 M cells, Amul >= 60 % STREAM, axpy_dot >= 80 % -> results/gates/phase_A.json, report 15.5 | done, gate PASS (Amul 85 %, axpy_dot 135 % of triad) | applications/test/Test-kernelBandwidth |
+| B11 6.5.7 | DECISIONS entry: expression templates out of scope | text proposed in the B11 session report (not yet in DECISIONS.md) | DECISIONS.md |

@@ -202,6 +202,15 @@ constexpr label zonalNLayers = 1;                // patchDistance entry default
 constexpr bool ftz = true;
 constexpr bool writeState = true;
 
+// Hot-loop kernels (spec 6.5; compile-time, not dictionary entries)
+// Entries per chunk of blockKernels::axpyMulti(Double): 512 blockScalar/
+// reduceScalar entries (2 KiB / 4 KiB) keep the target chunk in L1 while the
+// m source vectors stream through
+constexpr label kernelChunk = 512;
+// Test-kernelBandwidth gates (6.5.6): fraction of the STREAM triad bandwidth
+constexpr doubleScalar gateAmulFraction = 0.6;
+constexpr doubleScalar gateAxpyDotFraction = 0.8;
+
 } // End namespace coupledDefaults
 } // End namespace Foam
 

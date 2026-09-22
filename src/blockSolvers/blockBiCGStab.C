@@ -6,6 +6,8 @@
 #include "blockBiCGStab.H"
 #include "blockPreconditioner.H"
 #include "doubleReduce.H"
+#include "blockKernels.H"
+#include "alignedList.H"
 #include "addToRunTimeSelectionTable.H"
 #include <cmath>
 
@@ -50,14 +52,15 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
     const reduceScalar nf =
         (normFactorIn > 0 ? normFactorIn : normFactor(x, b));
 
-    blockScalarList r(n);
-    blockScalarList rA0(n);
-    blockScalarList p(n, Zero);
-    blockScalarList v(n, Zero);
-    blockScalarList y(n);
-    blockScalarList s(n);
-    blockScalarList z(n);
-    blockScalarList t(n);
+    // Work vectors 64-byte aligned (6.5.3). s = r - alpha v is formed in
+    // place in r (update_residual_norm), so no separate s vector.
+    alignedList<blockScalar> r(n);
+    alignedList<blockScalar> rA0(n);
+    alignedList<blockScalar> p(n, Zero);
+    alignedList<blockScalar> v(n, Zero);
+    alignedList<blockScalar> y(n);
+    alignedList<blockScalar> z(n);
+    alignedList<blockScalar> t(n);
 
     matrix_.residual(r, x, b);
 
@@ -74,7 +77,7 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
     // Best iterate: BiCGStab convergence is not monotone; near the float
     // floor it can diverge. The iterate with the smallest residual is kept
     // and returned if the solve does not converge.
-    blockScalarList xBest(x);
+    alignedList<blockScalar> xBest(x);
     reduceScalar bestRes = perf.initialResidual;
 
     auto keepBest = [&](const reduceScalar res)
@@ -82,7 +85,7 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
         if (res < bestRes)
         {
             bestRes = res;
-            xBest = x;
+            xBest.copyFrom(x);
         }
     };
 
@@ -90,7 +93,7 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
     {
         if (!perf.converged && bestRes < perf.finalResidual)
         {
-            x.deepCopy(xBest);
+            blockKernels::copy(n, xBest.cdata(), x.data());
             perf.finalResidual = bestRes;
         }
         return perf;
@@ -99,7 +102,7 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
     // Start (and restart) state
     auto restart = [&]()
     {
-        rA0 = r;
+        rA0.copyFrom(r);
         p = Zero;
         v = Zero;
     };
@@ -111,19 +114,40 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
     reduceScalar omega = 1;
     bool fresh = true;
 
+    // <rA0, r> of the current r, known from the fused update of r at the
+    // end of the previous iteration (axpy_dot); recomputed after a restart
+    reduceScalar rhoNext = 0;
+    bool rhoKnown = false;
+
     blockScalar* __restrict__ xp = x.data();
     blockScalar* __restrict__ rp = r.data();
     blockScalar* __restrict__ pp = p.data();
     blockScalar* __restrict__ vp = v.data();
-    blockScalar* __restrict__ yp = y.data();
-    blockScalar* __restrict__ sp = s.data();
-    blockScalar* __restrict__ zp = z.data();
-    blockScalar* __restrict__ tp = t.data();
+    const blockScalar* __restrict__ yp = y.cdata();
+    const blockScalar* __restrict__ zp = z.cdata();
+    const blockScalar* __restrict__ tp = t.cdata();
+    const blockScalar* __restrict__ r0p = rA0.cdata();
+
+    auto restartState = [&]()
+    {
+        matrix_.residual(r, x, b);
+        restart();
+        r0Sqr = doubleReduce::sumSqr(rA0, comm);
+        rho = 1;
+        alpha = 1;
+        omega = 1;
+        fresh = true;
+        rhoKnown = false;
+    };
 
     while (perf.nIterations < maxIter_)
     {
         const reduceScalar rhoOld = rho;
-        rho = doubleReduce::dot(rA0, r, comm);
+        rho =
+            rhoKnown
+          ? rhoNext
+          : doubleReduce::parSum(blockKernels::dot(n, r0p, rp), comm);
+        rhoKnown = false;
 
         // GUARD: breakdown of rho (spec 6.2)
         if (std::abs(rho) < doubleScalarVSMALL*r0Sqr)
@@ -134,22 +158,13 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
                 break;
             }
             ++perf.nRestarts;
-            matrix_.residual(r, x, b);
-            restart();
-            r0Sqr = doubleReduce::sumSqr(rA0, comm);
-            rho = 1;
-            alpha = 1;
-            omega = 1;
-            fresh = true;
+            restartState();
             continue;
         }
 
         if (fresh)
         {
-            for (label i = 0; i < n; ++i)
-            {
-                pp[i] = rp[i];
-            }
+            blockKernels::copy(n, rp, pp);
             fresh = false;
         }
         else
@@ -157,6 +172,7 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
             // GUARD: rhoOld and omega are non-zero (checked when set)
             const blockScalar beta = narrow((rho/rhoOld)*(alpha/omega));
             const blockScalar om = narrow(omega);
+            #pragma omp simd
             for (label i = 0; i < n; ++i)
             {
                 pp[i] = rp[i] + beta*(pp[i] - om*vp[i]);
@@ -171,19 +187,25 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
         if (perf.rho < 0)
         {
             reduceScalar d2 = 0;
+            reduceScalar p2 = 0;
+            #pragma omp simd reduction(+:d2, p2)
             for (label i = 0; i < n; ++i)
             {
-                const reduceScalar di = toDouble(pp[i]) - toDouble(vp[i]);
+                const reduceScalar pi = toDouble(pp[i]);
+                const reduceScalar di = pi - toDouble(vp[i]);
                 d2 += di*di;
+                p2 += pi*pi;
             }
-            d2 = doubleReduce::parSum(d2, comm);
+            reduceScalar sums[2] = {d2, p2};
+            doubleReduce::parSum(sums, 2, comm);
             // GUARD: ||r0|| > 0 (not converged at iteration 0)
             perf.rho =
-                std::sqrt(d2)
-               /max(doubleReduce::norm2(p, comm), doubleScalarVSMALL);
+                std::sqrt(sums[0])
+               /max(std::sqrt(sums[1]), doubleScalarVSMALL);
         }
 
-        const reduceScalar rA0v = doubleReduce::dot(rA0, v, comm);
+        const reduceScalar rA0v =
+            doubleReduce::parSum(blockKernels::dot(n, r0p, vp), comm);
 
         // GUARD: denominator of alpha
         if (std::abs(rA0v) < doubleScalarVSMALL*r0Sqr)
@@ -194,29 +216,27 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
                 break;
             }
             ++perf.nRestarts;
-            matrix_.residual(r, x, b);
-            restart();
-            r0Sqr = doubleReduce::sumSqr(rA0, comm);
-            rho = 1;
-            alpha = 1;
-            omega = 1;
-            fresh = true;
+            restartState();
             continue;
         }
 
         alpha = rho/rA0v;  // GUARD: rA0v checked above
         const blockScalar al = narrow(alpha);
 
-        for (label i = 0; i < n; ++i)
-        {
-            sp[i] = rp[i] - al*vp[i];
-        }
+        // s = r - alpha v in place, with ||s||^2 (update_residual_norm)
+        const reduceScalar ss = doubleReduce::parSum
+        (
+            blockKernels::update_residual_norm(n, al, vp, rp),
+            comm
+        );
 
         ++perf.nIterations;
 
-        const reduceScalar sRes = doubleReduce::norm2(s, comm)/nf;
+        // GUARD: sum of squares >= 0 by construction; clamp for sqrt
+        const reduceScalar sRes = std::sqrt(ss > 0 ? ss : 0)/nf;
         if (converged(sRes, perf.initialResidual, perf.nIterations))
         {
+            #pragma omp simd
             for (label i = 0; i < n; ++i)
             {
                 xp[i] += al*yp[i];
@@ -226,23 +246,37 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
             return perf;
         }
 
-        precondition(z, s);
+        // r holds s from here on
+        precondition(z, r);
         matrix_.Amul(t, z);
 
-        const FixedList<reduceScalar, 2> tt_ts =
-            doubleReduce::dot2(t, t, t, s, comm);
+        // (<t,s>, <t,t>) in one pass
+        const blockKernels::sumPair ts_tt =
+            blockKernels::dot_sumSqr(n, tp, rp);
+        reduceScalar tsums[2] = {ts_tt.first, ts_tt.second};
+        doubleReduce::parSum(tsums, 2, comm);
 
         // GUARD: omega denominator
-        omega = tt_ts[1]/std::max(tt_ts[0], doubleScalarVSMALL);
+        omega = tsums[0]/std::max(tsums[1], doubleScalarVSMALL);
 
         const blockScalar om = narrow(omega);
+        #pragma omp simd
         for (label i = 0; i < n; ++i)
         {
             xp[i] += al*yp[i] + om*zp[i];
-            rp[i] = sp[i] - om*tp[i];
         }
 
-        perf.finalResidual = doubleReduce::norm2(r, comm)/nf;
+        // r = s - omega t, fused with ||r||^2 and <r, rA0> (axpy_dot); the
+        // latter is rho of the next iteration
+        const blockKernels::sumPair rr_rr0 =
+            blockKernels::axpy_dot(n, -om, tp, rp, r0p);
+        reduceScalar rsums[2] = {rr_rr0.first, rr_rr0.second};
+        doubleReduce::parSum(rsums, 2, comm);
+        rhoNext = rsums[1];
+        rhoKnown = true;
+
+        // GUARD: sum of squares >= 0 by construction; clamp for sqrt
+        perf.finalResidual = std::sqrt(rsums[0] > 0 ? rsums[0] : 0)/nf;
 
         if (converged(perf.finalResidual, perf.initialResidual, perf.nIterations))
         {
@@ -261,13 +295,7 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
                 break;
             }
             ++perf.nRestarts;
-            matrix_.residual(r, x, b);
-            restart();
-            r0Sqr = doubleReduce::sumSqr(rA0, comm);
-            rho = 1;
-            alpha = 1;
-            omega = 1;
-            fresh = true;
+            restartState();
         }
     }
 
