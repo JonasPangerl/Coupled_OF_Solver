@@ -44,6 +44,20 @@ runTimeModifiable false;
 
 functions
 {
+    // Double-accumulated force coefficients (amendment D6), settings in
+    // system/coupledForcesDict: postProcessing/coupledForces/<start>/coeffs.dat.
+    // coupledFoam evaluates the same class after every outer iteration
+    // itself (this entry is then dormant); simpleFoam runs it here. The
+    // library is libcoupledFoam of the private install first on
+    // LD_LIBRARY_PATH ($FOAM_USER_LIBBIN).
+    coupledForces
+    {
+        type            coupledForcesFO;
+        libs            (coupledFoam);
+        writeControl    timeStep;
+        writeInterval   1;
+    }
+
     forceCoeffs
     {
         type            forceCoeffs;

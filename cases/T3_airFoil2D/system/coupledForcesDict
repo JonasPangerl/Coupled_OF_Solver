@@ -1,0 +1,30 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  coupledFoam test case T3 - airFoil2D: double-accumulated force
+  coefficients (amendment D6, src/io/coupledForces.H). Values identical to
+  functions.forceCoeffs of system/controlDict. coupledFoam evaluates them
+  after every outer iteration (12.3 ii uses them); simpleFoam through the
+  coupledForcesFO entry of the controlDict.
+  CofR is in the mesh frame of the DP mesh; the SP harness (D5.2) shifts it
+  together with the mesh (tests/cflib/precision.py).
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      coupledForcesDict;
+}
+
+patches         (walls);
+rhoInf          1;
+magUInf         26.0032;
+lRef            35.0492;
+Aref            1.75246;
+CofR            (0 0 0);
+dragDir         (0.990263 0.139214 0);
+liftDir         (-0.139214 0.990263 0);
+// Native v2606 forceCoeffs ignores pitchAxis: CmPitch is about
+// liftDir ^ dragDir = (0 0 -1); coupledForces uses the same axis.
+pitchAxis       (0 0 1);
+
+// ************************************************************************* //
