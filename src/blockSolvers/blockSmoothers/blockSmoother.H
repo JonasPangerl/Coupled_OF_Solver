@@ -111,6 +111,14 @@ public:
         {
             return nSingular_;
         }
+
+        //- Cells whose factorised pivot fell back to the unmodified
+        //  diagonal block at the last update (blockILU0 pivot-growth
+        //  safeguard; 0 for the other smoothers)
+        virtual label nPivotFallback() const noexcept
+        {
+            return 0;
+        }
 };
 
 

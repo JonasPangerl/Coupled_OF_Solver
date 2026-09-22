@@ -16,6 +16,17 @@ Description
     Processor interfaces enter only through the residual (block Jacobi
     across ranks).
 
+    Pivot-growth safeguard (D-049): on the saddle-point rows the modified
+    pivot D*_c can lose almost all of its dominance (T4b: |D*_c^-1| up to
+    220 |D_c^-1| on a coarse level); the sweep then amplifies the residual
+    by up to 1e5 and the preconditioned Krylov solve stagnates. A cell with
+    max|D*_c^-1| > pivotGrowthLimit * max|D_c^-1| uses the unmodified block
+    D_c instead (keyword pivotGrowthLimit in the smoother/GAMG dictionary,
+    0 = off; default coupledDefaults::iluPivotGrowthLimit = 20). Healthy
+    factorisations stay below 12 (T4b 3.7-6.6, T2 at CFL 500 up to 11.8),
+    the degenerate T4b pivots were 31-223; a limit of 5 replaced 7-10 % of
+    the T2 pivots and destroyed the preconditioner there.
+
     Enabled only if Gate B2 shows >= 15 % wall-clock gain on T2 (spec 6.3),
     otherwise available as an option; the decision is in DECISIONS.md.
 
@@ -39,6 +50,12 @@ class blockILU0
     public blockSmoother
 {
     // Private Data
+
+        //- Pivot-growth limit (0: safeguard off)
+        const doubleScalar pivotGrowthLimit_;
+
+        //- Cells with the pivot fallback at the last update
+        label nPivotFallback_;
 
         //- Inverse of the modified diagonal blocks D*^-1, 16 per cell
         blockScalarList rD_;
@@ -66,6 +83,11 @@ public:
     // Member Functions
 
         virtual void update();
+
+        virtual label nPivotFallback() const noexcept
+        {
+            return nPivotFallback_;
+        }
 
         //- w = M^-1 r
         void applyInverse(blockScalarUList& w, const blockScalarUList& r) const;

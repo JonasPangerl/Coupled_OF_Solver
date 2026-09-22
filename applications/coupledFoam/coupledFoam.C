@@ -529,6 +529,7 @@ int main(int argc, char *argv[])
     List<DynamicList<doubleScalar>> forceHistDrift(3);
 
     label nCflCutsTotal = 0;
+    label nPivotFallbackTotal = 0;
     label linFails = 0;
     bool converged = false;
     clockTime runTimer;
@@ -1065,6 +1066,24 @@ int main(int argc, char *argv[])
         {
             Info<< " nNutCapped=" << nNutCapped;
         }
+        {
+            // Smoother pivot fallbacks of the last solve (D-049)
+            const blockGAMGPrecon* gpf =
+                dynamic_cast<const blockGAMGPrecon*>
+                (
+                    linSolver->preconditioner()
+                );
+            if (gpf)
+            {
+                const label nFb =
+                    returnReduce(gpf->gamg().nPivotFallback(), sumOp<label>());
+                nPivotFallbackTotal += nFb;
+                if (nFb)
+                {
+                    Info<< " nPivFb=" << nFb;
+                }
+            }
+        }
         if (conv.haveForces())
         {
             Info<< " Cd=" << conv.Cd() << " Cl=" << conv.Cl();
@@ -1450,6 +1469,7 @@ int main(int argc, char *argv[])
         j.add("finalCFL", ptc.CFL());
         j.add("lastLinearIterations", lastLinIters);
         j.add("cflCuts", nCflCutsTotal);
+        j.add("pivotFallbacks", nPivotFallbackTotal);
         j.add("rollbacks", sen.nRollbacks());
         j.add("staticCells", rem.nStatic());
         j.add("dynamicCells", rem.nDynamic());
