@@ -331,3 +331,19 @@ switch counter now available on main).
   itself is a 4000 + 2000-iteration simpleFoam run whose own window
   drift is not zero.
 - T3-GEKO still fails its criterion (pre-existing, main's record too).
+
+### 7. Amendment D core (amend-d-core, D-064), open for the SP campaign
+
+- SP case settings: the native `"(U|k|omega)"` solvers need a tolerance
+  above the float floor (1e-6 measured OK on T1) or a small maxIter; with
+  the template 1e-10 every k solve runs 1000 sweeps and T1 SP is 4x
+  slower than DP (1.25x faster with 1e-6). Not part of the D7 table.
+- D7 linear tolerance 1e-6 stalls T1 at R 1.4e-5 even in DP (D-022);
+  user decision whether to keep the spec value.
+- SP post-processing: T0 centrelines on a face plane sample neighbouring
+  cells in float, and post.match_profiles (rel_tol 1e-9) finds no common
+  points; evaluate from cell values (see D-064) in the SP harness.
+- Deferred (lead: converge): doubleScalarVSMALL left in the Krylov
+  solvers/blockGAMG (same value as cfVSmall<double>, not matched by the
+  D3 gate); Anderson history double (D9 memory line); the duplicate
+  relTol entry in the effective-settings dictionary.

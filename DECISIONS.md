@@ -1796,3 +1796,170 @@ for SP to be built and tested against the maximum precision available.
   switchable and tunable in the case dictionaries (D-061 follow-up).
 - Every setting that may need changing must be a run-time keyword, not a
   compile-time constant.
+
+## D-064 - Amendment D core: precision types, guards, reductions, profile, zero-copy (2026-09-22)
+
+**Status:** implemented on branch `amend-d-core` (D1, D2, D3, D4, D7, D8);
+interpretation fixed by the lead. D5.2/D5.3/D6 (origin shift, SP harness,
+coupledForces) are on `amend-d-forces`.
+
+**Interpretation.**
+- D-001 stays: `blockScalar` (block coefficients, Krylov/AMG vectors) is
+  float in every build; mixed precision inside a DP build is the design.
+  D2.1 means: field data use `scalar`, block coefficients `blockScalar`,
+  never raw `float`/`double`. In SP `scalar == blockScalar == float`.
+- The "literal C++ type double" of D2.2 is `doubleScalar` / `reduceScalar`
+  (typedefs of `double`, independent of `WM_PRECISION_OPTION`). The raw
+  keywords `double`/`float` no longer appear in src/ or
+  applications/coupledFoam outside comments.
+- D2.3/D8.1 zero-copy applies when `std::is_same<scalar, blockScalar>`
+  (SP): the diagonal blocks are accumulated in the matrix array, the row-3
+  scaling and the clamp count are applied in the pass that adds the row-3
+  diagonal to A x (`if constexpr`). A x, b and the residual stay double in
+  every build (D2.2a, D-012). DP/SPDP keep the staging path unchanged.
+- D1 `Test-precision`: DP 8/8, SP 4/4, SPDP **4/8** (OpenFOAM's SPDP is
+  float fields with a double linear solve; the amendment's "8/4" is not an
+  OpenFOAM build, D-001); `sizeof(blockScalar) == 4` and
+  `sizeof(reduceScalar) == 8` in every build.
+
+**What changed (per item).**
+- D2.2 j/i: R_n, R_1, R_(n-1), eta (Eisenstat-Walker), CFL and its
+  factors, omega (line search, kappa, boost beta), start-up and SFD R
+  thresholds, the autoTune rho window, the force-coefficient histories and
+  window statistics (convergenceMonitor), timings and CPU seconds are
+  double. Double values are narrowed explicitly where they meet field data.
+- D2.4: the run-summary CPU/RSS sums and the line-search omega are reduced
+  as double. Every other reduction of a double quantity already went
+  through `doubleReduce::parSum` or `sumOp<doubleScalar>` (Anderson);
+  scalar reductions left are max/min of field values (sentinel, line-search
+  reference, nonOrth kMax, phi check) or label counts.
+- D3: `src/blockMatrix/coupledConstants.H` (`cfVSmall<T>`, `cfSmallRel<T>`,
+  `cfGreat<T>`); all 81 SMALL/VSMALL/GREAT uses of src/ and
+  applications/coupledFoam replaced by the constant of the guarded type
+  (list in the commit message). The pivot guard and the pseudo-inverse
+  threshold are unchanged. `doubleScalarVSMALL` in the Krylov solvers and
+  blockGAMG (1e-300 in every build, equal to `cfVSmall<double>()`, not
+  matched by the gate) is left in place because the solver-fix branch
+  changes those files (lead: constants-only edits there).
+- D4: templated `doubleReduce` reductions for scalar lists of either
+  precision (sum, sumMag, sumSqr, dot, norm2, weightedSum, average; double
+  accumulator, `#pragma omp simd reduction`, MPI_DOUBLE). The only native
+  field reduction in src/ was `gAverage(D)` (row-scaling reference Dref),
+  now `doubleReduce::average`. `Test-doubleReduce` checks the field path.
+- Gates: `tests/test_gates.py` - D3 (the spec's grep over src/ and
+  applications/coupledFoam, comments included) and D4 (no native field
+  reduction outside doubleReduce, comments stripped). Both fail on 6acc150
+  (81 and 1 hits) and pass now.
+- D7: keyword `coupled.precisionProfile auto|dp|sp`, values in
+  `coupledDefaults.H` (`dpProfile`, `spProfile`), resolver
+  `src/control/precisionProfile.{H,C}`; explicit keywords win; logged once
+  at start and listed in the effective settings. New optional keyword
+  `anderson.maxCells` (default 35 M, the B7 limit).
+- D8.2: FTZ/DAZ is on by default in every build (`coupled.ftz yes`,
+  `runInfo::enableFTZ`, spec 9.1); coupledFoam warns if an SP run has it
+  off.
+- D8.3: every case template already writes `writeFormat binary;
+  writePrecision 12; writeCompression off;`, so SP runs write float binary
+  fields (half the bytes). No template change.
+
+**Deviations.**
+1. Anderson history vectors (Q, D, x/f of the last step) stay double
+   (D2.2 d read literally): the D9 memory line "Anderson m=4, float
+   128 B/cell" becomes 256 B/cell in SP too.
+2. The case templates set residualTol, tolerance, etaMin, bounds.kMin and
+   bounds.omegaMin explicitly, so the D7 profile never changes a template
+   run. An SP run that should use the SP defaults must remove these
+   keywords (the manual SP runs below do; the SP harness on
+   amend-d-forces has to do the same or set SP values).
+3. `doubleScalarVSMALL` kept in five solver files (see D3 above).
+
+**DP results (system DP build, private install).**
+- Bit identity. D1, D2, D7, D8 (and the SP narrowing casts): bitwise
+  identical to 6acc150 on T0 Re100 np1 and T1 np1 (all fields of the final
+  time and every CF| line). D3/D4 change values only where intended:
+  SMALL (1e-15) -> cfVSmall<double> (1e-300) in normFactor, rU/rp and the
+  non-orthogonal limiter, GREAT seeds, and the SIMD-ordered double sum of
+  Dref. T0 Re100: all fields still bitwise identical (only the last digit
+  of rU in some log lines). T1 (400 its, not converged, R ~4e-6): U 2.0e-6,
+  p 2.7e-5 relative L2, k 8.7e-7. Attribution check: HEAD with exactly
+  these items reverted is bitwise identical to 6acc150 on T1.
+- pytest --ranks 1 (T0 Re100/Re1000, T1, T2, T3 SST/GEKO, unit, env,
+  gates): 13 passed, 2 failed, both pre-existing and unchanged by D:
+  test_blockGAMG_cycles (K <= W <= V ordering, V 11 F 8 W 7 K 11, same as
+  main's record) and T3-GEKO (Cd 6.00 %, Cl 5.99 % vs 5 %; the 6acc150
+  binary gives 5.97 %/5.95 % on the same run). T0 Re100 65 its, profiles
+  2.9e-6/5.5e-6; Re1000 98 its; T1 dp 0.057 %; T2 xr 0.83 %; T3-SST Cd
+  0.16 %, Cl 2.4 %.
+- Unit battery (Test-precision, block4Ops, doubleReduce np1/np4,
+  blockMatrix np1/np4, blockGAMG np1/np4 tol 1e-9, cycles V/F/W/K,
+  V and K np1 vs np4 with -skipDiagonal, blockFGMRES): all pass, cross-rank
+  4.6e-6 (GAMG), 4.2e-6 (V), 4.6e-6 (K).
+
+**SP results (private ~/OpenFOAM-v2606-SP, 1 rank, mesh from DP as ASCII
+with 12 digits, FTZ on, FPE traps on).**
+- Library, solver, 10 test apps and 2 utilities compile without a warning
+  (-Wfloat-conversion -Werror). Test-precision SP: scalar 4, solveScalar 4,
+  blockScalar 4, reduceScalar 8.
+- Unit battery SP: all pass; blockMatrix 1 vs 4 ranks 6.4e-8, blockGAMG
+  4.5e-6, cycle V 2.0e-6, cycle K 4.5e-6 (< 1e-5); iterations V 12 F 8 W 7
+  K 11 (ordering as in DP). The 1-vs-4-rank comparison needed a
+  nearest-centre pairing of the dumped rows (float cell centres, fixed in
+  tests/test_unit.py).
+- T0 Re100 (profile sp): 65 its to R 9.9e-6 (R floor ~1e-5, rp ~1.1e-4).
+  Against DP (template, R 5.6e-9): centreline u(y) L2 9.3e-6, v(x) 9.9e-6
+  (D10 limit 1e-3), field U 2.0e-5, p 1.2e-4 - the same as DP run with the
+  SP profile (u 9.0e-6, v 1.6e-5, p 1.0e-4): the difference is the
+  convergence level, not the precision.
+- T1 (profile sp): dp within 1.8e-6 of DP (limit 0.3 %); R floor 3.6e-5
+  after 400 its (DP template 1.0e-5, DP with the SP profile 1.4e-5).
+- Timing, back-to-back, 1 rank, machine load ~4, wall = CPU within 1 %
+  (two repeats, second in brackets):
+
+      case / settings                         its  wall s        CPU-h
+      T0 DP template (R 5.6e-9)               66   7.19 (7.58)   0.0021
+      T0 DP, SP profile                       44   3.41 (3.51)   0.0010
+      T0 SP, SP profile                       65   3.96 (4.08)   0.0012
+      T1 DP template                          400  31.8 (30.3)   0.0089
+      T1 SP, SP profile, template k/omega     400  117.8 (117.7) 0.0328
+      T1 DP, (U|k|omega) tolerance 1e-6       400  29.5 (28.4)   0.0082
+      T1 DP, SP profile, tolerance 1e-6       400  26.5 (26.4)   0.0074
+      T1 SP, SP profile, tolerance 1e-6       400  23.2 (22.6)   0.0065
+
+  T1 split (SP vs DP, both tolerance 1e-6): assembly 5.0 vs 7.2 s, linear
+  solve 13.2 vs 14.9 s (725 vs 894 linear its; per iteration the same -
+  the block solve is float in both builds), turbulence 4.0 vs 6.3 s.
+  T0 per outer iteration: SP 0.061 s, DP with the SP profile 0.078 s, DP
+  0.109 s. Peak RSS is higher in SP (T0 143 vs 94 MB, T1 179 vs 104 MB):
+  on these small cases RSS is dominated by the libraries, and the private
+  SP OpenFOAM libraries are about 2.7x larger than the stripped system DP
+  ones (not a field-memory effect).
+
+**Findings for the SP campaign (not changed here).**
+1. Native segregated solvers in SP: with the template settings
+   `"(U|k|omega)" { tolerance 1e-10; relTol 0.1; }` the k solve stalls at
+   its float floor (normalised residual ~4e-7) once the initial residual
+   is ~1e-6, so relTol 0.1 is unreachable and every such solve runs
+   maxIter = 1000 sweeps: T1 SP 4x slower than DP (turbulence 99 of 118 s).
+   With tolerance 1e-6 SP is 1.25x faster than DP. SP case settings need a
+   native-solver tolerance above the float floor (or a small maxIter);
+   the D7 table does not cover these solvers.
+2. D7 linear tolerance 1e-6 (absolute floor of solvers.coupled) is above
+   R1*residualTol for T1 (D-022): even in DP the SP profile stalls T1 at
+   R 1.4e-5 > 1e-5 in 400 its (template 1e-10: 1.0e-5). Not changed (spec
+   table); a relative floor or 1e-8 would avoid it.
+3. Sampling in SP: the T0 centrelines lie on a face plane; in float the
+   sample points fall into either neighbouring cell and the `sets` output
+   of SP compares neighbouring columns (up to 9 % "error"), and
+   post.match_profiles (rel_tol 1e-9) cannot pair most float sample
+   coordinates with the DP ones. The SP numbers above use the cell values (mean of the two
+   columns at the plane). The SP harness should do the same or sample
+   with an offset/interpolated line.
+4. Binary I/O (D8.3): the templates already write binary; the SP build
+   reads DP binary fields and meshes correctly (mag(U) of a DP field in SP
+   within 8.7e-8), vtkOpenFOAMReader 9.2 (bench/plot_fields2d.py) reads SP
+   float binary fields (arch header), the harness reads only ASCII
+   postProcessing/json otherwise. Restart across builds stays unsupported
+   (not tested for coupledFoam).
+5. Cosmetic, pre-existing: "Attempt to add entry relTol which already
+   exists" in the effective-settings dictionary (linear solver and
+   Eisenstat-Walker both add relTol), DP and SP.
