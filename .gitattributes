@@ -3,3 +3,6 @@
 *.pdf binary
 *.gz binary
 *.stl binary
+# append-only logs: keep both sides on parallel merges
+DECISIONS.md merge=union
+FABLE_REVIEW.md merge=union
