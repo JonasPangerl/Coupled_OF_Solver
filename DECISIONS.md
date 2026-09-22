@@ -848,3 +848,142 @@ for 0.7). Chosen default for T1-T5: smootherRelaxation 0.5 (lowest R,
 no abort). The CFL-500 preconditioner weakness on T2 (and the T4b
 degradation at CFL ~30 with the undamped set) stays open in
 FABLE_REVIEW item 4.
+
+### D-042 addendum - larger window, coarser stationarity, mean-field delta comparison (user, 2026-09-22)
+
+User decision (2026-09-22, translated from German): "T4b needs a coarser
+criterion. It will probably not converge even with more iterations
+because the flow is simply that unsteady. So maybe we just need a larger
+averaging window and different tolerances. And for the comparison maybe
+also look at the flow field as a delta and compare it, not just numbers."
+
+Evidence (cached references, read-only):
+- T4b reference, n = 4000:
+  - W = n/4 = 1000 (old rule): half-window drift Cd 0.72 %, Cl 5.54 %.
+    Cl fails the old tolerance max(0.5 %, 0.002).
+  - W = n/2 = 2000: drift Cd 0.00350 (0.88 %), Cl 0.00073 (1.11 %).
+- T4a reference, n = 3000, W = 1500: drift Cd 0.03 %, Cl 0.09 %.
+
+New rules, oscillatory cases only (T4a, T4b, T5). T0-T3 are unchanged.
+Constants are in bench/run_bench.py (STAT_*, OSC_TOL, FIELD_TOL).
+- Window: W = max(1000, n/2), capped at n (n = iterations run). Was
+  max(500, n/4) <= n/2. iters_to_stationary is unchanged: the run's
+  window W, derived from the total n, slides over the history in steps
+  of 50.
+- Stationary: the two half-window means differ by at most
+  max(1 % |mean|, 0.005), for Cd AND Cl. Was max(0.5 % |mean|, 0.002).
+- Comparison tolerances are unchanged: Cd within max(2 %, 0.002),
+  Cl within max(2 %, 0.01) of the reference window mean.
+- The criterion name in the records is now
+  "stationaryMean (D-042 addendum)".
+
+Re-evaluation of the references with the new rule (read-only):
+
+| reference | n | W | drift Cd | drift Cl | tol | stationary | iters_to_stationary | Cd mean +- std | Cl mean +- std |
+|---|---|---|---|---|---|---|---|---|---|
+| ref_T4a_np10 | 3000 | 1500 | 0.00011 (0.03 %) | 0.00007 (0.09 %) | 0.005 | yes | 1550 | 0.39640 +- 0.00153 | 0.07675 +- 0.00172 |
+| ref_T4b_np10 | 4000 | 2000 | 0.00350 (0.88 %) | 0.00073 (1.11 %) | 0.005 | yes | 2050 | 0.39962 +- 0.00354 | 0.06568 +- 0.00322 |
+
+Mean-field delta comparison (new):
+- Averaging. The fieldAverage function object is part of the T4 and T5
+  template controlDicts:
+  - fields: U (mean, prime2Mean) and p (mean only), base iteration;
+  - entry path functions.fieldAverage;
+  - simpleFoam and coupledFoam run it from the same controlDict.
+  The harness sets its timeStart per run to n - W + 1 (n = budget;
+  run_bench.field_average_start), always with
+  `foamDictionary -disableFunctionEntries`. The timeControl of a
+  function object is active from time >= timeStart - 0.5 deltaT, so
+  n - W + 1 (not n - W) averages exactly the W iterations of the force
+  window. Proxy check: totalIter 150 for n = 300, timeStart 151.
+- Utility applications/utilities/coupledFieldCompare:
+  - Independent of libcoupledFoam. It installs to $FOAM_USER_APPBIN but
+    is not in ./Allwmake yet: build it with
+    `wmake applications/utilities/coupledFieldCompare`.
+  - Arguments: -reference <case> -time <t> -referenceTime <t>
+    -Uinf <U> -pref <p> [-parallel].
+  - In parallel both cases must be decomposed identically; every rank
+    reads processorN of the reference.
+  - Fatal if the cells per rank, the patches or the cell centres differ
+    (1e-9 relative). The proxy showed why this check matters: two scotch
+    decompositions of the same T2 mesh differed (10283 vs 10270 cells on
+    rank 0). T4/T5 are safe because every case copies the decomposed
+    cached mesh.
+  - Written at -time: UMeanDelta, pMeanDelta, magUMeanDeltaRel
+    (|dU|/U_inf), CpMeanDelta (dp/p_ref) and, if both cases have it,
+    UPrime2MeanDelta. Boundary values are included, so the delta Cp on
+    the body is visible in ParaView.
+  - fieldCompare.json (all reductions global):
+    - volume-weighted RMS and max of |dUMean|/U_inf and |dpMean|/p_ref;
+    - the fraction of cells (and of the volume) with
+      |dUMean| > 0.05 U_inf;
+    - per wall patch and over all walls: the area-weighted RMS, mean and
+      max |.| of dpMean/p_ref;
+    - the volume RMS of 0.5 tr(dUPrime2Mean)/U_inf^2.
+  - The harness takes U_inf from forceCoeffs magUInf and uses
+    p_ref = 0.5 U_inf^2.
+- Proposed pass criteria (the user may change them): volume RMS
+  |dUMean|/U_inf <= 0.02 AND volume RMS |dpMean|/p_ref <= 0.02
+  (run_bench.FIELD_TOL). tests/test_T4_motorBike.py (T5 inherits) runs
+  the utility after both runs exist (mean_field_comparison) and adds the
+  checks fieldU / fieldP and the JSON to the record. The validation
+  table has a new column "field RMS dU / dp".
+- Reference continuation: the cached T4a/T4b references were run without
+  averaging and are not recomputed from scratch.
+  `continue_reference_with_average(case, n_extra)` in
+  tests/test_T4_motorBike.py does the following:
+  1. Continues the cached simpleFoam reference from its final time t0
+     for n_extra iterations through the Allrun -restart path
+     (log.simpleFoam.restart).
+  2. Sets endTime t0 + n_extra and writeInterval n_extra.
+  3. Adds the fieldAverage entry if it is missing, with timeStart t0 + 1
+     and restartOnRestart true.
+  4. Writes the rank timing to timing_continuation, recorded separately
+     as continuationWallSeconds / continuationCpuHours.
+  5. Evaluates the forces over the continuation only (mean, std,
+     half-window drift).
+  6. Records the result in reference.json under "continuation".
+  Defaults for n_extra = the W of the reference budget: T4a 1500,
+  T4b 2000, T5 2500. The re-evaluated reference criterion keeps using
+  only the original run (force history up to t0). The test triggers the
+  continuation once, when a cached reference has no mean fields; a
+  completed continuation is reused. It was verified on the T2 proxy only
+  (+100 iterations: fresh average of exactly 100 iterations, forces
+  evaluated over 301-400). The heavy continuations are left to the
+  lead.
+- Proxy verification (T2 copies run/fc_proxy_cf, run/fc_proxy_sf,
+  300 iterations each, averaging from 151). Serial and 2-rank metrics
+  agree to 7e-15 relative:
+  - volume RMS |dU|/U_inf = 0.02093;
+  - volume RMS |dp|/p_ref = 0.01385;
+  - max |dU|/U_inf = 0.339;
+  - 13.5 % of the cells above 0.05 U_inf.
+  The delta fields read back with postProcess fieldMinMax, serial and
+  parallel.
+
+## D-046 - Relaxed T1/T3 criteria and a well-defined T2 ratio (user, 2026-09-22)
+
+The user approved a slight relaxation ("die test kriterien koennen
+leicht gelockert werden. sie scheinen mir zu gering"). Evidence comes
+from the acceptance runs with the D-043/D-044 settings (FABLE_REVIEW 4b).
+
+T1 - R target 1e-6 -> 1e-5 within 400 iterations:
+- Measured final R: 2.7e-6 (np1) and 4.3e-6 (np4).
+- dp is within 0.057 % of simpleFoam.
+- Unchanged: dp tolerance 1 %, CFL >= 100 reached, no late cuts, no
+  rollbacks, and the cross-rank dp check.
+
+T3 - Cd/Cl tolerance 0.5 % -> 2 %:
+- This matches the user-approved 2 % of the wake cases (D-042).
+- nDynFinal == 0 is unchanged.
+
+T2 - iteration-ratio definition fixed, no threshold changed:
+- The simpleFoam reference never reaches R < 1e-5 on all of p, Ux, Uy,
+  k and omega; coupledFoam gets there at iteration 471.
+- The ratio was then undefined, and the test FAILED although coupledFoam
+  was the one that converged.
+- Now the reference's iteration count serves as a lower bound (recorded
+  as iterationRatioIsLowerBound).
+- Required ratio >= 2 and the xr tolerance of 2 % are unchanged.
+
+T0 is unchanged.

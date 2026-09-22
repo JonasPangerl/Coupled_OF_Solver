@@ -11,7 +11,7 @@ import pytest
 
 from cflib import post, refcase, results
 
-TOL_COEFF = 0.005
+TOL_COEFF = 0.02     # user-approved relaxation 0.5 % -> 2 % (D-046)
 MODELS = ("kOmegaSST", "GEKO")
 
 

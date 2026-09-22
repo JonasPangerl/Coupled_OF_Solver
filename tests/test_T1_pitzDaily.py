@@ -13,7 +13,7 @@ import pytest
 from cflib import post, refcase, results
 
 MAX_ITERS = 400
-R_TARGET = 1e-6
+R_TARGET = 1e-5      # user-approved relaxation 1e-6 -> 1e-5 (D-046)
 TOL_DP = 0.01
 CFL_MIN_REACHED = 100
 NO_CUTS_AFTER = 100

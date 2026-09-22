@@ -51,6 +51,12 @@ def test_T2(foam, nprocs):
     native = logs.parse_native(ref / "log.simpleFoam")
     it_native = logs.native_iterations_to(
         native, R_TARGET, fields=("p", "Ux", "Uy", "k", "omega"))
+    # simpleFoam may never reach R_TARGET within its budget: then its
+    # iteration count is a lower bound of the iterations it needs, and the
+    # ratio computed from it a lower bound of the true ratio (D-046)
+    native_reached = it_native is not None
+    if not native_reached:
+        it_native = native.get("iterations")
 
     name = f"T2_np{nprocs}"
     case, rec = refcase.coupled("T2_backwardFacingStep2D", name,
@@ -66,6 +72,8 @@ def test_T2(foam, nprocs):
         "xrRelDiff": abs(xr - xr_ref) / xr_ref, "tolXr": TOL_REATTACH,
         "iterationsToR_coupled": it_coupled,
         "iterationsToR_native": it_native,
+        "nativeReachedR": native_reached,
+        "iterationRatioIsLowerBound": not native_reached,
         "iterationRatio": (it_native / it_coupled
                            if it_native and it_coupled else None),
         "requiredRatio": ITER_FACTOR,
