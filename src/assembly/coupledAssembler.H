@@ -150,6 +150,8 @@ private:
         reduceScalar rU_;
         reduceScalar rp_;
         label nClamped_;
+        //- NaN coefficients of the last assembly (D-069 F9)
+        label nNonFinite_;
 
 
     // Private Member Functions
@@ -163,7 +165,7 @@ private:
         //- Narrow with clamping and counting
         blockScalar store(const doubleScalar v)
         {
-            return toBlock(v, clampValue_, nClamped_);
+            return toBlock(v, clampValue_, nClamped_, nNonFinite_);
         }
 
         //- True if the patch carries no flux by construction
@@ -271,6 +273,9 @@ public:
 
             //- Clamped coefficients of the last assembly (this rank)
             label nClamped() const noexcept { return nClamped_; }
+
+            //- NaN coefficients of the last assembly (this rank)
+            label nNonFinite() const noexcept { return nNonFinite_; }
 
             const List<boundaryCoupling::patchKind>& kinds() const noexcept
             {

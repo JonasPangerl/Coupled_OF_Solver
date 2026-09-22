@@ -1037,6 +1037,14 @@ int main(int argc, char *argv[])
                 << nClamped << " coefficients clamped at +-"
                 << coupledDefaults::clampValue << " (spec 9.2)" << endl;
         }
+        const label nNaNCoeffs =
+            returnReduce(assembler.nNonFinite(), sumOp<label>());
+        if (nNaNCoeffs)
+        {
+            WarningInFunction
+                << nNaNCoeffs << " NaN coefficients in the assembly of"
+                << " iteration " << iter << " (D-069 F9)" << endl;
+        }
         // C2: pseudo-inverse fallbacks of the tensorial Rhie-Chow D
         if (iter % coupledDefaults::rhieChowWarnInterval == 0)
         {

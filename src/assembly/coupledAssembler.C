@@ -88,7 +88,8 @@ Foam::coupledAssembler::coupledAssembler
     residualL2_(0),
     rU_(0),
     rp_(0),
-    nClamped_(0)
+    nClamped_(0),
+    nNonFinite_(0)
 {
     // GUARD: the clamp must be representable in blockScalar, otherwise a
     // clamped value would still overflow on narrowing (9.2)
@@ -202,6 +203,7 @@ void Foam::coupledAssembler::assembleMomentum
     Ax_ = Zero;
     b_ = Zero;
     nClamped_ = 0;
+    nNonFinite_ = 0;
 
     const scalarField& V = mesh_.V();
     const surfaceScalarField& w = mesh_.weights();

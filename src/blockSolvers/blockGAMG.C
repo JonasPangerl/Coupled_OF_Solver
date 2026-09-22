@@ -31,6 +31,25 @@ namespace
     //- Native agglomerator of the geometric hierarchy that exists before
     //  the first matrix (replaces algebraicPair in the native selector)
     const char* const algebraicPairInitial = "faceAreaPair";
+
+    //- Largest magnitude of a K-cycle / scaleCorrection coefficient after
+    //  narrowing: far inside the float range, so that a*z cannot overflow
+    //  where the double ratio of a nearly vanishing q would (D-069 F9)
+    constexpr double kCoeffLimit = 1e30;
+
+    //- Float-safe narrowing of such a coefficient: non-finite -> 0 (the
+    //  correction is dropped), |a| clamped to kCoeffLimit (GUARD)
+    inline Foam::blockScalar narrowCoeff(const Foam::reduceScalar a)
+    {
+        if (!std::isfinite(a))
+        {
+            return 0;
+        }
+        return static_cast<Foam::blockScalar>
+        (
+            std::max(-kCoeffLimit, std::min(kCoeffLimit, a))
+        );
+    }
 }
 
 // * * * * * * * * * * * * blockGAMGProcAgglomeration  * * * * * * * * * * * //
@@ -1994,7 +2013,7 @@ void Foam::blockGAMG::cycle
             doubleReduce::dot2(q, r_[l], q, q, A.comm());
         // GUARD: a vanishing correction is added unscaled (alpha 1)
         const blockScalar alpha =
-            narrow(s[1] > doubleScalarVSMALL ? s[0]/s[1] : 1.0);
+            narrowCoeff(s[1] > doubleScalarVSMALL ? s[0]/s[1] : 1.0);
         const label n = x.size();
         for (label i = 0; i < n; ++i)
         {
@@ -2081,7 +2100,7 @@ void Foam::blockGAMG::kstep
     const FixedList<reduceScalar, 2> d1 = doubleReduce::dot2(q1, b, q1, q1, comm);
     // GUARD: <q1,q1> > 0 unless the correction vanishes
     const reduceScalar a1 = d1[0]/std::max(d1[1], doubleScalarVSMALL);
-    const blockScalar a1f = narrow(a1);
+    const blockScalar a1f = narrowCoeff(a1);
 
     for (label i = 0; i < n; ++i)
     {
@@ -2118,7 +2137,7 @@ void Foam::blockGAMG::kstep
     // coefficient from the pre-orthogonalisation q2 (6.3.2)
     const reduceScalar c =
         doubleReduce::dot(q2, q1, comm)/std::max(d1[1], doubleScalarVSMALL);
-    const blockScalar cf = narrow(c);
+    const blockScalar cf = narrowCoeff(c);
     for (label i = 0; i < n; ++i)
     {
         q2[i] -= cf*q1[i];
@@ -2128,7 +2147,7 @@ void Foam::blockGAMG::kstep
     const FixedList<reduceScalar, 2> d2 = doubleReduce::dot2(q2, r1, q2, q2, comm);
     // GUARD: <q2,q2> > 0 unless the correction vanishes
     const reduceScalar a2 = d2[0]/std::max(d2[1], doubleScalarVSMALL);
-    const blockScalar a2f = narrow(a2);
+    const blockScalar a2f = narrowCoeff(a2);
     for (label i = 0; i < n; ++i)
     {
         e[i] += a2f*z2[i];
