@@ -171,8 +171,9 @@ public:
         const volScalarField& D() const noexcept { return D_; }
         const surfaceScalarField& Df() const noexcept { return Df_; }
 
-        //- gAverage(D) (row scaling reference, 5.3f)
-        scalar Dref() const;
+        //- Global mean of D, double-accumulated (row scaling reference,
+        //  5.3f; D4)
+        doubleScalar Dref() const;
 
         //- Evaluate gradp and q_f for p (needs D_f)
         void updateExplicit

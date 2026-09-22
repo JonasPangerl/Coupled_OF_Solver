@@ -107,8 +107,93 @@ FixedList<reduceScalar, 4> componentSumSqr
     const label comm = UPstream::worldComm
 );
 
+
+// Field data (amendment D4, DECISIONS.md D-064): the same reductions for
+// scalar lists of either precision (float in SP, double in DP). Double
+// accumulator, SIMD reduction, MPI_DOUBLE. For a blockScalarUList argument
+// the non-template overloads above are chosen (identical semantics).
+
+//- Local sum in double
+template<class T>
+reduceScalar localSum(const UList<T>& a);
+
+//- Local sum of magnitudes in double
+template<class T>
+reduceScalar localSumMag(const UList<T>& a);
+
+//- Local sum of squares in double
+template<class T>
+reduceScalar localSumSqr(const UList<T>& a);
+
+//- Local dot product in double
+template<class T>
+reduceScalar localDot(const UList<T>& a, const UList<T>& b);
+
+//- Local weighted sum sum_i w_i a_i in double (e.g. sum V_P a_P)
+template<class W, class T>
+reduceScalar localWeightedSum(const UList<W>& w, const UList<T>& a);
+
+//- Global sum
+template<class T>
+reduceScalar sum(const UList<T>& a, const label comm = UPstream::worldComm);
+
+//- Global sum of magnitudes
+template<class T>
+reduceScalar sumMag
+(
+    const UList<T>& a,
+    const label comm = UPstream::worldComm
+);
+
+//- Global sum of squares
+template<class T>
+reduceScalar sumSqr
+(
+    const UList<T>& a,
+    const label comm = UPstream::worldComm
+);
+
+//- Global dot product
+template<class T>
+reduceScalar dot
+(
+    const UList<T>& a,
+    const UList<T>& b,
+    const label comm = UPstream::worldComm
+);
+
+//- Global L2 norm
+template<class T>
+reduceScalar norm2
+(
+    const UList<T>& a,
+    const label comm = UPstream::worldComm
+);
+
+//- Global weighted sum sum_i w_i a_i (volume sum sum V_P a_P)
+template<class W, class T>
+reduceScalar weightedSum
+(
+    const UList<W>& w,
+    const UList<T>& a,
+    const label comm = UPstream::worldComm
+);
+
+//- Global average sum_i a_i / N (N the global size; 0 if N == 0), the
+//  double-accumulated replacement of gAverage
+template<class T>
+reduceScalar average
+(
+    const UList<T>& a,
+    const label comm = UPstream::worldComm
+);
+
 } // End namespace doubleReduce
 } // End namespace Foam
+
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "doubleReduceTemplates.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 

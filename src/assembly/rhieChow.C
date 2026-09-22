@@ -5,6 +5,7 @@
 
 #include "rhieChow.H"
 #include "coupledConstants.H"
+#include "doubleReduce.H"
 #include "nonOrthCorrection.H"
 #include "fvcGrad.H"
 #include "calculatedFvPatchFields.H"
@@ -397,9 +398,10 @@ void Foam::rhieChow::setStaticCells(const boolList& isStatic)
 }
 
 
-Foam::scalar Foam::rhieChow::Dref() const
+Foam::doubleScalar Foam::rhieChow::Dref() const
 {
-    return gAverage(D_.primitiveField());
+    // D4: double-accumulated mean over all ranks (was gAverage)
+    return doubleReduce::average(D_.primitiveField());
 }
 
 
