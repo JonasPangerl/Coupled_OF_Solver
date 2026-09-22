@@ -51,11 +51,12 @@ PAPER = REPORT / "paper"
 FIG_PDF = PAPER / "figures"
 TABLES = PAPER / "tables"
 
-# Colours (spec 15): native grey, coupled blue; configuration shades
-C_NATIVE = "#7f7f7f"
-C_NATIVE2 = "#b0b0b0"
-C_COUPLED = "#1f5fbf"
-C_COUPLED2 = "#7fa6e0"
+# Colours: one pair everywhere (Okabe-Ito, colour-blind safe): simpleFoam
+# vermillion, coupledFoam blue (was grey/blue; grey curves were too faint)
+C_NATIVE = "#D55E00"
+C_NATIVE2 = "#E69F00"
+C_COUPLED = "#0072B2"
+C_COUPLED2 = "#56B4E9"
 CONFIG_COLOR = {"A": C_NATIVE2, "B": C_NATIVE, "C": C_COUPLED, "D": C_COUPLED2,
                 "E": "#6baed6", "F": "#08306b", "G": "#d95f02", "H": "#9467bd"}
 CONFIG_LABEL = {
@@ -934,11 +935,11 @@ def fig_speed(tests: dict) -> None:
                     r = sft["res"].get(f)
                     if r is not None and len(r):
                         ax.semilogy(sft["t"][:len(r)], r, color=C_NATIVE,
-                                    ls=ls, lw=0.8,
+                                    ls=ls, lw=1.2, zorder=3,
                                     label=f"simpleFoam {f}")
             if cft is not None:
-                ax.semilogy(cft["t"], cft["R"], color=C_COUPLED, lw=1.1,
-                            label="coupledFoam $R$")
+                ax.semilogy(cft["t"], cft["R"], color=C_COUPLED, lw=1.4,
+                            zorder=4, label="coupledFoam $R$")
             else:
                 ax.text(0.5, 0.5, "coupledFoam\npending", ha="center",
                         va="center", transform=ax.transAxes, fontsize=7,
@@ -955,7 +956,7 @@ def fig_speed(tests: dict) -> None:
         save(fig, "speed_residual_wall",
              "Residual against wall-clock time on the same axes: "
              "coupledFoam combined residual $R$ (blue) and simpleFoam "
-             "initial residuals of $p$ and $U_x$ (grey). The two residual "
+             "initial residuals of $p$ and $U_x$ (orange). The two residual "
              "normalisations differ (Section 3.2); the time axis is the "
              "comparable quantity.")
 
@@ -996,7 +997,7 @@ def fig_speed(tests: dict) -> None:
         axs[0].legend(fontsize=6, loc="upper left")
         save(fig, "speed_time_to_conv",
              "Wall-clock time (left) and CPU-hours (right) to convergence, "
-             "simpleFoam (grey) and coupledFoam (blue), serial runs; "
+             "simpleFoam (orange) and coupledFoam (blue), serial runs; "
              "numbers: speed-up simpleFoam/coupledFoam. Hatched: the run "
              "did not reach its criterion, the bar is the whole run "
              "(for simpleFoam a lower bound, so the speed-up is marked "

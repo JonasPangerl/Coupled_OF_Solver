@@ -51,8 +51,8 @@ REPO = Path(__file__).resolve().parents[1]
 RUN = REPO / "run"
 FIG = REPO / "report" / "paper" / "figures"
 
-C_NATIVE = "#7f7f7f"
-C_COUPLED = "#1f5fbf"
+C_NATIVE = "#D55E00"     # same colour pair as make_report/plot_histories
+C_COUPLED = "#0072B2"
 CMAP_U = "viridis"
 CMAP_P = "cividis"
 CMAP_D = "RdBu_r"
@@ -476,7 +476,7 @@ def profiles_figure(name, cfg, cf, sf, outdir) -> tuple[str, str] | None:
              "wallshear": "lower-wall skin friction $C_f$",
              "airfoil": "surface pressure coefficient"}
     cap = (f"{cfg['title']}: " + ", ".join(parts[k] for k in panels)
-           + "; simpleFoam thick grey, coupledFoam dashed blue.")
+           + "; simpleFoam thick orange, coupledFoam dashed blue.")
     return stem, cap
 
 

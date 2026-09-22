@@ -69,10 +69,14 @@ from cflib import logs  # noqa: E402
 import run_bench  # noqa: E402
 
 BUSY_MINUTES = 10.0
-C_NATIVE = "#7f7f7f"
-C_COUPLED = "#1f5fbf"
-SERIES = ["#1f5fbf", "#d95f02", "#1b9e77", "#7570b3", "#e7298a", "#66a61e",
-          "#a6761d"]
+# One colour pair everywhere (Okabe-Ito, colour-blind safe): simpleFoam
+# vermillion, coupledFoam blue
+C_NATIVE = "#D55E00"
+C_COUPLED = "#0072B2"
+# per-field series (residuals, linear iterations), Okabe-Ito order
+SERIES = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9",
+          "#000000"]
+NMAX = 2500      # plotted points per curve (dense histories are binned)
 SPLIT = {"tAsm": "#9ecae1", "tSolve": "#1f5fbf", "tTurb": "#fdae6b",
          "other": "#d9d9d9"}
 
@@ -359,14 +363,28 @@ def roll(y: np.ndarray, w: int, fn=np.nanmedian) -> np.ndarray:
     out = np.full_like(y, np.nan)
     if w <= 1:
         return y.copy()
+    if fn is np.nanmedian and len(y) > w:
+        from numpy.lib.stride_tricks import sliding_window_view  # noqa: PLC0415
+        pad = np.concatenate([np.full(w - 1, np.nan), y])
+        step = max(1, len(y) // 4000)       # median every `step` iterations
+        idx = np.arange(0, len(y), step)
+        win = sliding_window_view(pad, w)[idx]
+        with np.errstate(all="ignore"):
+            import warnings  # noqa: PLC0415
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                med = np.nanmedian(win, axis=1)
+        return np.interp(np.arange(len(y)), idx, med)
     if fn is np.nanmean:
         c = np.nancumsum(np.nan_to_num(y))
         cnt = np.cumsum(np.isfinite(y))
-        for i in range(len(y)):
-            j = max(0, i - w + 1)
-            s = c[i] - (c[j - 1] if j else 0.0)
-            k = cnt[i] - (cnt[j - 1] if j else 0)
-            out[i] = s / k if k else np.nan
+        i = np.arange(len(y))
+        j = np.maximum(0, i - w + 1)
+        cs = np.concatenate([[0.0], c])
+        cn = np.concatenate([[0], cnt])
+        k = cn[i + 1] - cn[j]
+        with np.errstate(all="ignore"):
+            out = np.where(k > 0, (cs[i + 1] - cs[j]) / np.maximum(k, 1), np.nan)
         return out
     for i in range(len(y)):
         out[i] = fn(y[max(0, i - w + 1):i + 1])
@@ -399,31 +417,72 @@ def small_legend(ax, **kw):
 
 def iter_axis(ax, lengths: list[int]) -> None:
     """Log iteration axis when the run lengths differ by more than 3x (the
-    shorter coupledFoam history would otherwise be squeezed)."""
+    shorter coupledFoam history would otherwise be squeezed into the left
+    edge)."""
     lengths = [n for n in lengths if n]
     if len(lengths) > 1 and max(lengths) > 3 * min(lengths):
         ax.set_xscale("log")
         ax.set_xlim(0.9, max(lengths) * 1.1)
 
 
-def _rasterize_dense(fig, limit: int = 3000) -> None:
-    """Rasterize (300 dpi) only the artists with very many vertices (the
-    20 000-iteration simpleFoam histories); axes and text stay vector."""
-    for ax in fig.axes:
-        for ln in ax.get_lines():
-            if len(ln.get_xdata()) > limit:
-                ln.set_rasterized(True)
-        for c in ax.collections:
-            try:
-                n = sum(len(p.vertices) for p in c.get_paths())
-            except Exception:  # noqa: BLE001
-                n = 0
-            if n > limit:
-                c.set_rasterized(True)
+def _bins(n: int, nmax: int = NMAX) -> list[slice]:
+    edges = np.linspace(0, n, min(n, nmax) + 1).astype(int)
+    return [slice(a, b) for a, b in zip(edges[:-1], edges[1:]) if b > a]
+
+
+def decimate(x, y, nmax: int = NMAX):
+    """Smooth curve with at most nmax points (bin means); exact below."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    if len(x) <= nmax:
+        return x, y
+    with np.errstate(all="ignore"):
+        bx = np.array([np.nanmean(x[b]) for b in _bins(len(x), nmax)])
+        by = np.array([np.nanmean(y[b]) if np.any(np.isfinite(y[b])) else np.nan
+                       for b in _bins(len(x), nmax)])
+    return bx, by
+
+
+NHEAD = 400      # leading iterations always drawn exactly (log-x axes)
+
+
+def raw(ax, x, y, color, label=None, log=False, lw=0.7, alpha=0.5):
+    """Raw per-iteration data drawn light but visible: a line when short;
+    for long histories the first NHEAD iterations exactly, then the per-bin
+    min/max envelope plus the bin-mean line (vector, at most NMAX bins) -
+    never rasterized, so nothing can disappear in the PDF."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    # simpleFoam is usually the smoother history: draw it above the noisier
+    # coupledFoam raw data so it is never hidden
+    z = 2.6 if color == C_NATIVE else 2.0
+    if len(x) <= NMAX:
+        ax.plot(x, y, color=color, lw=lw, alpha=alpha, label=label, zorder=z)
+        return
+    ax.plot(x[:NHEAD], y[:NHEAD], color=color, lw=lw, alpha=alpha, zorder=z)
+    x, y = x[NHEAD - 1:], y[NHEAD - 1:]
+    bx, lo, hi = [], [], []
+    for b in _bins(len(x), NMAX):
+        yy = y[b][np.isfinite(y[b])]
+        if log:
+            yy = yy[yy > 0]
+        if not yy.size:
+            continue
+        bx.append(np.nanmean(x[b]))
+        lo.append(yy.min())
+        hi.append(yy.max())
+    ax.fill_between(bx, lo, hi, color=color, alpha=alpha * 0.6, lw=0,
+                    label=label, zorder=z)
+    bm = decimate(x, np.where(y > 0, y, np.nan) if log else y)[1]
+    ax.plot(decimate(x, x)[0], bm, color=color, lw=lw, alpha=min(1.0, alpha + 0.2),
+            zorder=z)
+
+
+def main(ax, x, y, color, label=None, lw=1.4, ls="-", zorder=4):
+    """Main curve (mean, median, cumulative, fit): strong, on top."""
+    bx, by = decimate(x, y)
+    ax.plot(bx, by, color=color, lw=lw, ls=ls, label=label, zorder=zorder)
 
 
 def save(fig, stem: str, outdir: Path) -> str:
-    _rasterize_dense(fig)
     fig.savefig(outdir / f"{stem}.pdf", bbox_inches="tight")
     plt.close(fig)
     return stem
@@ -433,8 +492,9 @@ def save(fig, stem: str, outdir: Path) -> str:
 # figures
 # --------------------------------------------------------------------------- #
 
-def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
-    series = []   # (solver, color, iter, time axis, {q: values})
+def load_series(cf, sf, cfd, sfd, monitor, info):
+    """[(solver, colour, iterations, wall time at each, {quantity: values})]"""
+    series = []
     for solver, d, case, col, taxis in (
             ("simpleFoam", sf, sfd, C_NATIVE, sf["t"] if sf else None),
             ("coupledFoam", cf, cfd, C_COUPLED, cf["_t"] if cf else None)):
@@ -446,35 +506,35 @@ def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
         it = h["iter"]
         qs = {k: v for k, v in h.items() if k != "iter"}
         # wall time at each monitored iteration (monitor iteration i is the
-        # i-th solver iteration of the run)
-        idx = np.clip(np.searchsorted(np.arange(1, len(taxis) + 1), it), 0,
-                      len(taxis) - 1)
-        # iterations beyond the logged ones (a continuation whose log is
-        # elsewhere) have no wall time
+        # i-th solver iteration of the run); iterations beyond the logged
+        # ones (a continuation whose log is elsewhere) have no wall time
+        idx = np.clip(it.astype(int) - 1, 0, len(taxis) - 1)
         tt = np.where(it <= len(taxis), taxis[idx], np.nan)
-        if np.any(it > len(taxis)):
+        if np.any(it > len(taxis)) and info is not None:
             info["notes"].append(
                 f"{solver}: the monitor has {int(it.max())} iterations, the "
                 f"solver log {len(taxis)}; the later iterations have no "
                 "wall-clock time (right column)")
         series.append((solver, col, it, tt, qs))
-    if cf is not None:   # CdMean/CdRms etc. printed by the solver itself
-        extra = {k: cf[k] for k in cf if re.match(r"^(Cd|Cl|Cm)\w*(Mean|Rms)$", k)}
-    else:
-        extra = {}
+    return series
+
+
+def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
+    series = load_series(cf, sf, cfd, sfd, monitor, info)
+    extra = ({k: cf[k] for k in cf if re.match(r"^(Cd|Cl|Cm)\w*(Mean|Rms)$", k)}
+             if cf is not None else {})
     if not series:
         info["notes"].append("no monitored quantity history")
         return None
     quants = []
-    for s in series:
-        for q in s[4]:
+    for s_ in series:
+        for q in s_[4]:
             if q not in quants:
                 quants.append(q)
     labels = {"Cd": "$C_d$", "Cl": "$C_l$", "CmPitch": "$C_{m}$ (pitch)",
               "dp": r"$\Delta p$ inlet$-$outlet [m$^2$/s$^2$]"}
-    fig, axs = plt.subplots(len(quants), 2, figsize=(6.5, 1.9 * len(quants) + 0.4),
+    fig, axs = plt.subplots(len(quants), 2, figsize=(6.5, 1.9 * len(quants) + 0.5),
                             squeeze=False)
-    osc = run.startswith(OSCILLATORY)
     for r, q in enumerate(quants):
         for solver, col, it, tt, qs in series:
             if q not in qs:
@@ -483,18 +543,23 @@ def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
             n = len(y)
             W = run_bench.stat_window(n)
             m = roll(y, W, np.nanmean)
-            s = roll_std(y, W)
+            sd = roll_std(y, W)
             m[:max(W - 1, 0)] = np.nan   # only full windows (D-042 W)
-            s[:max(W - 1, 0)] = np.nan
+            sd[:max(W - 1, 0)] = np.nan
             for c, x in ((0, it), (1, tt)):
                 ax = axs[r, c]
-                ax.plot(x, y, color=col, lw=0.5, alpha=0.6,
-                        label=f"{solver}" if r == 0 else None)
-                ax.plot(x, m, color=col, lw=1.2, ls="--",
-                        label=f"{solver} running mean (W={W})" if r == 0 else None)
-                ax.fill_between(x, m - s, m + s, color=col, alpha=0.15, lw=0)
-                if W >= 2 and n >= W:
-                    ax.axvspan(x[n - W], x[-1], color=col, alpha=0.07, lw=0)
+                ok = np.isfinite(x)
+                raw(ax, x[ok], y[ok], col, label=f"{solver} per iteration" if r == 0 and c == 0 else None)
+                bx, bm = decimate(x[ok], m[ok])
+                _, bs = decimate(x[ok], sd[ok])
+                ax.fill_between(bx, bm - bs, bm + bs, color=col, alpha=0.18, lw=0,
+                                zorder=3)
+                ax.plot(bx, bm, color=col, lw=1.6, ls="--", zorder=5,
+                        label=f"{solver} running mean $\\pm$RMS (W={W})"
+                        if r == 0 and c == 0 else None)
+                if W >= 2 and n >= W and np.isfinite(x[n - W]):
+                    ax.axvspan(x[n - W], np.nanmax(x), color=col, alpha=0.08,
+                               lw=0, zorder=1)
             if q in ("Cd", "Cl") and monitor == "forces":
                 hist = {k: list(v) for k, v in qs.items() if k in ("Cd", "Cl")}
                 try:
@@ -503,10 +568,11 @@ def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
                 except Exception:  # noqa: BLE001
                     its, ev = None, {}
                 if its:
-                    axs[r, 0].axvline(its, color=col, lw=1.0, ls="-.")
-                    k = int(np.searchsorted(it, its))
-                    axs[r, 1].axvline(tt[min(k, len(tt) - 1)], color=col,
-                                      lw=1.0, ls="-.")
+                    axs[r, 0].axvline(its, color=col, lw=1.2, ls="-.", zorder=6)
+                    k = min(int(np.searchsorted(it, its)), len(tt) - 1)
+                    if np.isfinite(tt[k]):
+                        axs[r, 1].axvline(tt[k], color=col, lw=1.2, ls="-.",
+                                          zorder=6)
                 info.setdefault("stat", {})[solver] = (its, ev.get("W"),
                                                        ev.get("Cd_mean"),
                                                        ev.get("Cl_mean"))
@@ -515,31 +581,30 @@ def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
                 win = y[n - w:] if w else y
                 info.setdefault("mon", {})[(solver, q)] = (float(np.mean(win)),
                                                            float(np.std(win)))
-        if q in extra or f"{q}Mean" in extra:
-            k = f"{q}Mean"
-            if k in extra:
-                axs[r, 0].plot(cf["iter"], extra[k], color="k", lw=0.8,
-                               label=f"coupledFoam {k} (solver)")
+        k = f"{q}Mean"
+        if k in extra:
+            axs[r, 0].plot(cf["iter"], extra[k], color="k", lw=1.0, zorder=6,
+                           label=f"coupledFoam {k} (solver)")
         axs[r, 0].set_ylabel(labels.get(q, q))
         # zoom: ignore the start-up transient in the y range
         vals = np.concatenate([s_[4][q][len(s_[4][q]) // 5:] for s_ in series
                                if q in s_[4] and len(s_[4][q]) > 5] or [np.array([0.0])])
-        if vals.size > 1 and np.all(np.isfinite(vals)):
+        vals = vals[np.isfinite(vals)]
+        if vals.size > 1:
             lo, hi = np.percentile(vals, [0.5, 99.5])
             pad = 0.25 * (hi - lo) + 1e-12
             for c in (0, 1):
                 axs[r, c].set_ylim(lo - pad, hi + pad)
         bands(axs[r, 0], ph)
-    for r in range(len(quants)):
         iter_axis(axs[r, 0], [len(s_[2]) for s_ in series])
     axs[-1, 0].set_xlabel("outer iteration")
-    axs[-1, 1].set_xlabel("wall-clock time [s]")
+    axs[-1, 1].set_xlabel("wall-clock time [s] (fair comparison)")
     h, lab = axs[0, 0].get_legend_handles_labels()
     fig.suptitle(f"{title}: monitored quantities (dash-dot: iterations to "
                  "stationary window, D-042; shading: final averaging window)",
                  fontsize=7)
-    fig.tight_layout(rect=(0, 0.05, 1, 0.97))
-    fig.legend(h, lab, loc="lower center", ncol=4, fontsize=6)
+    fig.tight_layout(rect=(0, 0.06, 1, 0.97))
+    fig.legend(h, lab, loc="lower center", ncol=2, fontsize=6)
     return save(fig, f"hist_{run}_loads", outdir)
 
 
@@ -547,7 +612,7 @@ def fig_residuals(run, title, cf, sf, ph, outdir):
     rows = [x for x in (("coupledFoam", cf), ("simpleFoam", sf)) if x[1] is not None]
     if not rows:
         return None
-    fig, axs = plt.subplots(len(rows), 2, figsize=(6.5, 2.1 * len(rows) + 0.3),
+    fig, axs = plt.subplots(len(rows), 2, figsize=(6.5, 2.2 * len(rows) + 0.3),
                             squeeze=False)
     ylo, yhi = [], []
     for r, (solver, d) in enumerate(rows):
@@ -560,14 +625,26 @@ def fig_residuals(run, title, cf, sf, ph, outdir):
             curves = [(f, d["res"][f]) for f in fields]
             x0, t = np.arange(1, d["n"] + 1), d["t"]
         for j, (lab, y) in enumerate(curves):
+            col = SERIES[j % len(SERIES)]
             for c, x in ((0, x0), (1, t)):
-                axs[r, c].semilogy(x[:len(y)], y, color=SERIES[j % len(SERIES)],
-                                   lw=0.7, label=lab if c == 0 else None)
+                x = x[:len(y)]
+                ax = axs[r, c]
+                if len(x) > NMAX:
+                    raw(ax, x, y, col, log=True, alpha=0.3)
+                    bx = decimate(x, x)[0]
+                    by = np.exp(decimate(x, np.log(np.where(y > 0, y, np.nan)))[1])
+                    ax.plot(bx, by, color=col, lw=1.2, zorder=4,
+                            label=lab if c == 0 else None)
+                else:
+                    ax.plot(x, y, color=col, lw=1.2, zorder=4,
+                            label=lab if c == 0 else None)
+                ax.set_yscale("log")
             fy = y[np.isfinite(y) & (y > 0)]
             if fy.size:
                 ylo.append(fy.min())
                 yhi.append(fy.max())
-        axs[r, 0].set_ylabel(f"{solver}\nresidual")
+        axs[r, 0].set_ylabel(f"{solver}\nresidual",
+                             color=C_COUPLED if solver == "coupledFoam" else C_NATIVE)
         small_legend(axs[r, 0], ncol=4, loc="lower left")
         bands(axs[r, 0], ph if solver == "coupledFoam" else ([], {}))
         if solver == "coupledFoam":
@@ -578,13 +655,40 @@ def fig_residuals(run, title, cf, sf, ph, outdir):
     ns = [len(d["iter"]) if s_ == "coupledFoam" else d["n"] for s_, d in rows]
     for r in range(len(rows)):
         iter_axis(axs[r, 0], ns)
+    # both solvers on the same wall-clock axis
+    tmax = max((d["_t"][-1] if s_ == "coupledFoam" else d["t"][-1]) for s_, d in rows)
+    for r in range(len(rows)):
+        axs[r, 1].set_xlim(0, tmax * 1.02)
     axs[-1, 0].set_xlabel("outer iteration")
-    axs[-1, 1].set_xlabel("wall-clock time [s]")
+    axs[-1, 1].set_xlabel("wall-clock time [s] (same axis for both solvers)")
     fig.suptitle(f"{title}: residuals (coupledFoam: combined $R$, momentum "
-                 "$r_U$, continuity $r_p$; simpleFoam: initial residuals). "
-                 "Same y range; normalisations differ.", fontsize=7)
+                 "$r_U$, continuity $r_p$; simpleFoam: initial residuals; "
+                 "long runs: band = per-bin min/max, line = bin mean). "
+                 "Same y range; normalisations differ.", fontsize=6.5)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     return save(fig, f"hist_{run}_residuals", outdir)
+
+
+def _timing(solver, d):
+    if solver == "coupledFoam":
+        t = d["_t"]
+        it = d["iter"]
+        per = (d["tIter"] * (t[-1] / np.nansum(d["tIter"])) if "tIter" in d
+               else np.diff(t, prepend=0))
+        summ = d["_summary"]
+        wall, cpuh = summ.get("wallSeconds"), summ.get("cpuHours")
+    else:
+        t = d["t"]
+        it = np.arange(1, d["n"] + 1, dtype=float)
+        per = np.diff(t, prepend=0.0)
+        ref = d["ref"]
+        ta = ref.get("timingAllrun") or {}
+        wall = (ref.get("wallSeconds") or ref.get("wallSecondsSolver")
+                or ta.get("wallSeconds") or t[-1])
+        cpuh = ref.get("cpuHours") or ta.get("cpuHours")
+        if cpuh is None and wall:
+            cpuh = wall * (ref.get("nProcs") or 1) / 3600.0
+    return t, it, per, wall, cpuh
 
 
 def fig_wall(run, title, cf, sf, ph, outdir, info):
@@ -592,27 +696,20 @@ def fig_wall(run, title, cf, sf, ph, outdir, info):
             if x[1] is not None]
     if not have:
         return None
-    npan = 3 if cf is not None else 2
-    fig, axs = plt.subplots(npan, 1, figsize=(6.5, 2.0 * npan + 0.3), sharex=False)
+    lens = {}
     for solver, d, col in have:
-        if solver == "coupledFoam":
-            t = d["_t"]
-            it = d["iter"]
-            per = d["tIter"] * (t[-1] / np.nansum(d["tIter"])) if "tIter" in d else np.diff(t, prepend=0)
-            summ = d["_summary"]
-            wall, cpuh = summ.get("wallSeconds"), summ.get("cpuHours")
-        else:
-            t = d["t"]
-            it = np.arange(1, d["n"] + 1)
-            per = np.diff(t, prepend=0.0)
-            ref = d["ref"]
-            ta = ref.get("timingAllrun") or {}
-            wall = ref.get("wallSeconds") or ref.get("wallSecondsSolver") or ta.get("wallSeconds") or t[-1]
-            cpuh = ref.get("cpuHours") or ta.get("cpuHours")
-            if cpuh is None and wall:
-                cpuh = wall * (ref.get("nProcs") or 1) / 3600.0
+        lens[solver] = len(_timing(solver, d)[0])
+    zoom = (cf is not None and sf is not None
+            and lens["simpleFoam"] > 3 * lens["coupledFoam"])
+    ncol = 2 if zoom else 1
+    fig = plt.figure(figsize=(6.5, 6.8 if cf is not None else 4.6))
+    nrow = 3 if cf is not None else 2
+    gs = fig.add_gridspec(nrow, ncol)
+    top = [fig.add_subplot(gs[0, c]) for c in range(ncol)]
+    mid = [fig.add_subplot(gs[1, c]) for c in range(ncol)]
+    for solver, d, col in have:
+        t, it, per, wall, cpuh = _timing(solver, d)
         n = len(t)
-        # linear fit of t(it) and growth of the time per iteration
         A = np.vstack([it, np.ones_like(it)]).T
         slope, icpt = np.linalg.lstsq(A, t, rcond=None)[0]
         resid = t - (slope * it + icpt)
@@ -622,38 +719,124 @@ def fig_wall(run, title, cf, sf, ph, outdir, info):
         info.setdefault("wall", {})[solver] = dict(
             n=n, wall=wall, cpuh=cpuh, slope=slope, r2=r2, first=first,
             last=last)
-        lab = (f"{solver}: {n} it., {wall:.4g} s, "
-               f"{cpuh:.3g} CPU-h" if wall and cpuh else solver)
-        axs[0].plot(it, t, color=col, lw=1.0, label=lab)
-        axs[0].plot(it, slope * it + icpt, color=col, lw=0.6, ls=":",
-                    label=f"linear fit {slope:.3g} s/it ($R^2$ {r2:.3f})")
-        axs[1].semilogy(it, per, color=col, lw=0.3, alpha=0.4)
-        axs[1].semilogy(it, roll(per, max(5, n // 50)), color=col, lw=1.1,
-                        label=f"{solver} rolling median")
-    # linear iteration axis on purpose: linear growth must look linear
-    axs[0].set_ylabel("cumulative wall time [s]")
-    axs[1].set_ylabel("wall time per iteration [s]")
-    small_legend(axs[0], ncol=2, loc="upper left")
-    small_legend(axs[1], ncol=2, loc="upper left")
+        lab = (f"{solver}: {n} it., {wall:.4g} s, {cpuh:.3g} CPU-h"
+               if wall and cpuh else solver)
+        med = roll(per, max(5, n // 50))
+        for c in range(ncol):
+            main(top[c], it, t, col, label=lab if c == 0 else None, lw=1.8)
+            main(top[c], it, slope * it + icpt, col, lw=1.0,
+                 ls=":", zorder=5,
+                 label=(f"{solver} linear fit {slope:.3g} s/it ($R^2$ {r2:.3f})"
+                        if c == 0 else None))
+            raw(mid[c], it, per, col, log=True, alpha=0.3)
+            main(mid[c], it, med, col, lw=1.6,
+                 label=f"{solver} rolling median" if c == 0 else None)
+            mid[c].set_yscale("log")
+    if zoom:
+        nz = lens["coupledFoam"] * 1.05
+        for ax in (top[1], mid[1]):
+            ax.set_xlim(0, nz)
+            ax.set_title(f"zoom: the {lens['coupledFoam']} coupledFoam iterations",
+                         fontsize=6)
+        # y range of the zoom: what both solvers reach within nz iterations
+        ymax = 0.0
+        for s_, d, _ in have:
+            t, it = _timing(s_, d)[:2]
+            ymax = max(ymax, float(np.nanmax(t[it <= nz])) if np.any(it <= nz) else 0.0)
+        top[1].set_ylim(0, ymax * 1.05)
+        top[0].set_title("all iterations (linear axis: linear growth looks linear)",
+                         fontsize=6)
+    top[0].set_ylabel("cumulative wall time [s]")
+    mid[0].set_ylabel("wall time per iteration [s]")
+    small_legend(top[0], ncol=1, loc="upper left")
+    small_legend(mid[0], ncol=1, loc="upper right")
+    axes = top + mid
+    from matplotlib.ticker import MaxNLocator  # noqa: PLC0415
+    for ax in axes:
+        ax.xaxis.set_major_locator(MaxNLocator(5, integer=True))
     if cf is not None:
+        ax3 = fig.add_subplot(gs[2, :])
+        axes.append(ax3)
         it = cf["iter"]
         n = len(it)
         w = max(5, n // 50)
         parts = {k: roll(cf[k], w) for k in ("tAsm", "tSolve", "tTurb") if k in cf}
         if "tIter" in cf and parts:
             parts["other"] = np.clip(roll(cf["tIter"], w) - sum(parts.values()), 0, None)
-            axs[2].stackplot(it, *parts.values(), labels=list(parts),
-                             colors=[SPLIT[k] for k in parts], lw=0)
-            axs[2].set_ylabel("coupledFoam time per\niteration [s] (rolling median)")
-            small_legend(axs[2], ncol=4, loc="upper left")
-            events(axs[2], cf["_events"])
-        bands(axs[2], ph)
-    for ax in axs:
+            ax3.stackplot(it, *parts.values(), labels=list(parts),
+                          colors=[SPLIT[k] for k in parts], lw=0)
+            ax3.set_ylabel("coupledFoam time per\niteration [s] (rolling median)")
+            small_legend(ax3, ncol=4, loc="upper left")
+            events(ax3, cf["_events"])
+        bands(ax3, ph)
+    for ax in axes:
         ax.set_xlabel("outer iteration")
-    fig.suptitle(f"{title}: wall-clock time (dotted: linear fit; vertical "
-                 "dotted lines: GAMG autoTune events)", fontsize=7)
+    fig.suptitle(f"{title}: wall-clock time (dotted: linear fit; light band: "
+                 "per-iteration spread; vertical dotted lines: GAMG autoTune "
+                 "events)", fontsize=7)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     return save(fig, f"hist_{run}_wall", outdir)
+
+
+def fig_overview(group: str, runs: list[str], outdir: Path, log=print) -> str | None:
+    """Main-text overview: Cd and Cl of both solvers over wall-clock time
+    for a group of force cases, with the final D-042 window means."""
+    rows = []
+    for name in runs:
+        cfn, sfn, title, monitor = RUNS[name]
+        cfd, sfd = RUN / cfn, RUN / sfn
+        cf = read_cf(cfd) if cfd.is_dir() and not busy(cfd) else None
+        sf = read_sf(sfd) if sfd.is_dir() and not busy(sfd) else None
+        rows.append((title, load_series(cf, sf, cfd, sfd, "forces", None)))
+    if not any(r[1] for r in rows):
+        return None
+    fig, axs = plt.subplots(len(rows), 2, figsize=(6.5, 1.75 * len(rows) + 0.5),
+                            squeeze=False)
+    for r, (title, series) in enumerate(rows):
+        for c, q in enumerate(("Cd", "Cl")):
+            ax = axs[r, c]
+            if not series:
+                ax.text(0.5, 0.5, "results pending", ha="center", va="center",
+                        transform=ax.transAxes, color="#555555")
+                ax.set_yticks([])
+            vals = []
+            for solver, col, it, tt, qs in series:
+                if q not in qs:
+                    continue
+                y = qs[q]
+                ok = np.isfinite(tt)
+                raw(ax, tt[ok], y[ok], col, alpha=0.3)
+                n = len(y)
+                W = run_bench.stat_window(n)
+                m = roll(y, W, np.nanmean)
+                m[:max(W - 1, 0)] = np.nan
+                main(ax, tt[ok], m[ok], col, lw=1.6, ls="--")
+                mw = float(np.mean(y[n - W:])) if W and n >= W else np.nan
+                if np.isfinite(mw):
+                    ax.axhline(mw, color=col, lw=0.8, ls=":", zorder=3)
+                vals.append(y[n // 5:])
+            if vals:
+                v = np.concatenate(vals)
+                v = v[np.isfinite(v)]
+                if v.size > 1:
+                    lo, hi = np.percentile(v, [0.5, 99.5])
+                    pad = 0.3 * (hi - lo) + 1e-9
+                    ax.set_ylim(lo - pad, hi + pad)
+            ax.set_ylabel(f"{title}\n" + ("$C_d$" if q == "Cd" else "$C_l$"),
+                          fontsize=6)
+            ax.tick_params(labelsize=6)
+    for c in range(2):
+        axs[-1, c].set_xlabel("wall-clock time [s]")
+    from matplotlib.lines import Line2D  # noqa: PLC0415
+    h = [Line2D([], [], color=C_NATIVE, lw=1.6), Line2D([], [], color=C_COUPLED, lw=1.6),
+         Line2D([], [], color="k", lw=1.6, ls="--"), Line2D([], [], color="k", lw=0.8, ls=":")]
+    fig.legend(h, ["simpleFoam", "coupledFoam", "running mean over the D-042 window",
+                   "final window mean"], loc="lower center", ncol=4, fontsize=6)
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
+    stem = f"loads_overview_{group}"
+    save(fig, stem, outdir)
+    log(f"overview {group}: written")
+    return stem
 
 
 KNOWN = {"iter", "CFL", "omega", "cuts", "R", "rU", "rp", "linIters",
@@ -762,8 +945,8 @@ def fig_linear(run, title, cf, sf, ph, outdir, info):
             xs = np.arange(1, sf["n"] + 1)
             order = ["p", "Ux", "Uy", "Uz", "k", "omega", "epsilon", "nuTilda"]
             for j, f in enumerate(sorted(sf["nit"], key=lambda f: order.index(f) if f in order else 99)):
-                ax.plot(xs, np.maximum(sf["nit"][f], 0.8), color=SERIES[j % len(SERIES)],
-                        lw=0.5, label=f)
+                bx, by = decimate(xs, np.maximum(sf["nit"][f], 0.8))
+                ax.plot(bx, by, color=SERIES[j % len(SERIES)], lw=1.0, label=f)
             allv = np.concatenate([v[np.isfinite(v)] for v in sf["nit"].values()] or [np.array([1.0])])
             if allv.size and allv.max() > 10 * max(allv.min(), 1):
                 ax.set_yscale("log")
@@ -957,6 +1140,19 @@ def run(names: list[str] | None = None, outdir: Path = FIG,
         for k in made:
             figs.append((f"hist_{name}_{k}", f"{title}: {k} history"))
         secs.append(tex_section(name, title, made, info, status))
+    if not names:
+        for group, members in (("wing", ["T3_kOmegaSST_np1", "T3_GEKO_np1"]),
+                               ("motorbike", ["T4a_np10", "T4b_np10"]),
+                               ("ahmed", ["T5_np10"])):
+            try:
+                st = fig_overview(group, members, outdir, log)
+            except Exception as e:  # noqa: BLE001
+                notes.append(f"overview {group}: {type(e).__name__}: {e}")
+                st = None
+            if st:
+                figs.append((st, f"Cd and Cl overview, {group}"))
+            else:
+                notes.append(f"overview {group}: no data yet (placeholder)")
     (outdir / "histories.tex").write_text(
         "% Generated by bench/plot_histories.py - do not edit\n" + HIST_PREAMBLE
         + "\n".join(secs))
