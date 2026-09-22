@@ -156,7 +156,7 @@ Foam::label Foam::startupControl::rampEndIter() const
 
 bool Foam::startupControl::startProbe(const bool candidate)
 {
-    probing_ = (mode_ == mode::hybrid && candidate && !full_);
+    probing_ = (mode_ != mode::none && candidate && !full_);
     return probing_;
 }
 

@@ -12,7 +12,7 @@ Description
     cells keep their own beta (remediation::beta).
 
     startupMode
-        hybrid  (default) beta = 0 until the ramp start n0, then
+        hybrid  beta = 0 until the ramp start n0, then
                 beta_m = min(1, (m - n0)/startupRampLength), i.e. second
                 order from n0 + startupRampLength on. n0 is the first
                 accepted iteration n with one of the triggers
@@ -30,16 +30,19 @@ Description
                 iterations the ramp start is delayed, at most up to
                 startupRampStartMax (startupRampStartMax =
                 startupRampStart disables the delay).
-                developedStart: on a fresh start without potentialInit and
-                with a non-uniform initial U, iteration 1 is assembled with
+        upwind  (default) the behaviour before D-048, exactly: beta = 0
+                until n >= startupUpwindIters or R_n/R_1 < startupSwitchR,
+                then beta = 1 from the next iteration on.
+        developedStart (hybrid and upwind): on a fresh start without
+                potentialInit and with a non-uniform initial U (a mapped
+                or developed initial field), iteration 1 is assembled with
                 beta = 1; if max(rU, rp) (the scale-free residuals
                 sum|r|/sum(|Ax|+|b|) of the momentum and continuity rows,
                 not relative to R_1) is below startupDevelopedTol, the
                 start-up is skipped (beta = 1 from iteration 1), otherwise
-                iteration 1 is re-assembled with beta = 0.
-        upwind  the behaviour before D-048, exactly: beta = 0 until
-                n >= startupUpwindIters or R_n/R_1 < startupSwitchR, then
-                beta = 1 from the next iteration on.
+                iteration 1 is re-assembled with beta = 0. No test case
+                starts this way (T0: uniform U; T1-T5: potentialInit), so
+                their upwind trajectories are unchanged.
         none    beta = 1 from iteration 1 (mapped or restarted-from-other-
                 case initial fields).
 
@@ -125,8 +128,8 @@ public:
         bool done(const label m) const { return beta(m) >= 1; }
 
         //- Iteration 1 of a fresh start: should the developed-start probe
-        //  run? (hybrid mode, no potentialInit, non-uniform U). Sets the
-        //  probing flag, beta(1) is then 1 until decideDeveloped().
+        //  run? (hybrid or upwind mode, no potentialInit, non-uniform U).
+        //  Sets the probing flag, beta(1) is then 1 until decideDeveloped().
         bool startProbe(const bool candidate);
 
         bool probing() const noexcept { return probing_; }
