@@ -12,6 +12,7 @@
 #include "cellSet.H"
 #include "PstreamReduceOps.H"
 #include "wordRes.H"
+#include "sentinel.H"
 #include <cmath>
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
@@ -794,16 +795,18 @@ void Foam::remediation::write(const word& instance) const
         if (s) stat.insert(celli);
         if (d) dyn.insert(celli);
     }
+    // Written through the file handler: regIOobject::writeObject would
+    // redirect a non-time instance (<n>_lastValid) to the current time
     flag.correctBoundaryConditions();
-    flag.write();
+    sentinel::writeInstance(flag);
 
     cellSet cs(mesh_, "remediationStatic", stat);
     cs.instance() = instance;
-    cs.write();
+    sentinel::writeInstance(cs);
 
     cellSet cd(mesh_, "remediationDynamic", dyn);
     cd.instance() = instance;
-    cd.write();
+    sentinel::writeInstance(cd);
 
     if (zonalEnabled_)
     {
@@ -824,7 +827,7 @@ void Foam::remediation::write(const word& instance) const
         );
         zf.primitiveFieldRef() = zonalCfl_;
         zf.correctBoundaryConditions();
-        zf.write();
+        sentinel::writeInstance(zf);
     }
 }
 
