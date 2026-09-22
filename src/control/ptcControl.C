@@ -68,12 +68,12 @@ Foam::ptcControl::ptcControl
             << ", valid: mRDM EXP SER" << exit(FatalIOError);
     }
 
-    CFL0_ = d.getOrDefault<scalar>("CFL0", coupledDefaults::CFL0);
-    CFLmin_ = d.getOrDefault<scalar>("CFLmin", coupledDefaults::CFLmin);
-    CFLmax_ = d.getOrDefault<scalar>("CFLmax", coupledDefaults::CFLmax);
-    gamma_ = d.getOrDefault<scalar>("gamma", coupledDefaults::ptcGamma);
-    betaMax_ = d.getOrDefault<scalar>("betaMax", coupledDefaults::betaMax);
-    betaExp_ = d.getOrDefault<scalar>("betaExp", coupledDefaults::betaExp);
+    CFL0_ = d.getOrDefault<doubleScalar>("CFL0", coupledDefaults::CFL0);
+    CFLmin_ = d.getOrDefault<doubleScalar>("CFLmin", coupledDefaults::CFLmin);
+    CFLmax_ = d.getOrDefault<doubleScalar>("CFLmax", coupledDefaults::CFLmax);
+    gamma_ = d.getOrDefault<doubleScalar>("gamma", coupledDefaults::ptcGamma);
+    betaMax_ = d.getOrDefault<doubleScalar>("betaMax", coupledDefaults::betaMax);
+    betaExp_ = d.getOrDefault<doubleScalar>("betaExp", coupledDefaults::betaExp);
     nHold_ = d.getOrDefault<label>("nHold", coupledDefaults::nHold);
 
     const dictionary& ll = coupledDict.subOrEmptyDict("localLimit");
@@ -167,7 +167,7 @@ Foam::tmp<Foam::scalarField> Foam::ptcControl::rDeltaTV
         const scalar lambda =
             0.5*sumPhi[celli]
           + nu[celli]*std::cbrt(max(V[celli], VSMALL));
-        const scalar cfl = max(CFL_*cflFactor[celli], VSMALL);
+        const scalar cfl = max(scalar(CFL_*cflFactor[celli]), VSMALL);
         r[celli] = max(lambda, VSMALL)/cfl;
     }
 
@@ -320,9 +320,9 @@ Foam::label Foam::ptcControl::applyLocalLimit
 }
 
 
-void Foam::ptcControl::update(const scalar R)
+void Foam::ptcControl::update(const doubleScalar R)
 {
-    const scalar Rold = Rprev_;
+    const doubleScalar Rold = Rprev_;
     Rprev_ = R;
 
     if (Rold <= 0)
@@ -331,9 +331,9 @@ void Foam::ptcControl::update(const scalar R)
     }
 
     // GUARD: R > 0 before division
-    const scalar ratio = Rold/max(R, VSMALL);
+    const doubleScalar ratio = Rold/max(R, VSMALL);
 
-    scalar CFLnew = CFL_;
+    doubleScalar CFLnew = CFL_;
 
     switch (strategy_)
     {
@@ -342,8 +342,8 @@ void Foam::ptcControl::update(const scalar R)
             if (R <= Rold)
             {
                 // GUARD: pow base > 0 (ratio >= 1 here)
-                const scalar f = min(betaMax_, std::pow(ratio, gamma_));
-                CFLnew = min(CFLmax_, CFL_*max(scalar(1), f));
+                const doubleScalar f = min(betaMax_, std::pow(ratio, gamma_));
+                CFLnew = min(CFLmax_, CFL_*max(doubleScalar(1), f));
             }
             break;
         }
@@ -370,14 +370,14 @@ void Foam::ptcControl::update(const scalar R)
 }
 
 
-void Foam::ptcControl::decrease(const scalar factor)
+void Foam::ptcControl::decrease(const doubleScalar factor)
 {
     CFL_ = max(CFLmin_, factor*CFL_);
     holdRemaining_ = nHold_;
 }
 
 
-void Foam::ptcControl::boost(const scalar factor)
+void Foam::ptcControl::boost(const doubleScalar factor)
 {
     if (holdRemaining_ > 0 || !(factor > 1))
     {
@@ -423,8 +423,8 @@ void Foam::ptcControl::writeState(dictionary& dict) const
 
 void Foam::ptcControl::readState(const dictionary& dict)
 {
-    CFL_ = dict.get<scalar>("CFL");
-    Rprev_ = dict.getOrDefault<scalar>("Rprev", -1);
+    CFL_ = dict.get<doubleScalar>("CFL");
+    Rprev_ = dict.getOrDefault<doubleScalar>("Rprev", -1);
     holdRemaining_ = dict.getOrDefault<label>("nHoldRemaining", 0);
 
     if (localMemory_)

@@ -65,9 +65,9 @@ Foam::gamgAutoTune::gamgAutoTune
 
 // * * * * * * * * * * * * * Private Member Functions  * * * * * * * * * * * //
 
-Foam::scalar Foam::gamgAutoTune::median(const UList<scalar>& v)
+Foam::doubleScalar Foam::gamgAutoTune::median(const UList<doubleScalar>& v)
 {
-    List<scalar> s(v);
+    List<doubleScalar> s(v);
     std::sort(s.begin(), s.end());
 
     const label n = s.size();
@@ -84,7 +84,7 @@ void Foam::gamgAutoTune::addEvent
 (
     const label iter,
     const std::string& what,
-    const scalar rhoMed
+    const doubleScalar rhoMed
 )
 {
     Info<< "GAMG-tune: " << what.c_str() << " rho_med=" << rhoMed << endl;
@@ -92,7 +92,7 @@ void Foam::gamgAutoTune::addEvent
 }
 
 
-void Foam::gamgAutoTune::applyHigh(const label iter, const scalar rhoMed)
+void Foam::gamgAutoTune::applyHigh(const label iter, const doubleScalar rhoMed)
 {
     const label nPost = gamg_.nPostSweeps();
 
@@ -175,7 +175,7 @@ Foam::blockGAMG::cycleKind Foam::gamgAutoTune::demotionTarget() const
 }
 
 
-void Foam::gamgAutoTune::demote(const label iter, const scalar rhoMed)
+void Foam::gamgAutoTune::demote(const label iter, const doubleScalar rhoMed)
 {
     const blockGAMG::cycleKind c = gamg_.cycleType();
     const blockGAMG::cycleKind prev = demotionTarget();
@@ -195,7 +195,7 @@ void Foam::gamgAutoTune::demote(const label iter, const scalar rhoMed)
 }
 
 
-void Foam::gamgAutoTune::applyLow(const label iter, const scalar rhoMed)
+void Foam::gamgAutoTune::applyLow(const label iter, const doubleScalar rhoMed)
 {
     // 6.3.5: "rho < 0.3 and nPostSweeps > 1: nPostSweeps -= 1. If
     // nPostSweeps == 1 and rho < 0.2 and cycleType was promoted by the
@@ -233,7 +233,7 @@ void Foam::gamgAutoTune::applyLow(const label iter, const scalar rhoMed)
 }
 
 
-void Foam::gamgAutoTune::evaluate(const label iter, const scalar rhoMed)
+void Foam::gamgAutoTune::evaluate(const label iter, const doubleScalar rhoMed)
 {
     // Failure condition (checked on the state the window was run with)
     const blockGAMG::cycleKind c = gamg_.cycleType();
@@ -321,7 +321,7 @@ void Foam::gamgAutoTune::evaluate(const label iter, const scalar rhoMed)
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-bool Foam::gamgAutoTune::record(const label iter, const scalar rho)
+bool Foam::gamgAutoTune::record(const label iter, const doubleScalar rho)
 {
     changed_ = false;
 
@@ -358,7 +358,7 @@ void Foam::gamgAutoTune::writeState(dictionary& dict) const
     dictionary d;
     d.set("nPostSweeps", gamg_.nPostSweeps());
     d.set("cycleType", blockGAMG::cycleName(gamg_.cycleType()));
-    d.set("window", scalarList(window_));
+    d.set("window", List<doubleScalar>(window_));
     d.set("nInWindow", nInWindow_);
     d.set("prevCondition", label(prevCondition_));
     d.set("nSameCondition", nSameCondition_);
@@ -402,7 +402,7 @@ void Foam::gamgAutoTune::readState(const dictionary& dict)
             << blockGAMG::cycleName(gamg_.cycleType()) << endl;
     }
 
-    const scalarList w(d.get<scalarList>("window"));
+    const List<doubleScalar> w(d.get<List<doubleScalar>>("window"));
     window_.clear();
     window_.push_back(w);
     nInWindow_ = d.get<label>("nInWindow");

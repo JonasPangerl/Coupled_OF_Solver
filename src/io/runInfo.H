@@ -34,7 +34,7 @@ namespace runInfo
 label peakRSSkB();
 
 //- CPU time (user + system) of this process in seconds
-double cpuSeconds();
+doubleScalar cpuSeconds();
 
 //- Enable FTZ and DAZ (x86 SSE). Returns true if applied.
 bool enableFTZ();

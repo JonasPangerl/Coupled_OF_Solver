@@ -12,15 +12,15 @@
 Foam::adaptiveTolerance::adaptiveTolerance(const dictionary& d)
 :
     enabled_(d.getOrDefault<bool>("adaptiveRelTol", coupledDefaults::adaptiveRelTol)),
-    etaMin_(d.getOrDefault<scalar>("etaMin", coupledDefaults::etaMin)),
-    etaMax_(d.getOrDefault<scalar>("etaMax", coupledDefaults::etaMax)),
-    gamma_(d.getOrDefault<scalar>("gammaEW", coupledDefaults::gammaEW)),
-    alpha_(d.getOrDefault<scalar>("alphaEW", coupledDefaults::alphaEW)),
+    etaMin_(d.getOrDefault<doubleScalar>("etaMin", coupledDefaults::etaMin)),
+    etaMax_(d.getOrDefault<doubleScalar>("etaMax", coupledDefaults::etaMax)),
+    gamma_(d.getOrDefault<doubleScalar>("gammaEW", coupledDefaults::gammaEW)),
+    alpha_(d.getOrDefault<doubleScalar>("alphaEW", coupledDefaults::alphaEW)),
     safeguard_
     (
-        d.getOrDefault<scalar>("etaSafeguard", coupledDefaults::etaSafeguard)
+        d.getOrDefault<doubleScalar>("etaSafeguard", coupledDefaults::etaSafeguard)
     ),
-    relTolFixed_(d.getOrDefault<scalar>("relTol", coupledDefaults::relTol)),
+    relTolFixed_(d.getOrDefault<doubleScalar>("relTol", coupledDefaults::relTol)),
     etaPrev_(-1),
     Rprev_(-1),
     lastRaw_(-1),
@@ -37,9 +37,9 @@ Foam::adaptiveTolerance::adaptiveTolerance(const dictionary& d)
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-Foam::scalar Foam::adaptiveTolerance::eta
+Foam::doubleScalar Foam::adaptiveTolerance::eta
 (
-    const scalar R,
+    const doubleScalar R,
     const bool startupDone
 )
 {
@@ -59,12 +59,12 @@ Foam::scalar Foam::adaptiveTolerance::eta
     }
 
     // GUARD: Rprev > 0 checked above; pow base >= 0
-    scalar e = gamma_*std::pow(max(R, scalar(0))/Rprev_, alpha_);
+    doubleScalar e = gamma_*std::pow(max(R, doubleScalar(0))/Rprev_, alpha_);
     lastRaw_ = e;
     lastClip_ = "none";
 
     // Safeguard 1
-    const scalar sg = gamma_*std::pow(etaPrev_, alpha_);
+    const doubleScalar sg = gamma_*std::pow(etaPrev_, alpha_);
     if (sg > safeguard_ && sg > e)
     {
         e = sg;
@@ -86,7 +86,7 @@ Foam::scalar Foam::adaptiveTolerance::eta
 }
 
 
-void Foam::adaptiveTolerance::accept(const scalar R, const scalar eta)
+void Foam::adaptiveTolerance::accept(const doubleScalar R, const doubleScalar eta)
 {
     Rprev_ = R;
     etaPrev_ = eta;
@@ -102,8 +102,8 @@ void Foam::adaptiveTolerance::writeState(dictionary& dict) const
 
 void Foam::adaptiveTolerance::readState(const dictionary& dict)
 {
-    etaPrev_ = dict.getOrDefault<scalar>("etaPrev", -1);
-    Rprev_ = dict.getOrDefault<scalar>("RprevEW", -1);
+    etaPrev_ = dict.getOrDefault<doubleScalar>("etaPrev", -1);
+    Rprev_ = dict.getOrDefault<doubleScalar>("RprevEW", -1);
 }
 
 

@@ -81,12 +81,12 @@ private:
 
         strategy strategy_;
         word strategyName_;
-        scalar CFL0_;
-        scalar CFLmin_;
-        scalar CFLmax_;
-        scalar gamma_;
-        scalar betaMax_;
-        scalar betaExp_;
+        doubleScalar CFL0_;
+        doubleScalar CFLmin_;
+        doubleScalar CFLmax_;
+        doubleScalar gamma_;
+        doubleScalar betaMax_;
+        doubleScalar betaExp_;
         label nHold_;
 
         bool localLimit_;
@@ -102,10 +102,10 @@ private:
         // State
 
             //- Current global CFL
-            scalar CFL_;
+            doubleScalar CFL_;
 
             //- R of the previous iteration (-1: none yet)
-            scalar Rprev_;
+            doubleScalar Rprev_;
 
             //- Iterations left in the hold
             label holdRemaining_;
@@ -146,9 +146,9 @@ public:
 
     // Member Functions
 
-        scalar CFL() const noexcept { return CFL_; }
-        scalar CFLmin() const noexcept { return CFLmin_; }
-        scalar Rprev() const noexcept { return Rprev_; }
+        doubleScalar CFL() const noexcept { return CFL_; }
+        doubleScalar CFLmin() const noexcept { return CFLmin_; }
+        doubleScalar Rprev() const noexcept { return Rprev_; }
         label holdRemaining() const noexcept { return holdRemaining_; }
         label nHold() const noexcept { return nHold_; }
         label nLocalLimited() const noexcept { return nLocalLimited_; }
@@ -195,15 +195,15 @@ public:
         );
 
         //- Strategy update after an iteration with normalised residual R
-        void update(const scalar R);
+        void update(const doubleScalar R);
 
         //- Decrease CFL by factor (line search kappa, sentinel), floor CFLmin,
         //  start the hold
-        void decrease(const scalar factor);
+        void decrease(const doubleScalar factor);
 
         //- Increase CFL by factor >= 1 (line-search beta on a full step,
         //  7.2), capped at CFLmax; no effect during a hold
-        void boost(const scalar factor);
+        void boost(const doubleScalar factor);
 
         //- Restart state
         void writeState(dictionary& dict) const;

@@ -87,10 +87,10 @@ class lineSearch
 
         scalar fU_;
         scalar fp_;
-        scalar omegaMin_;
-        scalar kappa_;
+        doubleScalar omegaMin_;
+        doubleScalar kappa_;
         label maxCflCuts_;
-        scalar beta_;
+        doubleScalar beta_;
 
         //- Uref selection (D-050): boundary | field | explicit
         word UrefMode_;
@@ -142,10 +142,10 @@ public:
 
     // Member Functions
 
-        scalar omegaMin() const noexcept { return omegaMin_; }
-        scalar kappa() const noexcept { return kappa_; }
+        doubleScalar omegaMin() const noexcept { return omegaMin_; }
+        doubleScalar kappa() const noexcept { return kappa_; }
         label maxCflCuts() const noexcept { return maxCflCuts_; }
-        scalar beta() const noexcept { return beta_; }
+        doubleScalar beta() const noexcept { return beta_; }
         //- Classification reference of the current iteration (dynamic
         //  set, increment clipping, sentinel, Anderson norm); the frozen
         //  Uref except during a startupReference ramp
@@ -195,7 +195,7 @@ public:
         void setStartup(const scalar betaStartup, const bool startupDone);
 
         //- omega for an increment (4 values per cell), global
-        scalar omega(const blockScalarUList& dx) const;
+        doubleScalar omega(const blockScalarUList& dx) const;
 
         //- Cells violating the omegaMin bound (local labels)
         labelList offendingCells(const blockScalarUList& dx) const;
@@ -205,7 +205,7 @@ public:
         void countViolations
         (
             const blockScalarUList& dx,
-            const scalar omega,
+            const doubleScalar omega,
             label& nU,
             label& np
         ) const;

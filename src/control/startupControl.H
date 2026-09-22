@@ -83,15 +83,15 @@ private:
         mode mode_;
         word modeName_;
         label upwindIters_;
-        scalar switchR_;
+        doubleScalar switchR_;
         label rampStart_;
         label rampLength_;
         label rampStartMax_;
         bool stagnationTrigger_;
-        scalar stagnationFactor_;
+        doubleScalar stagnationFactor_;
         label stagnationWindow_;
-        scalar fastFactor_;
-        scalar developedTol_;
+        doubleScalar fastFactor_;
+        doubleScalar developedTol_;
 
     // State
 
@@ -102,7 +102,7 @@ private:
         word trigger_;
 
         //- R of the last accepted iterations (at most window + 1)
-        scalarList Rhist_;
+        List<doubleScalar> Rhist_;
 
         //- Developed-start probe active in the current iteration
         bool probing_;
@@ -137,11 +137,11 @@ public:
 
         //- Decide the probe from the scale-free residuals of iteration 1;
         //  returns true if the start is developed (keep beta = 1)
-        bool decideDeveloped(const scalar rU, const scalar rp);
+        bool decideDeveloped(const doubleScalar rU, const doubleScalar rp);
 
         //- Accepted iteration n with the normalised residual R: evaluate
         //  the triggers; returns true if the ramp (or jump) starts at n
-        bool update(const label n, const scalar R);
+        bool update(const label n, const doubleScalar R);
 
         label rampStartIter() const noexcept { return rampStartIter_; }
         label rampEndIter() const;

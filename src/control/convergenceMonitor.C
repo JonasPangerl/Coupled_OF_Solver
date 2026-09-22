@@ -29,12 +29,12 @@ Foam::convergenceMonitor::convergenceMonitor(const dictionary& coupledDict)
     const dictionary& d = coupledDict.subOrEmptyDict("convergence");
     mode_ = d.getOrDefault<word>("mode", "any");
     window_ = d.getOrDefault<label>("forceCoeffsWindow", window_);
-    forceTol_ = d.getOrDefault<scalar>("forceCoeffsTol", forceTol_);
-    residualTol_ = d.getOrDefault<scalar>("residualTol", residualTol_);
+    forceTol_ = d.getOrDefault<doubleScalar>("forceCoeffsTol", forceTol_);
+    residualTol_ = d.getOrDefault<doubleScalar>("residualTol", residualTol_);
     // Statistics/drift window: default = forceCoeffsWindow
     rmsWindow_ = d.getOrDefault<label>("forceCoeffsRmsWindow", window_);
-    driftTol_ = d.getOrDefault<scalar>("forceCoeffsDriftTol", driftTol_);
-    driftAbs_ = d.getOrDefault<scalar>("forceCoeffsDriftAbs", driftAbs_);
+    driftTol_ = d.getOrDefault<doubleScalar>("forceCoeffsDriftTol", driftTol_);
+    driftAbs_ = d.getOrDefault<doubleScalar>("forceCoeffsDriftAbs", driftAbs_);
 
     if (mode_ != "any" && mode_ != "all")
     {
@@ -64,7 +64,7 @@ Foam::convergenceMonitor::convergenceMonitor(const dictionary& coupledDict)
 
 bool Foam::convergenceMonitor::windowConverged
 (
-    const DynamicList<scalar>& h
+    const DynamicList<doubleScalar>& h
 ) const
 {
     if (window_ <= 0 || h.size() < window_)
@@ -72,14 +72,14 @@ bool Foam::convergenceMonitor::windowConverged
         return false;
     }
 
-    scalar mn = GREAT, mx = -GREAT, sum = 0;
+    doubleScalar mn = GREAT, mx = -GREAT, sum = 0;
     for (label i = h.size() - window_; i < h.size(); ++i)
     {
         mn = min(mn, h[i]);
         mx = max(mx, h[i]);
         sum += h[i];
     }
-    const scalar mean = sum/scalar(window_);
+    const doubleScalar mean = sum/doubleScalar(window_);
 
     return (mx - mn) <= forceTol_*mag(mean);
 }
@@ -87,7 +87,7 @@ bool Foam::convergenceMonitor::windowConverged
 
 Foam::convergenceMonitor::coeffStats Foam::convergenceMonitor::windowStats
 (
-    const DynamicList<scalar>& h
+    const DynamicList<doubleScalar>& h
 ) const
 {
     coeffStats st;
@@ -100,27 +100,27 @@ Foam::convergenceMonitor::coeffStats Foam::convergenceMonitor::windowStats
 
     // Shifted by the first sample of the window: exact for a constant
     // sequence (RMS and drift exactly 0) and free of cancellation
-    const scalar x0 = h[start];
-    scalar sum = 0;
+    const doubleScalar x0 = h[start];
+    doubleScalar sum = 0;
     for (label i = start; i < h.size(); ++i)
     {
         sum += h[i] - x0;
     }
-    const scalar dm = sum/scalar(st.n);
+    const doubleScalar dm = sum/doubleScalar(st.n);
     st.mean = x0 + dm;
 
-    scalar var = 0;
+    doubleScalar var = 0;
     for (label i = start; i < h.size(); ++i)
     {
         var += sqr((h[i] - x0) - dm);
     }
-    st.rms = std::sqrt(var/scalar(st.n));
+    st.rms = std::sqrt(var/doubleScalar(st.n));
 
     if (st.n >= 2)
     {
         // Older half: the first n/2 samples of the window
         const label nOld = st.n/2;
-        scalar sOld = 0, sNew = 0;
+        doubleScalar sOld = 0, sNew = 0;
         for (label i = start; i < start + nOld; ++i)
         {
             sOld += h[i] - x0;
@@ -129,13 +129,13 @@ Foam::convergenceMonitor::coeffStats Foam::convergenceMonitor::windowStats
         {
             sNew += h[i] - x0;
         }
-        st.drift = mag(sOld/scalar(nOld) - sNew/scalar(st.n - nOld));
+        st.drift = mag(sOld/doubleScalar(nOld) - sNew/doubleScalar(st.n - nOld));
     }
     return st;
 }
 
 
-const Foam::DynamicList<Foam::scalar>& Foam::convergenceMonitor::history
+const Foam::DynamicList<Foam::doubleScalar>& Foam::convergenceMonitor::history
 (
     const label i
 ) const
@@ -152,9 +152,9 @@ const char* Foam::convergenceMonitor::coeffName(const label i)
 }
 
 
-Foam::scalar Foam::convergenceMonitor::last(const label i) const
+Foam::doubleScalar Foam::convergenceMonitor::last(const label i) const
 {
-    const DynamicList<scalar>& h = history(i);
+    const DynamicList<doubleScalar>& h = history(i);
     return (h.size() ? h.last() : 0);
 }
 
@@ -176,7 +176,7 @@ bool Foam::convergenceMonitor::driftConverged() const
     }
     for (label i = 0; i < nCoeffs(); ++i)
     {
-        const DynamicList<scalar>& h = history(i);
+        const DynamicList<doubleScalar>& h = history(i);
         if (h.size() < rmsWindow_)
         {
             return false;
@@ -191,7 +191,7 @@ bool Foam::convergenceMonitor::driftConverged() const
 }
 
 
-void Foam::convergenceMonitor::addSample(const scalar Cd, const scalar Cl)
+void Foam::convergenceMonitor::addSample(const doubleScalar Cd, const doubleScalar Cl)
 {
     if (foName_.empty())
     {
@@ -204,9 +204,9 @@ void Foam::convergenceMonitor::addSample(const scalar Cd, const scalar Cl)
 
 void Foam::convergenceMonitor::addSample
 (
-    const scalar Cd,
-    const scalar Cl,
-    const scalar Cm
+    const doubleScalar Cd,
+    const doubleScalar Cl,
+    const doubleScalar Cm
 )
 {
     addSample(Cd, Cl);
@@ -253,8 +253,8 @@ void Foam::convergenceMonitor::record(const Time& runTime)
     // unchanged (Cd, Cl) pair and not recorded again: a genuinely new
     // evaluation of a changed flow field reproduces both values bit for
     // bit only if the forces did not change at all.
-    const scalar Cd = props.getObjectResult<scalar>(foName_, "Cd");
-    const scalar Cl = props.getObjectResult<scalar>(foName_, "Cl");
+    const doubleScalar Cd = props.getObjectResult<scalar>(foName_, "Cd");
+    const doubleScalar Cl = props.getObjectResult<scalar>(foName_, "Cl");
 
     if (Cd_.size() && Cd == Cd_.last() && Cl == Cl_.last())
     {
@@ -288,12 +288,12 @@ void Foam::convergenceMonitor::writeState(dictionary& dict) const
     const label start = Cd_.size() - n;
 
     dictionary d;
-    d.set("Cd", scalarList(SubList<scalar>(Cd_, n, start)));
-    d.set("Cl", scalarList(SubList<scalar>(Cl_, n, start)));
+    d.set("Cd", List<doubleScalar>(SubList<doubleScalar>(Cd_, n, start)));
+    d.set("Cl", List<doubleScalar>(SubList<doubleScalar>(Cl_, n, start)));
     if (haveCm_)
     {
         const label nm = (keep > 0 ? min(keep, Cm_.size()) : 0);
-        d.set("Cm", scalarList(SubList<scalar>(Cm_, nm, Cm_.size() - nm)));
+        d.set("Cm", List<doubleScalar>(SubList<doubleScalar>(Cm_, nm, Cm_.size() - nm)));
     }
     dict.set("convergenceMonitor", d);
 
@@ -309,8 +309,8 @@ void Foam::convergenceMonitor::readState(const dictionary& dict)
         return;
     }
 
-    const scalarList Cd(dp->get<scalarList>("Cd"));
-    const scalarList Cl(dp->get<scalarList>("Cl"));
+    const List<doubleScalar> Cd(dp->get<List<doubleScalar>>("Cd"));
+    const List<doubleScalar> Cl(dp->get<List<doubleScalar>>("Cl"));
     if (Cd.size() != Cl.size())
     {
         FatalIOErrorInFunction(*dp)
@@ -323,7 +323,7 @@ void Foam::convergenceMonitor::readState(const dictionary& dict)
     Cl_.push_back(Cl);
 
     Cm_.clear();
-    scalarList Cm;
+    List<doubleScalar> Cm;
     if (dp->readIfPresent("Cm", Cm))
     {
         Cm_.push_back(Cm);
@@ -332,7 +332,7 @@ void Foam::convergenceMonitor::readState(const dictionary& dict)
 }
 
 
-bool Foam::convergenceMonitor::converged(const scalar R) const
+bool Foam::convergenceMonitor::converged(const doubleScalar R) const
 {
     const bool resOk = R < residualTol_;
 
@@ -354,21 +354,21 @@ bool Foam::convergenceMonitor::converged(const scalar R) const
 }
 
 
-Foam::scalar Foam::convergenceMonitor::forceCriterionRatio() const
+Foam::doubleScalar Foam::convergenceMonitor::forceCriterionRatio() const
 {
     if (foName_.empty() || window_ <= 0 || forceTol_ <= 0)
     {
         return -1;
     }
-    scalar worst = 0;
-    for (const DynamicList<scalar>* hp : {&Cd_, &Cl_})
+    doubleScalar worst = 0;
+    for (const DynamicList<doubleScalar>* hp : {&Cd_, &Cl_})
     {
-        const DynamicList<scalar>& h = *hp;
+        const DynamicList<doubleScalar>& h = *hp;
         if (h.size() < window_)
         {
             return -1;
         }
-        scalar mn = GREAT, mx = -GREAT, sum = 0;
+        doubleScalar mn = GREAT, mx = -GREAT, sum = 0;
         for (label i = h.size() - window_; i < h.size(); ++i)
         {
             mn = min(mn, h[i]);
@@ -376,7 +376,7 @@ Foam::scalar Foam::convergenceMonitor::forceCriterionRatio() const
             sum += h[i];
         }
         // GUARD: |mean| floored at VSMALL
-        const scalar den = forceTol_*max(mag(sum/scalar(window_)), VSMALL);
+        const doubleScalar den = forceTol_*max(mag(sum/doubleScalar(window_)), VSMALL);
         worst = max(worst, (mx - mn)/den);
     }
     return worst;

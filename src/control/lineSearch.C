@@ -138,11 +138,11 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
     const dictionary& d = coupledDict.subOrEmptyDict("lineSearch");
     fU_ = d.getOrDefault<scalar>("fU", coupledDefaults::fU);
     fp_ = d.getOrDefault<scalar>("fp", coupledDefaults::fp);
-    omegaMin_ = d.getOrDefault<scalar>("omegaMin", coupledDefaults::omegaMin);
-    kappa_ = d.getOrDefault<scalar>("kappa", coupledDefaults::kappa);
+    omegaMin_ = d.getOrDefault<doubleScalar>("omegaMin", coupledDefaults::omegaMin);
+    kappa_ = d.getOrDefault<doubleScalar>("kappa", coupledDefaults::kappa);
     maxCflCuts_ =
         d.getOrDefault<label>("maxCflCuts", coupledDefaults::maxCflCuts);
-    beta_ = d.getOrDefault<scalar>("beta", coupledDefaults::lineSearchBeta);
+    beta_ = d.getOrDefault<doubleScalar>("beta", coupledDefaults::lineSearchBeta);
 
     // Negated comparison also rejects non-finite input
     if (!(beta_ >= 1) || !std::isfinite(beta_))
@@ -301,10 +301,10 @@ void Foam::lineSearch::setStartup
 }
 
 
-Foam::scalar Foam::lineSearch::omega(const blockScalarUList& dx) const
+Foam::doubleScalar Foam::lineSearch::omega(const blockScalarUList& dx) const
 {
     const label nCells = dx.size()/blockDim;
-    scalar om = 1;
+    doubleScalar om = 1;
 
     const scalar limU = fU_*UstepEff_;
     const scalar limp = fp_*pstepEff_;
@@ -319,12 +319,12 @@ Foam::scalar Foam::lineSearch::omega(const blockScalarUList& dx) const
         const scalar dp = std::abs(scalar(d[blockP]));
 
         // GUARD: line-search denominators (9.2)
-        om = min(om, limU/max(dU, VSMALL));
-        om = min(om, limp/max(dp, VSMALL));
+        om = min(om, doubleScalar(limU/max(dU, VSMALL)));
+        om = min(om, doubleScalar(limp/max(dp, VSMALL)));
     }
 
-    reduce(om, minOp<scalar>());
-    return min(om, scalar(1));
+    reduce(om, minOp<doubleScalar>());
+    return min(om, doubleScalar(1));
 }
 
 
@@ -335,8 +335,8 @@ Foam::labelList Foam::lineSearch::offendingCells
 {
     const label nCells = dx.size()/blockDim;
     // GUARD: omegaMin > 0 by construction of the dictionary checks
-    const scalar limU = fU_*UstepEff_/max(omegaMin_, VSMALL);
-    const scalar limp = fp_*pstepEff_/max(omegaMin_, VSMALL);
+    const scalar limU = scalar(fU_*UstepEff_/max(omegaMin_, VSMALL));
+    const scalar limp = scalar(fp_*pstepEff_/max(omegaMin_, VSMALL));
 
     DynamicList<label> cells;
     for (label celli = 0; celli < nCells; ++celli)
@@ -359,7 +359,7 @@ Foam::labelList Foam::lineSearch::offendingCells
 void Foam::lineSearch::countViolations
 (
     const blockScalarUList& dx,
-    const scalar omega,
+    const doubleScalar omega,
     label& nU,
     label& np
 ) const
@@ -372,11 +372,14 @@ void Foam::lineSearch::countViolations
     for (label celli = 0; celli < nCells; ++celli)
     {
         const blockScalar* d = dx.cdata() + celli*blockDim;
-        const scalar dU = omega*std::sqrt
+        const scalar dU = scalar
         (
-            sqr(scalar(d[0])) + sqr(scalar(d[1])) + sqr(scalar(d[2]))
+            omega*std::sqrt
+            (
+                sqr(scalar(d[0])) + sqr(scalar(d[1])) + sqr(scalar(d[2]))
+            )
         );
-        const scalar dp = omega*std::abs(scalar(d[blockP]));
+        const scalar dp = scalar(omega*std::abs(scalar(d[blockP])));
         if (dU > limU)
         {
             ++nU;

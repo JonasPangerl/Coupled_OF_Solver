@@ -130,6 +130,15 @@ int main(int argc, char *argv[])
 
     // FTZ/DAZ for benchmark runs (spec 9.1)
     const bool ftzApplied = (ftz ? runInfo::enableFTZ() : false);
+    if (sizeof(scalar) == 4 && !ftzApplied)
+    {
+        // D8.2: FTZ/DAZ is mandatory for SP benchmarks (denormals are far
+        // more frequent in float and cost up to 100x per operation)
+        WarningInFunction
+            << "SP build without FTZ/DAZ (coupled.ftz " << ftz
+            << "): timings are not representative (amendment D8.2)"
+            << endl;
+    }
 
     // * * * * * * * * * * * * * Components * * * * * * * * * * * * * * * * //
 
@@ -320,8 +329,8 @@ int main(int argc, char *argv[])
     // * * * * * * * * * * * * * * * Restart (10) * * * * * * * * * * * * * //
 
     label iter = 0;
-    scalar R1 = -1;
-    scalar phiConsistency = -1;
+    doubleScalar R1 = -1;
+    doubleScalar phiConsistency = -1;
     bool restarted = false;
 
     {
@@ -331,7 +340,7 @@ int main(int argc, char *argv[])
             restarted = true;
             iter = st.get<label>("iter");
             startup.readState(st, iter);
-            R1 = st.get<scalar>("R1");
+            R1 = st.get<doubleScalar>("R1");
             ls.setReference
             (
                 st.get<scalar>("Uref"),
@@ -616,7 +625,7 @@ int main(int argc, char *argv[])
     label linFails = 0;
     bool converged = false;
     clockTime runTimer;
-    scalar lastR = -1;
+    doubleScalar lastR = -1;
     label lastLinIters = 0;
 
     // * * * * * * * * * * * * * * * Outer loop * * * * * * * * * * * * * * * //
@@ -627,10 +636,10 @@ int main(int argc, char *argv[])
     {
         ++iter;
         clockTime iterTimer;
-        scalar tAsm = 0, tSolve = 0, tTurb = 0;
+        doubleScalar tAsm = 0, tSolve = 0, tTurb = 0;
 
         // Diagnostics state of this iteration (filled only if active)
-        const scalar CFLstart = ptc.CFL();
+        const doubleScalar CFLstart = ptc.CFL();
         const label nFlushedStart = aa.nFlushed();
         label nSenChecks = 0;
         doubleScalar tFlux = 0;
@@ -744,11 +753,11 @@ int main(int argc, char *argv[])
 
         blockScalarList dx(blockDim*mesh.nCells(), Zero);
         blockSolverPerformance perf;
-        scalar omega = 1;
+        doubleScalar omega = 1;
         label cuts = 0;
         label nLocLim = 0;
-        scalar Rraw = 0;
-        scalar eta = 0;
+        doubleScalar Rraw = 0;
+        doubleScalar eta = 0;
         bool skipStep = false;
 
         // Local limiter memory: release step (no effect without memory)
@@ -815,8 +824,8 @@ int main(int argc, char *argv[])
 
             if (startup.probing())
             {
-                const scalar rU1 = assembler.rU();
-                const scalar rp1 = assembler.rp();
+                const doubleScalar rU1 = assembler.rU();
+                const doubleScalar rp1 = assembler.rp();
                 if (startup.decideDeveloped(rU1, rp1))
                 {
                     Info<< "coupledFoam: developed start (rU " << rU1
@@ -838,7 +847,7 @@ int main(int argc, char *argv[])
             // Eisenstat-Walker inner tolerance (amendment B2)
             {
                 // GUARD: R1 >= VSMALL (9.2)
-                const scalar Rn = Rraw/max((R1 > 0 ? R1 : Rraw), VSMALL);
+                const doubleScalar Rn = Rraw/max((R1 > 0 ? R1 : Rraw), VSMALL);
                 eta = ew.eta(Rn, startupDone);
                 linSolver->setRelTol(eta);
             }
@@ -1010,7 +1019,7 @@ int main(int argc, char *argv[])
         {
             R1 = max(Rraw, VSMALL);
         }
-        const scalar R = Rraw/max(R1, VSMALL);
+        const doubleScalar R = Rraw/max(R1, VSMALL);
         const label nClamped = returnReduce(assembler.nClamped(), sumOp<label>());
         if (nClamped)
         {
@@ -1045,7 +1054,7 @@ int main(int argc, char *argv[])
         // --- Field update
         if (!skipStep)
         {
-            rem.clipIncrement(dx, U, omega, ls.Uref());
+            rem.clipIncrement(dx, U, scalar(omega), ls.Uref());
         }
         sen.store(U, p, phi, kPtr, omegaPtr, nutPtr);
 
@@ -1057,8 +1066,8 @@ int main(int argc, char *argv[])
             forAll(Ui, celli)
             {
                 const blockScalar* d = dx.cdata() + celli*blockDim;
-                dUapplied[celli] = omega*vector(d[0], d[1], d[2]);
-                dpApplied[celli] = omega*scalar(d[blockP]);
+                dUapplied[celli] = scalar(omega)*vector(d[0], d[1], d[2]);
+                dpApplied[celli] = scalar(omega)*scalar(d[blockP]);
                 Ui[celli] += dUapplied[celli];
                 pi[celli] += dpApplied[celli];
             }
@@ -1277,7 +1286,7 @@ int main(int argc, char *argv[])
             // Only accepted, successful solves enter the rho window
             // (rho < 0: not recorded, the iteration still counts)
             const bool useRho = !rolledBack && !skipStep && perf.converged;
-            if (tuner->record(iter, useRho ? scalar(perf.rho) : scalar(-1)))
+            if (tuner->record(iter, useRho ? doubleScalar(perf.rho) : doubleScalar(-1)))
             {
                 // Different preconditioner from the next solve on
                 flushHistory("autoTune");
@@ -1806,10 +1815,13 @@ int main(int argc, char *argv[])
 
     // * * * * * * * * * * * * * * Run summary * * * * * * * * * * * * * * * //
 
-    const scalar cpuSum = returnReduce(scalar(runInfo::cpuSeconds()), sumOp<scalar>());
+    // D2.4: double quantities are reduced as double (MPI_DOUBLE)
+    const doubleScalar cpuSum =
+        returnReduce(doubleScalar(runInfo::cpuSeconds()), sumOp<doubleScalar>());
     const label rssKB = runInfo::peakRSSkB();
     const label rssMax = returnReduce(rssKB, maxOp<label>());
-    const scalar rssSum = returnReduce(scalar(rssKB), sumOp<scalar>());
+    const doubleScalar rssSum =
+        returnReduce(doubleScalar(rssKB), sumOp<doubleScalar>());
 
     Info<< nl << "coupledFoam: iterations " << iter
         << ", converged " << converged

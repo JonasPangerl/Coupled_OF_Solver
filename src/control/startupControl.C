@@ -24,7 +24,7 @@ Foam::startupControl::startupControl
         "startupUpwindIters",
         coupledDefaults::startupUpwindIters
     )),
-    switchR_(coupledDict.getOrDefault<scalar>
+    switchR_(coupledDict.getOrDefault<doubleScalar>
     (
         "startupSwitchR",
         coupledDefaults::startupSwitchR
@@ -49,7 +49,7 @@ Foam::startupControl::startupControl
         "startupStagnationTrigger",
         coupledDefaults::startupStagnationTrigger
     )),
-    stagnationFactor_(coupledDict.getOrDefault<scalar>
+    stagnationFactor_(coupledDict.getOrDefault<doubleScalar>
     (
         "startupStagnationFactor",
         coupledDefaults::startupStagnationFactor
@@ -59,12 +59,12 @@ Foam::startupControl::startupControl
         "startupStagnationWindow",
         coupledDefaults::startupStagnationWindow
     )),
-    fastFactor_(coupledDict.getOrDefault<scalar>
+    fastFactor_(coupledDict.getOrDefault<doubleScalar>
     (
         "startupFastFactor",
         coupledDefaults::startupFastFactor
     )),
-    developedTol_(coupledDict.getOrDefault<scalar>
+    developedTol_(coupledDict.getOrDefault<doubleScalar>
     (
         "startupDevelopedTol",
         coupledDefaults::startupDevelopedTol
@@ -166,7 +166,7 @@ bool Foam::startupControl::startProbe(const bool candidate)
 }
 
 
-bool Foam::startupControl::decideDeveloped(const scalar rU, const scalar rp)
+bool Foam::startupControl::decideDeveloped(const doubleScalar rU, const doubleScalar rp)
 {
     probing_ = false;
     if (max(rU, rp) < developedTol_)
@@ -180,7 +180,7 @@ bool Foam::startupControl::decideDeveloped(const scalar rU, const scalar rp)
 }
 
 
-bool Foam::startupControl::update(const label n, const scalar R)
+bool Foam::startupControl::update(const label n, const doubleScalar R)
 {
     if (full_ || rampStartIter_ >= 0)
     {
@@ -192,10 +192,10 @@ bool Foam::startupControl::update(const label n, const scalar R)
     Rhist_.append(R);
     if (Rhist_.size() > W + 1)
     {
-        Rhist_ = scalarList(SubList<scalar>(Rhist_, W + 1, Rhist_.size() - W - 1));
+        Rhist_ = List<doubleScalar>(SubList<doubleScalar>(Rhist_, W + 1, Rhist_.size() - W - 1));
     }
     const bool haveWindow = (Rhist_.size() == W + 1);
-    const scalar Rold = Rhist_.first();
+    const doubleScalar Rold = Rhist_.first();
 
     word trig;
 
@@ -269,7 +269,7 @@ void Foam::startupControl::readState(const dictionary& dict, const label iter)
             trigger_.clear();
         }
         full_ = dict.getOrDefault<bool>("startupFull", false);
-        Rhist_ = dict.getOrDefault<scalarList>("startupRHistory", scalarList());
+        Rhist_ = dict.getOrDefault<List<doubleScalar>>("startupRHistory", List<doubleScalar>());
     }
     else if (dict.getOrDefault<bool>("startupDone", false))
     {

@@ -41,7 +41,7 @@ Foam::sfdControl::sfdControl
     Delta_ = d.getOrDefault<scalar>("Delta", Delta_);
     Lref_ = d.getOrDefault<scalar>("Lref", Lref_);
     deactivateBelowR_ =
-        d.getOrDefault<scalar>("deactivateBelowR", deactivateBelowR_);
+        d.getOrDefault<doubleScalar>("deactivateBelowR", deactivateBelowR_);
     resetOnFlush_ = d.getOrDefault<bool>("resetOnFlush", resetOnFlush_);
     afterStartup_ = d.getOrDefault<bool>("afterStartup", afterStartup_);
     startIter_ = d.getOrDefault<label>("startIter", startIter_);
@@ -186,7 +186,7 @@ void Foam::sfdControl::update
 }
 
 
-bool Foam::sfdControl::checkOff(const scalar R, const label iter)
+bool Foam::sfdControl::checkOff(const doubleScalar R, const label iter)
 {
     if (!active())
     {

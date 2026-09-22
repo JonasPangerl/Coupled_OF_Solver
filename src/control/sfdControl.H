@@ -69,7 +69,7 @@ class sfdControl
         scalar chi_;
         scalar Delta_;
         scalar Lref_;
-        scalar deactivateBelowR_;
+        doubleScalar deactivateBelowR_;
         bool resetOnFlush_;
         bool afterStartup_;
         label startIter_;
@@ -149,7 +149,7 @@ public:
         void update(const volVectorField& U, const scalarField& rDeltaTV);
 
         //- Deactivation check after an accepted step (true: switched off now)
-        bool checkOff(const scalar R, const label iter);
+        bool checkOff(const doubleScalar R, const label iter);
 
         //- max_P |U_P - Ubar_P| / Uref (rank-local; 0 if not enabled)
         scalar maxDeviation(const volVectorField& U, const scalar Uref) const;
