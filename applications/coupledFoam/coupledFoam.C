@@ -709,7 +709,9 @@ int main(int argc, char *argv[])
         }
         // SFD (7.6): activation after the start-up phase; C6 writes USFD
         // while it is active
-        sfd.begin(U, startup.done(iter), iter);
+        // Not while the developed-start probe of iteration 1 is open
+        // (beta(1) is 1 then, D-069 F7)
+        sfd.begin(U, startup.done(iter) && !startup.probing(), iter);
         assembler.setSFD
         (
             sfd.chiStar(),
@@ -739,7 +741,8 @@ int main(int argc, char *argv[])
             startup.startProbe(!potentialInit && nonUniform);
         }
         scalar betaGlobal = startup.beta(iter);
-        const bool startupDone = startup.done(iter);
+        // Updated when the probe of iteration 1 decides (D-069 F7)
+        bool startupDone = startup.done(iter);
         // Effective references of this iteration (D-057 startupReference)
         ls.setStartup(betaGlobal, startupDone);
         if (iter > 1 && betaGlobal != startup.beta(iter - 1))
@@ -845,7 +848,8 @@ int main(int argc, char *argv[])
                         << " with the start-up beta" << endl;
                     betaGlobal = startup.beta(iter);
                     beta = rem.beta(betaGlobal);
-                    ls.setStartup(betaGlobal, startup.done(iter));
+                    startupDone = startup.done(iter);
+                    ls.setStartup(betaGlobal, startupDone);
                     continue;
                 }
             }
