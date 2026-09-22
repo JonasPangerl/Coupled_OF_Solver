@@ -5,6 +5,7 @@
 
 #include "coupledAssembler.H"
 #include "coupledDefaults.H"
+#include "staticCriteria.H"
 #include "doubleReduce.H"
 #include "fvCFD.H"
 #include "laplacianScheme.H"
@@ -50,12 +51,7 @@ Foam::coupledAssembler::coupledAssembler
             "nonOrthLimiter",
             coupledDefaults::nonOrthLimiter
         ),
-        coupledDict.subOrEmptyDict("remediation").subOrEmptyDict("static")
-            .getOrDefault<scalar>
-            (
-                "nonOrthLimiter",
-                coupledDefaults::staticNonOrthLimiter
-            )
+        staticCriteria::limitedNonOrthCoeff(coupledDict)       // D-066
     ),
     rc_(mesh, coupledDict),
     mrfPtr_(mrfPtr),
@@ -176,10 +172,14 @@ void Foam::coupledAssembler::checkReferenceFluxBalance
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-void Foam::coupledAssembler::setStaticCells(const boolList& isStatic)
+void Foam::coupledAssembler::setLimitedCells
+(
+    const boolList& gradLimited,
+    const boolList& nonOrthLimited
+)
 {
-    noc_.setStaticCells(isStatic);
-    rc_.setStaticCells(isStatic);
+    noc_.setLimitedCells(nonOrthLimited);
+    rc_.setGradLimitedCells(gradLimited);
 }
 
 

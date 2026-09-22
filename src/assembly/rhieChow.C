@@ -12,6 +12,7 @@
 #include "IStringStream.H"
 #include "PstreamReduceOps.H"
 #include "coupledDefaults.H"
+#include "staticCriteria.H"
 #include "block4Ops.H"
 
 using namespace Foam::boundaryCoupling;
@@ -85,6 +86,7 @@ Foam::rhieChow::rhieChow(const fvMesh& mesh, const dictionary& coupledDict)
     valid_(false),
     isStatic_(mesh.nCells(), false),
     anyStatic_(false),
+    limitedGradScheme_(staticCriteria::limitedGradScheme(coupledDict)),
     tensorial_
     (
         coupledDict.subOrEmptyDict("rhieChow").getOrDefault<bool>
@@ -384,7 +386,7 @@ void Foam::rhieChow::buildDfTensor(const volScalarField& p)
 }
 
 
-void Foam::rhieChow::setStaticCells(const boolList& isStatic)
+void Foam::rhieChow::setGradLimitedCells(const boolList& isStatic)
 {
     isStatic_ = isStatic;
     bool any = false;
@@ -429,8 +431,9 @@ void Foam::rhieChow::updateExplicit
 
     if (anyStatic_)
     {
-        // Static remediation cells: limited gradient (spec 8.1, D-018)
-        IStringStream schemeData("cellLimited Gauss linear 1");
+        // Remediation cells with gradLimiter: limited gradient (spec 8.1,
+        // D-018; scheme remediation.limitedGradScheme, D-066)
+        IStringStream schemeData(limitedGradScheme_);
         tmp<fv::gradScheme<scalar>> tscheme =
             fv::gradScheme<scalar>::New(mesh_, schemeData);
         const tmp<volVectorField> tgl = tscheme().grad(p, "grad(p)Limited");

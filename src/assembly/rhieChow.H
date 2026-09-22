@@ -88,9 +88,13 @@ class rhieChow
         //- True once D has been set
         bool valid_;
 
-        //- Static-remediation cells: cellLimited 1 gradient of p (8.1)
+        //- Remediation cells with gradLimiter: limited gradient of p (8.1,
+        //  D-018, D-066)
         boolList isStatic_;
         bool anyStatic_;
+
+        //- Their gradient scheme (remediation.limitedGradScheme)
+        string limitedGradScheme_;
 
         //- Tensorial diffusivity (C2)
         bool tensorial_;
@@ -123,9 +127,10 @@ public:
 
     // Member Functions
 
-        //- Static remediation cells (8.1): the pressure gradient of the
-        //  Rhie-Chow terms uses "cellLimited Gauss linear 1" there
-        void setStaticCells(const boolList& isStatic);
+        //- Remediation cells with gradLimiter (8.1, D-066): the pressure
+        //  gradient of the Rhie-Chow terms uses remediation.limitedGradScheme
+        //  (default "cellLimited Gauss linear 1") there
+        void setGradLimitedCells(const boolList& isStatic);
 
         //- Set D from abar (per cell) and build the scalar D_f with the
         //  boundary policy (tensorial no; restart fallback)

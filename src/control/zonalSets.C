@@ -16,7 +16,11 @@ const Foam::wordList& Foam::zonalSets::builtinNames()
         "_amiCells",
         "_procAMICells",
         "_wallStarved",
-        "_remediationStatic"
+        "_remediationStatic",
+        "_remediationMeshQuality",
+        "_remediationBadMesh",
+        "_remediationProcessor",
+        "_remediationWall"
     });
     return names;
 }
@@ -30,7 +34,21 @@ bool Foam::zonalSets::isBuiltin(const wordRe& name)
 
 bool Foam::zonalSets::needsStaticSet(const wordRe& name)
 {
-    return isBuiltin(name) && name == "_remediationStatic";
+    return isBuiltin(name) && staticSetBit(name) != 0;
+}
+
+
+Foam::label Foam::zonalSets::staticSetBit(const word& name)
+{
+    if (name == "_remediationStatic") return staticCriteria::bitStatic;
+    if (name == "_remediationMeshQuality")
+    {
+        return staticCriteria::bitMeshQuality;
+    }
+    if (name == "_remediationBadMesh") return staticCriteria::bitBadMesh;
+    if (name == "_remediationProcessor") return staticCriteria::bitProcessor;
+    if (name == "_remediationWall") return staticCriteria::bitWall;
+    return 0;
 }
 
 

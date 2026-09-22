@@ -266,15 +266,75 @@ constexpr bool sfdAfterStartup = true;
 // studies, D-052)
 constexpr label sfdStartIter = 0;
 
-// Remediation, static (spec 8.1)
-constexpr bool staticEnabled = true;
+// Remediation, pre-selected (static) cell categories (spec 8.1, C1, D-061,
+// D-066), coupled.remediation.<category>. Every category has the switch
+// enabled, its criteria and the treatment beta, cflFactor, gradLimiter
+// (forced limitedGradScheme gradient of p in the Rhie-Chow terms) and
+// nonOrthLimiter (limitedNonOrthCoeff on the faces of the cell). A cell in
+// several categories gets the most restrictive value of each (min beta,
+// min cflFactor, OR of the limiter switches). Cells that actually
+// misbehave (meshQuality, badMesh) get the full treatment of 8.1; cells
+// that are only selected in advance by their position (processor, wall)
+// the mild treatment of D-061: full convection scheme, no limiters, half
+// the local step.
+//
+// meshQuality: the quality criteria of 8.1
+constexpr bool meshQualityEnabled = true;
 constexpr doubleScalar nonOrthThreshold = 85;     // user, D-047 (was 70)
 constexpr doubleScalar skewThreshold = 6;         // user, D-047 (was 4)
 constexpr doubleScalar volRatioThreshold = 30;    // user, D-047 (was 20)
 constexpr doubleScalar aspectThreshold = 2000;    // user, D-047 (was 1000)
-constexpr doubleScalar staticBeta = 0;
-constexpr doubleScalar staticNonOrthLimiter = 0.2;
-constexpr doubleScalar staticCflFactor = 0.5;
+constexpr doubleScalar meshQualityBeta = 0;
+constexpr doubleScalar meshQualityCflFactor = 0.5;
+constexpr bool meshQualityGradLimiter = true;
+constexpr bool meshQualityNonOrthLimiter = true;
+// badMesh: severe defects (C1 volumeJump; closedness and optional severe
+// non-orthogonality/skewness, D-066)
+constexpr bool badMeshEnabled = true;
+constexpr bool volumeJumpEnabled = true;          // coupledFoam switch
+constexpr doubleScalar volJumpThreshold = 0.98;   // volume ratio > 50
+// Cell openness |sum S_f|/sum |S_f| (primitiveMeshTools::cellClosedness)
+// above this value: an open cell (the checkMesh closedThreshold); 0 = off
+constexpr doubleScalar closednessThreshold = 1e-6;
+// Severe face criteria in degrees / skewness; 0 = off. They let a case put
+// moderate defects into meshQuality and severe ones into badMesh.
+constexpr doubleScalar severeNonOrthThreshold = 0;
+constexpr doubleScalar severeSkewThreshold = 0;
+constexpr doubleScalar badMeshBeta = 0;
+constexpr doubleScalar badMeshCflFactor = 0.5;
+constexpr bool badMeshGradLimiter = true;
+constexpr bool badMeshNonOrthLimiter = true;
+// processor: cells at processor patches (decomposition dependent)
+constexpr bool processorEnabled = true;
+constexpr bool procAMIEnabled = true;             // C1 keyword procAMI
+// Layers of cells next to processor patches (layer 1 = cells with a
+// processor face); 0 = none
+constexpr label processorNLayers = 0;
+constexpr doubleScalar processorBeta = 1;         // mild (D-061)
+constexpr doubleScalar processorCflFactor = 0.5;
+constexpr bool processorGradLimiter = false;
+constexpr bool processorNonOrthLimiter = false;
+// wall: cells at wall patches
+constexpr bool wallEnabled = true;
+constexpr bool wallStarvedEnabled = false;       // off by default (user,
+// D-061): on T4a the 12 wallStarved cells sit on the body surface, where
+// the forces are integrated; with the full static treatment they moved Cl
+// by -18 % (0.063 vs 0.077 simpleFoam). The criterion stays available
+// (remediation.wall.wallStarved yes) with the mild wall treatment.
+constexpr label maxWallInternalFaces = 2;
+// Layers of cells next to the patches of wall.patches (wordRes, default
+// none; layer 1 = cells with a face on the patches)
+constexpr label wallNLayers = 1;
+constexpr doubleScalar wallBeta = 1;              // mild (D-061)
+constexpr doubleScalar wallCflFactor = 0.5;
+constexpr bool wallGradLimiter = false;
+constexpr bool wallNonOrthLimiter = false;
+// Treatment of the limited cells: non-orthogonal limiter coefficient on the
+// faces of cells with nonOrthLimiter (remediation.limitedNonOrthCoeff, the
+// former remediation.static.nonOrthLimiter) and the gradient scheme of p in
+// the Rhie-Chow terms of cells with gradLimiter (D-018)
+constexpr doubleScalar limitedNonOrthCoeff = 0.2;
+constexpr const char* limitedGradScheme = "cellLimited Gauss linear 1";
 
 // Remediation, dynamic (spec 8.2)
 constexpr bool dynamicEnabled = true;
@@ -380,34 +440,11 @@ constexpr label diagTopLimited = 20;
 // ---------------------------------------------------------------------------
 // Amendment C1/C5/C6 (SPEC_amendment_C.md, D-054)
 // ---------------------------------------------------------------------------
-// C1: topological static criteria, coupled.remediation.static. The
-// nonOrthThreshold default stays at 85 (D-047/D-051); 65 and 60 are
-// benchmark variants only.
-constexpr bool wallStarvedEnabled = false;       // off by default (user,
-// D-061): on T4a the 12 wallStarved cells sit on the body surface, where
-// the forces are integrated; with the full static treatment they moved Cl
-// by -18 %. The criterion stays available (remediation.static.wallStarved
-// yes) and is then handled by the mild tier below.
-constexpr label maxWallInternalFaces = 2;
-constexpr bool procAMIEnabled = true;            // keyword procAMI
-constexpr bool volumeJumpEnabled = true;         // coupledFoam switch
-constexpr doubleScalar volJumpThreshold = 0.98;  // volume ratio > 50
+// C1: the topological static criteria are in the remediation categories
+// above (D-066). The nonOrthThreshold default stays at 85 (D-047/D-051);
+// 65 and 60 are benchmark variants only.
 // C6: write-time diagnostic fields, coupled.diagnosticFields
 constexpr bool diagnosticFieldsEnabled = true;
-// Mild remediation tier (coupled.remediation.mild, D-061): a cell that is
-// selected in advance - by a topological criterion (wallStarved, procAMI)
-// or by zonal factors - is not a misbehaving cell. It gets a shorter local
-// step only: full convection scheme, no forced gradient limiter and no
-// non-orthogonal limiter. Cells that actually misbehave (the 8.1 quality
-// criteria and the dynamic set) keep the full treatment. Measured on T4a:
-// 12 wallStarved cells on the body under the full treatment move Cl by
-// -18 % (0.063 vs 0.077 simpleFoam); with the mild tier they do not.
-constexpr bool mildEnabled = true;
-constexpr doubleScalar mildBeta = 1;             // full convection scheme
-constexpr doubleScalar mildCflFactor = 0.5;      // half the local step
-constexpr bool mildWallStarved = true;           // criteria in the mild tier
-constexpr bool mildProcAMI = true;
-constexpr bool mildVolumeJump = false;           // a real quality defect
 // ---------------------------------------------------------------------------
 
 // Misc (spec 9.1, 10)

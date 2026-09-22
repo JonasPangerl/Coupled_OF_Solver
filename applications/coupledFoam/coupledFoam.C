@@ -245,10 +245,15 @@ int main(int argc, char *argv[])
         ptc.writeSettings(eff);
         ls.writeSettings(eff);
         rem.writeSettings(eff);
-        eff.subDict("remediation").subDict("static").add
+        eff.subDict("remediation").add
         (
-            "nonOrthLimiter",
+            "limitedNonOrthCoeff",
             assembler.noc().limiterStatic()
+        );
+        eff.subDict("remediation").add
+        (
+            "limitedGradScheme",
+            staticCriteria::limitedGradScheme(coupledDict)
         );
         sen.writeSettings(eff);
         {
@@ -315,7 +320,8 @@ int main(int argc, char *argv[])
     Info<< endl;
 
     rem.buildStatic();
-    assembler.setStaticCells(rem.isStatic());
+    // Per-cell limiter switches of the remediation categories (D-066)
+    assembler.setLimitedCells(rem.gradLimited(), rem.nonOrthLimited());
 
     // * * * * * * * * * * * * * * * Restart (10) * * * * * * * * * * * * * //
 
@@ -1424,6 +1430,13 @@ int main(int argc, char *argv[])
             j.endObject();
             j.beginObject("remediation");
             j.add("nStat", rem.nStatic());
+            // Static cells per category (D-066; constant during a run)
+            j.beginObject("nStatCat");
+            for (label c = 0; c < remediation::nCategories; ++c)
+            {
+                j.add(remediation::categoryName(c), rem.nCategory(c));
+            }
+            j.endObject();
             j.add("nDyn", rem.nDynamic());
             j.add("nDynSticky", rem.nSticky());
             j.add("nDynRamping", rem.nRamping());
@@ -1846,6 +1859,15 @@ int main(int argc, char *argv[])
         j.add("pivotFallbacks", nPivotFallbackTotal);
         j.add("rollbacks", sen.nRollbacks());
         j.add("staticCells", rem.nStatic());
+        // Per category (D-066); a cell may be in several
+        {
+            jsonWriter sc;
+            for (label c = 0; c < remediation::nCategories; ++c)
+            {
+                sc.add(remediation::categoryName(c), rem.nCategory(c));
+            }
+            j.addRaw("staticCategories", sc.str());
+        }
         j.add("dynamicCells", rem.nDynamic());
         j.add("dynamicStickyCells", rem.nSticky());
         j.add("localThrottledCells", ptc.nLocalThrottled());

@@ -196,8 +196,15 @@ public:
 
         // Set-up
 
-            //- Static remediation cells (8.1): per-face limiter selection
-            void setStaticCells(const boolList& isStatic);
+            //- Limited remediation cells (8.1, categories D-066): cells
+            //  whose p gradient in the Rhie-Chow terms uses the limited
+            //  scheme, and cells whose faces use the limited non-orthogonal
+            //  coefficient. Collective.
+            void setLimitedCells
+            (
+                const boolList& gradLimited,
+                const boolList& nonOrthLimited
+            );
 
             //- SFD forcing (7.6) of the next assemblies: a_P += chi V_P,
             //  b_P += chi V_P Ubar_P on the momentum rows; chi = 0 or

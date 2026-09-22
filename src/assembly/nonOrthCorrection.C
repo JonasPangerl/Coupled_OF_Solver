@@ -64,7 +64,7 @@ Foam::nonOrthCorrection::nonOrthCorrection
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-void Foam::nonOrthCorrection::setStaticCells(const boolList& isStatic)
+void Foam::nonOrthCorrection::setLimitedCells(const boolList& isStatic)
 {
     const labelUList& own = mesh_.owner();
     const labelUList& nei = mesh_.neighbour();

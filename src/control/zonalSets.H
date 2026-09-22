@@ -25,10 +25,13 @@ Description
       _procAMICells        cells with a processor and a cyclicAMI face
                            (= the C1 procAMI criterion)
       _wallStarved         the C1 wallStarved criterion with the
-                           remediation.static.maxWallInternalFaces setting
-                           (evaluated even if the static switch is off)
-      _remediationStatic   the complete static set (8.1 + C1); applied once
-                           the static set is built (remediation::buildStatic)
+                           remediation.wall.maxWallInternalFaces setting
+                           (evaluated even if the criterion is off)
+      _remediationStatic   all pre-selected cells (union of the categories
+                           of D-066); applied once the static set is built
+                           (remediation::buildStatic)
+      _remediationMeshQuality, _remediationBadMesh, _remediationProcessor,
+      _remediationWall     the cells of one category (D-066), likewise
 
     A literal name that equals a built-in name always means the built-in
     set; regular expressions only match real cellZones. The patchDistance
@@ -70,10 +73,14 @@ const wordList& builtinNames();
 //- Is the (literal) name a built-in set?
 bool isBuiltin(const wordRe& name);
 
-//- Does the built-in set need the static set (_remediationStatic)?
+//- Does the built-in set need the static set (_remediation*)?
 bool needsStaticSet(const wordRe& name);
 
-//- Cells of a mesh-only built-in set (not _remediationStatic). Local.
+//- remediationFlag bit that selects the cells of a _remediation* set
+//  (0 for any other name)
+label staticSetBit(const word& name);
+
+//- Cells of a mesh-only built-in set (not _remediation*). Local.
 boolList mark
 (
     const polyMesh& mesh,

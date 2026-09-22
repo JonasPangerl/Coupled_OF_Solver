@@ -99,9 +99,10 @@ public:
 
     // Member Functions
 
-        //- Set the static cells (from remediation, 8.1). Collective (swaps
-        //  the static flag across coupled patches)
-        void setStaticCells(const boolList& isStatic);
+        //- Set the cells whose faces use the static limiter (remediation
+        //  cells with nonOrthLimiter, 8.1/D-066). Collective (swaps the
+        //  flag across coupled patches)
+        void setLimitedCells(const boolList& isStatic);
 
         //- True if all native correction vectors are exactly zero
         bool orthogonal() const noexcept

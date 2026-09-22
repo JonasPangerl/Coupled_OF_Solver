@@ -8,8 +8,10 @@ Namespace
 Description
     Topological static-set criteria of amendment C1 (spec 8.1 extended).
     Pure functions of the mesh and the thresholds; they return per-cell
-    markers and bit masks, and the caller (remediation::buildStatic) ORs
-    them into the static set. Evaluated once at start-up.
+    markers and bit masks, and the caller (remediation::buildStatic) sorts
+    them into the pre-selected cell categories (D-066: wallStarved -> wall,
+    procAMI -> processor, volumeJump -> badMesh). Evaluated once at
+    start-up.
 
     - wallStarved: a cell with at least one wall face and at most
       maxWallInternalFaces "internal" faces (3D cases only, i.e.
@@ -25,16 +27,20 @@ Description
       internal, processor or cyclic (non-AMI) face; both cells are marked.
       Complements volRatioThreshold (8.1).
 
-    Bits in remediationFlag (flags are OR-ed): 1 static (any static
-    criterion), 2 dynamic, 4 wallStarved, 8 procAMI, 16 volumeJump.
+    Bits in remediationFlag (flags are OR-ed; enum flagBits below, D-066):
+      1 static (any pre-selected category), 2 dynamic,
+      4 wallStarved, 8 procAMI, 16 volumeJump (criteria, C1),
+      32 meshQuality, 64 badMesh, 128 processor, 256 wall (categories),
+      512 closedness, 1024 severe non-orthogonality/skewness,
+      2048 processor-patch layer, 4096 wall-patch layer (criteria).
 
-    Dictionary (coupled.remediation.static), defaults in coupledDefaults.H:
+    Keywords (coupled.remediation.<category>, D-066; the pre-D-066
+    remediation.static entries map onto them), defaults in
+    coupledDefaults.H:
     \verbatim
-    wallStarved             yes;    // switch (coupledFoam addition)
-    maxWallInternalFaces    2;
-    procAMI                 yes;
-    volumeJump              yes;    // switch (coupledFoam addition)
-    volJumpThreshold        0.98;   // i.e. volume ratio > 50
+    wall      { wallStarved no; maxWallInternalFaces 2; }
+    processor { procAMI yes; }
+    badMesh   { volumeJump yes; volJumpThreshold 0.98; }  // ratio > 50
     \endverbatim
 
     Collectives: volumeJump() swaps the neighbour-cell volumes over the
@@ -61,15 +67,25 @@ namespace Foam
 namespace staticCriteria
 {
 
-//- remediationFlag bits (spec 8.1/12, amendment C1)
+//- remediationFlag bits (spec 8.1/12, amendment C1, categories D-066)
 enum flagBits : label
 {
-    bitStatic = 1,
+    bitStatic = 1,               // any pre-selected category
     bitDynamic = 2,
+    // C1 criteria
     bitWallStarved = 4,
     bitProcAMI = 8,
     bitVolumeJump = 16,
-    bitMild = 32                 // mild tier (D-061), not in the static set
+    // Categories (D-066)
+    bitMeshQuality = 32,
+    bitBadMesh = 64,
+    bitProcessor = 128,
+    bitWall = 256,
+    // Further criteria (D-066)
+    bitClosedness = 512,
+    bitSevereQuality = 1024,
+    bitProcLayer = 2048,
+    bitWallLayer = 4096
 };
 
 
@@ -85,11 +101,8 @@ struct settings
     //- Defaults from coupledDefaults.H
     settings();
 
-    //- Read from coupled.remediation.static (checks the input)
-    explicit settings(const dictionary& staticDict);
-
-    //- Effective settings into the static sub-dictionary
-    void write(dictionary& staticDict) const;
+    //- Check the values; errors refer to the given dictionary
+    void check(const dictionary& errDict) const;
 };
 
 
@@ -99,8 +112,6 @@ struct counts
     label nWallStarved = 0;
     label nProcAMI = 0;
     label nVolumeJump = 0;
-    //- Cells marked by a topological criterion only (not by 8.1)
-    label nNew = 0;
 };
 
 
@@ -133,19 +144,23 @@ boolList procAMI(const polyMesh& mesh);
 //  Collective (neighbour volumes over coupled boundaries).
 boolList volumeJump(const polyMesh& mesh, const scalar threshold);
 
-//- Evaluate the enabled criteria: fills bits (per cell, 4/8/16), ORs the
-//  marked cells into isStatic and returns the global counts. isStatic must
-//  already hold the 8.1 quality criteria (for counts.nNew). Collective.
+//- Non-orthogonal limiter coefficient of the cells with nonOrthLimiter
+//  (coupled.remediation.limitedNonOrthCoeff; legacy
+//  coupled.remediation.static.nonOrthLimiter; D-066). Checked: [0, 1].
+scalar limitedNonOrthCoeff(const dictionary& coupledDict);
+
+//- Gradient scheme of p in the Rhie-Chow terms of the cells with
+//  gradLimiter (coupled.remediation.limitedGradScheme, D-018/D-066)
+string limitedGradScheme(const dictionary& coupledDict);
+
+//- Evaluate the enabled criteria: ORs bits 4/8/16 into the per-cell bits
+//  (sized nCells) and returns the global counts. Collective.
 counts apply
 (
     const polyMesh& mesh,
     const settings& s,
-    labelList& bits,
-    boolList& isStatic
+    labelList& bits
 );
-
-//- One-line summary for the once-per-run block (12.2)
-void report(const settings& s, const counts& c, const label nTotal);
 
 
 } // End namespace staticCriteria

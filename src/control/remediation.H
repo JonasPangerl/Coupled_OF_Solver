@@ -8,16 +8,66 @@ Class
 Description
     Two-tier remediation cell sets (spec 8).
 
-    Static set (8.1), built once from native per-face mesh-quality fields
+    Static set (8.1): cells selected in advance, built once at start-up and
+    split into four categories with their own switches, criteria and
+    treatment (D-066; the pre-D-066 remediation.static entries map onto
+    them, see below):
+    \verbatim
+    meshQuality     // 8.1 quality criteria (full treatment)
+    {
+        enabled yes; nonOrthThreshold 85; skewThreshold 6;
+        volRatioThreshold 30; aspectThreshold 2000;
+        beta 0; cflFactor 0.5; gradLimiter yes; nonOrthLimiter yes;
+    }
+    badMesh         // severe defects (full treatment)
+    {
+        enabled yes; volumeJump yes; volJumpThreshold 0.98;
+        closednessThreshold 1e-6;       // 0 = off
+        nonOrthThreshold 0; skewThreshold 0;    // severe values, 0 = off
+        beta 0; cflFactor 0.5; gradLimiter yes; nonOrthLimiter yes;
+    }
+    processor       // cells at processor patches (mild treatment)
+    {
+        enabled yes; procAMI yes; nLayers 0;
+        beta 1; cflFactor 0.5; gradLimiter no; nonOrthLimiter no;
+    }
+    wall            // cells at wall patches (mild treatment)
+    {
+        enabled yes; wallStarved no; maxWallInternalFaces 2;
+        patches (); nLayers 1;          // wordRes, layer 1 = patch cells
+        beta 1; cflFactor 0.5; gradLimiter no; nonOrthLimiter no;
+    }
+    limitedNonOrthCoeff 0.2;            // nonOrthLimiter cells
+    limitedGradScheme "cellLimited Gauss linear 1";     // gradLimiter cells
+    \endverbatim
+    meshQuality uses the native per-face mesh-quality fields
     (polyMeshTools::faceOrthogonality/faceSkewness/volRatio,
-    primitiveMeshTools::cellClosedness for the aspect ratio). A cell is
+    primitiveMeshTools::cellClosedness for the aspect ratio): a cell is
     marked if any of its faces exceeds nonOrthThreshold (deg) or
     skewThreshold, the volume ratio to any neighbour exceeds
     volRatioThreshold, or its aspect ratio exceeds aspectThreshold.
-    Treatment: beta = static.beta, non-orthogonal limiter static value
-    (via coupledAssembler::setStaticCells), CFL factor static.cflFactor.
-    The "gradient limiter forced to cellLimited 1" of 8.1 is recorded in
-    DECISIONS.md D-018.
+    badMesh: C1 volumeJump, cell openness (cellClosedness) above
+    closednessThreshold, faces above the severe nonOrth/skew thresholds.
+    processor: C1 procAMI and nLayers face layers from the processor
+    patches (decomposition dependent). wall: C1 wallStarved (default off,
+    D-061) and nLayers face layers from the patches of wall.patches
+    (wordRes: names, regular expressions, groups such as wall).
+
+    Treatment: beta (upper bound of the convection blending factor),
+    cflFactor (local time step factor), gradLimiter (the p gradient of the
+    Rhie-Chow terms from limitedGradScheme, D-018), nonOrthLimiter (the
+    faces of the cell use limitedNonOrthCoeff instead of the global
+    nonOrthLimiter; via coupledAssembler::setLimitedCells). A cell in
+    several categories gets the most restrictive value of each: min beta,
+    min cflFactor, OR of the limiter switches.
+
+    Legacy keywords (pre-D-066, one deprecation note in the log):
+    remediation.static { enabled -> all four categories; nonOrthThreshold,
+    skewThreshold, volRatioThreshold, aspectThreshold -> meshQuality;
+    beta, cflFactor -> meshQuality and badMesh; nonOrthLimiter ->
+    limitedNonOrthCoeff; volumeJump, volJumpThreshold -> badMesh; procAMI ->
+    processor; wallStarved, maxWallInternalFaces -> wall (mild treatment,
+    D-061) }. A keyword in the category dictionary takes precedence.
 
     Dynamic set (8.2), updated every iteration. Marked if any of
         |U_P| > cU Uref,   |p_P| > cp pref,
@@ -58,30 +108,22 @@ Description
     multiply. The multipliers apply on top of the static/dynamic rules
     (dynamic cells keep beta = 0). Unknown names are a FatalIOError.
 
-    Mild tier (8.1, D-061). A cell that only a mild topological criterion
-    marked (remediation.mild.criteria: wallStarved and procAMI by default,
-    volumeJump not) is selected in advance, not observed to misbehave. It
-    leaves the static set and gets the mild treatment instead: beta =
-    mild.beta (1 = full convection scheme), CFL factor mild.cflFactor, and
-    neither the forced gradient limiter nor the non-orthogonal limiter of
-    the static set (it is not passed to coupledAssembler::setStaticCells).
-    A cell that a quality criterion also marked keeps the full treatment,
-    and so does any cell in the dynamic set. Zonal factors (8.3) are mild
-    by construction: they are multipliers the user chooses.
-    \verbatim
-    mild { enabled yes; beta 1.0; cflFactor 0.5;
-           wallStarved yes; procAMI yes; volumeJump no; }
-    \endverbatim
+    The dynamic set always overrides the static treatment (beta 0,
+    dynamic.cflFactor); the zonal factors multiply on top of both.
 
     Amendment C1: topological static criteria wallStarved, procAMI and
-    volumeJump (staticCriteria.H) join the static set; C5: built-in named
-    sets _wallCells ... _remediationStatic in zonal.zones (zonalSets.H).
+    volumeJump (staticCriteria.H), sorted into the categories; C5: built-in
+    named sets _wallCells ... _remediationStatic in zonal.zones
+    (zonalSets.H), plus one per category (_remediationMeshQuality, ...).
 
-    Output: cellSets remediationStatic, remediationDynamic and the
-    volScalarField remediationFlag (bits OR-ed: 1 static, 2 dynamic,
-    4 wallStarved, 8 procAMI, 16 volumeJump; C1; 32 mild, D-061);
-    with zonal factors enabled additionally the volScalarField
-    zonalCflFactor.
+    Output: cellSets remediationStatic (union of the categories),
+    remediationDynamic, remediationMeshQuality, remediationBadMesh,
+    remediationProcessor, remediationWall and the volScalarField
+    remediationFlag (bits OR-ed, staticCriteria::flagBits: 1 static,
+    2 dynamic, 4 wallStarved, 8 procAMI, 16 volumeJump, 32 meshQuality,
+    64 badMesh, 128 processor, 256 wall, 512 closedness, 1024 severe
+    quality, 2048 processor layer, 4096 wall layer); with zonal factors
+    enabled additionally the volScalarField zonalCflFactor.
 
 SourceFiles
     remediation.C
@@ -94,6 +136,8 @@ SourceFiles
 #include "fvMesh.H"
 #include "volFields.H"
 #include "blockScalar.H"
+#include "FixedList.H"
+#include "wordRes.H"
 #include "staticCriteria.H"
 #include "zonalSets.H"
 
@@ -104,32 +148,79 @@ namespace Foam
 
 class remediation
 {
+public:
+
+    //- Pre-selected cell categories (D-066)
+    enum category : label
+    {
+        meshQuality = 0,
+        badMesh,
+        processor,
+        wall,
+        nCategories
+    };
+
+    //- Switch and treatment of one category
+    struct categorySettings
+    {
+        bool enabled;
+        scalar beta;
+        scalar cflFactor;
+        bool gradLimiter;
+        bool nonOrthLimiter;
+    };
+
+    //- Category names (dictionary keywords) and remediationFlag bits
+    static const char* categoryName(const label cat);
+    static label categoryBit(const label cat);
+
+
+private:
+
     // Private Data
 
         const fvMesh& mesh_;
 
-        // Static controls
-        bool staticEnabled_;
+        // Static categories (D-066)
+        FixedList<categorySettings, nCategories> cat_;
+
+        // meshQuality criteria (8.1)
         scalar nonOrthThreshold_;
         scalar skewThreshold_;
         scalar volRatioThreshold_;
         scalar aspectThreshold_;
-        scalar staticBeta_;
-        scalar staticCflFactor_;
 
-        //- Topological criteria (amendment C1)
+        // badMesh criteria besides volumeJump (0 = off)
+        scalar closednessThreshold_;
+        scalar severeNonOrthThreshold_;
+        scalar severeSkewThreshold_;
+
+        // processor: face layers from the processor patches (0 = none)
+        label procNLayers_;
+
+        // wall: face layers from the wall.patches patches
+        wordRes wallPatches_;
+        label wallNLayers_;
+
+        //- Topological criteria (amendment C1), switches of disabled
+        //  categories cleared
         staticCriteria::settings criteria_;
 
-        //- Per-cell C1 bits (4 wallStarved, 8 procAMI, 16 volumeJump)
-        labelList criteriaBits_;
+        //- Per-cell static bits (staticCriteria::flagBits without
+        //  bitDynamic: criteria, categories and bitStatic)
+        labelList staticBits_;
 
-        // Mild tier (D-061)
-        bool mildEnabled_;
-        scalar mildBeta_;
-        scalar mildCflFactor_;
+        //- Per-cell treatment of the static cells (meaningful where
+        //  isStatic_): min beta, min cflFactor over the cell's categories
+        scalarField staticBeta_;
+        scalarField staticCfl_;
 
-        //- C1 bits whose cells get the mild treatment
-        label mildMask_;
+        //- Per-cell limiter switches (OR over the cell's categories)
+        boolList gradLimited_;
+        boolList nonOrthLimited_;
+
+        //- Global counts per category
+        FixedList<label, nCategories> nCat_;
 
         // Dynamic controls
         bool dynamicEnabled_;
@@ -147,11 +238,8 @@ class remediation
 
         // State
 
-            //- Static membership
+            //- Static membership (union of the categories)
             boolList isStatic_;
-
-            //- Mild membership (D-061); disjoint from isStatic_
-            boolList isMild_;
 
             //- Dynamic age per cell: -1 not in the set, else iterations
             //  since the cell was last marked
@@ -176,7 +264,6 @@ class remediation
 
             //- Global counts
             label nStatic_;
-            label nMild_;
             label nDynamic_;
 
             //- Incremented whenever the dynamic-set membership changes
@@ -236,6 +323,21 @@ class remediation
         //- Grow a marker by one face layer (processor faces included)
         void growLayer(boolList& mark) const;
 
+        //- Cells within nLayers face layers of the (non-processor) patches
+        //  matching patchNames (layer 1 = cells with a face on them).
+        //  Unknown names are a FatalIOError naming the context. Collective.
+        boolList patchLayers
+        (
+            const wordRes& patchNames,
+            const label nLayers,
+            const dictionary& errDict,
+            const string& context
+        ) const;
+
+        //- Read the categories (with the legacy remediation.static
+        //  mapping) from the remediation dictionary
+        void readCategories(const dictionary& remDict);
+
 
 public:
 
@@ -246,7 +348,8 @@ public:
 
     // Member Functions
 
-        //- Build the static set (8.1). Prints a summary.
+        //- Build the static set (8.1, categories D-066). Prints a summary.
+        //  Collective.
         void buildStatic();
 
         //- Mark cells for the dynamic set at the next update
@@ -265,12 +368,12 @@ public:
         );
 
         //- Per-cell convection blending factor given the global value
-        //  (start-up switch): static cells static.beta, dynamic cells 0,
-        //  multiplied by the zonal beta factors
+        //  (start-up switch): static cells at most their category beta,
+        //  dynamic cells 0, multiplied by the zonal beta factors
         tmp<scalarField> beta(const scalar betaGlobal) const;
 
-        //- Per-cell CFL factor (1, static, dynamic; the smallest applies),
-        //  multiplied by the zonal CFL factors
+        //- Per-cell CFL factor (1, category, dynamic; the smallest
+        //  applies), multiplied by the zonal CFL factors
         tmp<scalarField> cflFactor() const;
 
         //- Clip the velocity increment in dynamic cells (8.2)
@@ -284,9 +387,22 @@ public:
         ) const;
 
         const boolList& isStatic() const noexcept { return isStatic_; }
+
+        //- Cells whose p gradient in the Rhie-Chow terms is limited
+        const boolList& gradLimited() const noexcept { return gradLimited_; }
+
+        //- Cells whose faces use the limited non-orthogonal coefficient
+        const boolList& nonOrthLimited() const noexcept
+        {
+            return nonOrthLimited_;
+        }
+
+        //- Global number of static cells (union of the categories)
         label nStatic() const noexcept { return nStatic_; }
-        const boolList& isMild() const noexcept { return isMild_; }
-        label nMild() const noexcept { return nMild_; }
+
+        //- Global number of cells in a category
+        label nCategory(const label cat) const { return nCat_[cat]; }
+
         label nDynamic() const noexcept { return nDynamic_; }
         label nSticky() const noexcept { return nSticky_; }
         label nRamping() const noexcept { return nRamping_; }
@@ -297,8 +413,9 @@ public:
         label dynamicVersion() const noexcept { return dynamicVersion_; }
         bool zonalEnabled() const noexcept { return zonalEnabled_; }
 
-        //- Write remediationFlag and the two cellSets for the current time
-        //  (and zonalCflFactor if zonal factors are enabled)
+        //- Write remediationFlag and the cellSets (static, dynamic and one
+        //  per category) for the current time (and zonalCflFactor if zonal
+        //  factors are enabled)
         void write() const;
 
         //- The same into the given instance (e.g. <iter>_lastValid of the
