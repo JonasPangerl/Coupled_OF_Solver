@@ -153,6 +153,16 @@ constexpr doubleScalar localRecovery = 1.5;
 constexpr label localHold = 0;
 constexpr label localStickyAfter = 0;
 
+// Selective Frequency Damping (amendment C3, spec 7.6; D-052)
+constexpr bool sfdEnabled = false;
+constexpr doubleScalar sfdChi = 0.5;              // chi* = chi Uref/Lref
+constexpr doubleScalar sfdDelta = 1.0;            // Delta* = Delta Lref/Uref
+constexpr doubleScalar sfdLref = 1.0;
+constexpr doubleScalar sfdDeactivateBelowR = 1e-4; // SFD-off after nHold its
+// Ubar = U whenever the Anderson history is flushed (C3); no = keep the
+// filter state (variant)
+constexpr bool sfdResetOnFlush = true;
+
 // Remediation, static (spec 8.1)
 constexpr bool staticEnabled = true;
 constexpr doubleScalar nonOrthThreshold = 85;     // user, D-047 (was 70)

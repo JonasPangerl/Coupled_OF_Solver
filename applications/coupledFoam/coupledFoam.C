@@ -55,6 +55,7 @@ Description
 #include "jsonWriter.H"
 #include "gamgAutoTune.H"
 #include "anderson.H"
+#include "sfdControl.H"
 #include "adaptiveTolerance.H"
 #include "diagnostics.H"
 #include "mixedFvPatchFields.H"
@@ -140,6 +141,7 @@ int main(int argc, char *argv[])
     sentinel sen(mesh, coupledDict);
     anderson aa(mesh, coupledDict);
     adaptiveTolerance ew(linearDict);
+    sfdControl sfd(mesh, coupledDict, ptc.nHold());
 
     // Linear-system dump for offline preconditioner studies
     // (Test-blockSystem): coupled.dumpLinearSystem (iterations), serial only
@@ -236,6 +238,7 @@ int main(int argc, char *argv[])
             aa.writeSettings(a);
             eff.add("anderson", a);
         }
+        sfd.writeSettings(eff);
         eff.subDict("ptc").add("maxLinFails", maxLinFails);
         if (tuner)
         {
@@ -295,6 +298,7 @@ int main(int argc, char *argv[])
             rem.readState(st);
             sen.readState(st);
             ew.readState(st);
+            sfd.readState(st);
             conv.readState(st);
             if (tuner)
             {
@@ -405,7 +409,8 @@ int main(int argc, char *argv[])
                 "controls.dt", "turbulence.nBoundK",
                 "turbulence.nBoundOmega", "timings", "memory",
                 "controls.trials.violU", "controls.trials.violP",
-                "bcFlips", "gamgSetup", "localLimit", "dynamicSet"
+                "bcFlips", "gamgSetup", "localLimit", "dynamicSet",
+                "controls.sfd.maxDev"
             }
         )
         {
@@ -465,6 +470,7 @@ int main(int argc, char *argv[])
         rem.writeState(st);
         sen.writeState(st);
         ew.writeState(st);
+        sfd.writeState(st);
         conv.writeState(st);
         if (tuner)
         {
@@ -481,6 +487,7 @@ int main(int argc, char *argv[])
         rem.write();
         state.writeD(assembler.rc().D());
         state.writeQ(assembler.rc().q());
+        sfd.write();
         state.write(stateDict());
     };
 
@@ -520,6 +527,13 @@ int main(int argc, char *argv[])
             }
         }
         return nCapped;
+    };
+
+    // Anderson history flush (7.5); the SFD filter is reset with it (C3)
+    auto flushHistory = [&](const char* reason)
+    {
+        aa.flush(reason);
+        sfd.reset(U);
     };
 
     // Force-coefficient window statistics per iteration (summary.json)
@@ -572,6 +586,16 @@ int main(int argc, char *argv[])
             Info<< "coupledFoam: Uref " << ls.Uref() << ", pref "
                 << ls.pref() << endl;
         }
+        if (sfd.enabled() && sfd.DeltaStar() == 0)
+        {
+            sfd.setReference(ls.Uref());
+        }
+        sfd.begin(U);
+        assembler.setSFD
+        (
+            sfd.chiStar(),
+            (sfd.active() ? &sfd.Ubar().primitiveField() : nullptr)
+        );
 
         const volScalarField nuEff("nuEff", turbulence->nuEff());
         const scalar betaGlobal = (startupDone ? 1.0 : 0.0);
@@ -597,6 +621,9 @@ int main(int argc, char *argv[])
             locRatio.resize(mesh.nCells(), Zero);
         }
 
+        // V/dt of the accepted assembly (SFD filter step)
+        scalarField rDTVacc;
+
         // --- Assemble, solve, line search with CFL cuts (7.2)
         while (true)
         {
@@ -613,6 +640,10 @@ int main(int argc, char *argv[])
             );
             assembler.assembleContinuity(rDTV);
             tAsm += ta.elapsedTime();
+            if (sfd.active())
+            {
+                rDTVacc = rDTV;
+            }
 
             if (diag.active(1))
             {
@@ -779,7 +810,7 @@ int main(int argc, char *argv[])
             {
                 omega = ls.omegaMin();
                 rem.markDynamic(ls.offendingCells(dx));
-                aa.flush("omegaMin");
+                flushHistory("omegaMin");
             }
             break;
         }
@@ -787,7 +818,7 @@ int main(int argc, char *argv[])
         // Anderson history is invalid after a CFL change (B5)
         if (cuts > 0 || skipStep)
         {
-            aa.flush(skipStep ? "skipStep" : "cflCut");
+            flushHistory(skipStep ? "skipStep" : "cflCut");
         }
 
         // GUARD: R1 >= VSMALL before division (9.2)
@@ -908,7 +939,7 @@ int main(int argc, char *argv[])
         auto rollback = [&](const sentinel::checkResult& chk)
         {
             sen.restore(U, p, phi, kPtr, omegaPtr, nutPtr);
-            aa.flush("rollback");
+            flushHistory("rollback");
             ptc.decrease(sen.cflFactor());
             rem.markDynamic(chk.offending);
             rolledBack = true;
@@ -959,7 +990,7 @@ int main(int argc, char *argv[])
             if (rem.dynamicVersion() != dynVersion)
             {
                 // Membership changed (beta and dt of those cells change)
-                aa.flush("dynamicSet");
+                flushHistory("dynamicSet");
             }
 
             // --- Turbulence, segregated (5.8)
@@ -1009,6 +1040,10 @@ int main(int argc, char *argv[])
                 ptc.update(R);
                 ew.accept(R, eta);
 
+                // SFD filter step and deactivation (7.6)
+                sfd.update(U, rDTVacc);
+                sfd.checkOff(R, iter);
+
                 // Line-search beta (7.2): CFL boost on a full step
                 if (omega >= 1 && cuts == 0)
                 {
@@ -1025,7 +1060,7 @@ int main(int argc, char *argv[])
                 startupDone = true;
                 // beta 0 -> 1 changes the discretisation: the Anderson
                 // history refers to the upwind operator
-                aa.flush("startupEnd");
+                flushHistory("startupEnd");
                 Info<< "coupledFoam: start-up phase done at iteration "
                     << iter << " (R " << R << ")" << endl;
             }
@@ -1043,7 +1078,7 @@ int main(int argc, char *argv[])
             if (tuner->record(iter, useRho ? scalar(perf.rho) : scalar(-1)))
             {
                 // Different preconditioner from the next solve on
-                aa.flush("autoTune");
+                flushHistory("autoTune");
             }
         }
 
@@ -1173,6 +1208,17 @@ int main(int argc, char *argv[])
             j.add("nDynSticky", rem.nSticky());
             j.add("nDynRamping", rem.nRamping());
             j.add("version", rem.dynamicVersion());
+            j.endObject();
+            j.beginObject("sfd");
+            j.add("enabled", sfd.enabled());
+            j.add("active", sfd.active());
+            j.add("chiStar", doubleScalar(sfd.chiStar()));
+            j.add("resets", sfd.nResets());
+            j.add
+            (
+                "maxDev",
+                doubleScalar(sfd.maxDeviation(U, ls.Uref()))
+            );
             j.endObject();
             j.beginObject("anderson");
             j.add("enabled", aa.enabled());

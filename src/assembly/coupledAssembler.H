@@ -106,6 +106,10 @@ private:
         //- Implicit MRF (may be null)
         const MRFCoupling* mrfPtr_;
 
+        //- SFD (7.6): chi* and the filtered velocity (null: off)
+        scalar sfdChi_;
+        const vectorField* sfdUbarPtr_;
+
         //- Clamp for the narrowing to blockScalar (9.2)
         const doubleScalar clampValue_;
 
@@ -194,6 +198,15 @@ public:
 
             //- Static remediation cells (8.1): per-face limiter selection
             void setStaticCells(const boolList& isStatic);
+
+            //- SFD forcing (7.6) of the next assemblies: a_P += chi V_P,
+            //  b_P += chi V_P Ubar_P on the momentum rows; chi = 0 or
+            //  Ubar null switches it off
+            void setSFD(const scalar chi, const vectorField* Ubar)
+            {
+                sfdChi_ = chi;
+                sfdUbarPtr_ = Ubar;
+            }
 
 
         // Assembly

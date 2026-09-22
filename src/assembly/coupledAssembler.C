@@ -59,6 +59,8 @@ Foam::coupledAssembler::coupledAssembler
     ),
     rc_(mesh),
     mrfPtr_(mrfPtr),
+    sfdChi_(0),
+    sfdUbarPtr_(nullptr),
     clampValue_
     (
         coupledDict.subOrEmptyDict("guards").getOrDefault<doubleScalar>
@@ -280,6 +282,21 @@ void Foam::coupledAssembler::assembleMomentum
         }
     }
 
+    // --- SFD forcing -chi*(U - Ubar) (7.6), before PTC
+    if (sfdChi_ > 0 && sfdUbarPtr_)
+    {
+        const vectorField& Ub = *sfdUbarPtr_;
+        forAll(V, celli)
+        {
+            const doubleScalar cv = doubleScalar(sfdChi_)*V[celli];
+            for (label c = 0; c < blockP; ++c)
+            {
+                Dd_[di(celli, c, c)] += cv;
+                b_[celli*blockDim + c] += cv*Ub[celli][c];
+            }
+        }
+    }
+
     // --- Internal faces: momentum coupling and pressure gradient
     const scalarField& upperU = UEqn.upper();
     const scalarField& lowerU = UEqn.lower();
@@ -486,7 +503,11 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
             Dd_[di(celli, c, c)] += rDeltaTV[celli];
             s += Dd_[di(celli, c, c)];
         }
-        abar_[celli] = s/blockP;
+        // The SFD term is not part of abar: the Rhie-Chow D = V/abar of a
+        // converged state must not depend on chi (D-052)
+        abar_[celli] =
+            s/blockP
+          - (sfdUbarPtr_ ? doubleScalar(sfdChi_)*mesh_.V()[celli] : 0);
     }
 
     // --- Rhie-Chow D, D_f, explicit face term q

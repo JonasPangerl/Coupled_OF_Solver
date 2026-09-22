@@ -150,6 +150,7 @@ public:
         scalar CFLmin() const noexcept { return CFLmin_; }
         scalar Rprev() const noexcept { return Rprev_; }
         label holdRemaining() const noexcept { return holdRemaining_; }
+        label nHold() const noexcept { return nHold_; }
         label nLocalLimited() const noexcept { return nLocalLimited_; }
         label nLocalThrottled() const noexcept { return nLocalThrottled_; }
         label nLocalSticky() const noexcept { return nLocalSticky_; }
