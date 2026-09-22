@@ -100,14 +100,57 @@ constexpr doubleScalar refFluxBalanceTol = 1e-8;
 // Outer iteration (spec 11)
 constexpr label outerMaxIter = 2000;
 constexpr bool potentialInit = true;
-constexpr label startupUpwindIters = 50;
+constexpr label startupUpwindIters = 50;         // startupMode upwind only
 constexpr doubleScalar startupSwitchR = 1e-2;    // 7.4, D-008
+
+// Start-up of the convection scheme, startupControl (D-048). upwind =
+// beta 0 until startupUpwindIters or R/R1 < startupSwitchR, then 1 (the
+// behaviour before D-048, bit-identical). hybrid = upwind, then a linear
+// beta ramp 0 -> 1 over startupRampLength iterations from the ramp start
+// n0 (startupRampStart; earlier on R/R1 < startupSwitchR or on stagnation
+// of upwind; later while upwind still drops R fast, at most
+// startupRampStartMax; startupRampStartMax = startupRampStart disables the
+// delay). Measured on T1 (serial, iterations to R < 1e-5): upwind 290,
+// plain ramp 10 -> 30 348, delayed ramp (start 21) 375, ramp on the
+// stagnation trigger (start 7) not within 400; T0 Re1000 np4 did not
+// converge in 300 iterations with the ramp. User decision (2026-09-22):
+// the default is the hybrid ramp, NOT delayed, and WITHOUT the stagnation
+// trigger (both measured worse); the final ramp-vs-upwind choice follows
+// the T4a comparison (D-048). Cases that need the old behaviour pin
+// startupMode upwind in their fvSolution.
+constexpr const char* startupMode = "hybrid";    // hybrid | upwind | none
+constexpr label startupRampStart = 10;
+constexpr label startupRampLength = 20;
+constexpr label startupRampStartMax = 10;
+// stagnation: R_n > factor*R_(n-W) (less than 10 % reduction in W its);
+// off by default (fired at iteration 7 on T1 and missed R < 1e-5 in 400)
+constexpr bool startupStagnationTrigger = false;
+constexpr doubleScalar startupStagnationFactor = 0.9;
+constexpr label startupStagnationWindow = 5;
+// fast drop (delays the ramp start): R_n < factor*R_(n-W)
+constexpr doubleScalar startupFastFactor = 0.7;
+// developed start (hybrid and upwind modes; fresh start, potentialInit
+// off, non-uniform U): max(rU, rp) of iteration 1 assembled with beta = 1
+// below this (scale-free residuals sum|r|/sum(|Ax|+|b|); potential-flow
+// starts of T4 give 0.13 / 0.03, the stationary T4a state 0.0033 / 0.0025)
+constexpr doubleScalar startupDevelopedTol = 1e-2;
 constexpr doubleScalar nonOrthLimiter = 0.5;
 
 // Under-relaxation of the block smoother update per sweep (OPUS_TASKS
 // TASK 1d, D-043): x += smootherRelaxation * (smoothed - x). 1 = the
 // undamped smoother, bit-identical to the implementation before D-043.
 constexpr doubleScalar smootherRelaxation = 1.0;
+
+// blockILU0 pivot-growth safeguard (D-049): a cell whose ILU-modified pivot
+// inverse is larger than this factor times the inverse of its unmodified
+// diagonal block (max-abs norms) uses the unmodified block. Measured
+// maximum growth of healthy factorisations: T4b 3.7-6.6, T2 (CFL 500,
+// non-dominant rows) up to 11.8, T1 below 5; the degenerate T4b pivots
+// were 31-223 (rho spikes up to 3e5, the B4 abort at iteration 65 at 223).
+// A limit of 5 replaced 7-10 % of the T2 pivots and destroyed the
+// preconditioner (25 linear iterations per solve, 60 CFL cuts, R stuck at
+// 1e-4); 20, 50 and 100 leave T2 untouched (0 fallbacks). 0 disables it.
+constexpr doubleScalar iluPivotGrowthLimit = 20;
 
 // Orthogonal-mesh shortcut of nonOrthCorrection: the mesh counts as
 // orthogonal if max |k_f| <= this value, k_f the native (dimensionless)
@@ -127,6 +170,24 @@ constexpr doubleScalar betaMax = 1.5;
 constexpr doubleScalar betaExp = 1.1;
 constexpr label nHold = 10;
 constexpr label maxLinFails = 3;                 // B4
+// B4 failure definition (linFailPolicy): "strict" = not converged to eta within
+// maxIter is a failure; "reduction" = accepted if finite and the true
+// residual dropped to at most linAcceptReduction * initial
+constexpr const char* linFailPolicy = "strict";
+constexpr doubleScalar linAcceptReduction = 0.9;
+
+// Velocity reference Uref (D-050): the scale of the line search (fU Uref),
+// the local CFL limit (fLoc Uref), the dynamic-set thresholds (cU Uref,
+// cp pref with pref = Uref^2/2) and the sentinel (sentinelUFactor Uref).
+// "boundary": max |U| over the non-coupled boundary values (inflow, moving
+// walls, free stream) at iteration 1; "field": the maximum over the cells
+// and the non-coupled boundaries (the behaviour before D-050, which with
+// potentialInit is the singular potential-flow peak: T4b 8.8 U_inf, so the
+// dynamic set never fired); a number: that value. If the boundary maximum
+// is below UrefFallbackFactor times the field maximum (no driving boundary
+// velocity, e.g. an MRF-driven closed domain) the field maximum is used.
+constexpr const char* UrefMode = "boundary";     // boundary | field | value
+constexpr doubleScalar UrefFallbackFactor = 1e-6;
 
 // Line search (spec 7.2)
 constexpr doubleScalar fU = 0.3;

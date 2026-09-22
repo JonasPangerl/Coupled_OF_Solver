@@ -7,6 +7,7 @@
 #include "coupledDefaults.H"
 #include "PstreamReduceOps.H"
 #include "DynamicList.H"
+#include "ITstream.H"
 #include <cmath>
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
@@ -19,10 +20,47 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
     kappa_(coupledDefaults::kappa),
     maxCflCuts_(coupledDefaults::maxCflCuts),
     beta_(coupledDefaults::lineSearchBeta),
+    UrefMode_(coupledDefaults::UrefMode),
+    UrefExplicit_(0),
     Uref_(0),
     pref_(0),
-    refSet_(false)
+    refSet_(false),
+    UrefSource_()
 {
+    // coupled.Uref: a mode word or an explicit velocity scale (D-050)
+    if (coupledDict.found("Uref", keyType::LITERAL))
+    {
+        ITstream& is = coupledDict.lookup("Uref", keyType::LITERAL);
+        const token tok(is);
+        if (tok.isNumber())
+        {
+            UrefMode_ = "explicit";
+            UrefExplicit_ = tok.number();
+            // Negated comparison also rejects non-finite input
+            if (!(UrefExplicit_ > 0) || !std::isfinite(UrefExplicit_))
+            {
+                FatalIOErrorInFunction(coupledDict)
+                    << "coupled.Uref must be boundary, field or a finite"
+                    << " value > 0, got " << UrefExplicit_
+                    << exit(FatalIOError);
+            }
+        }
+        else if
+        (
+            tok.isWord()
+         && (tok.wordToken() == "boundary" || tok.wordToken() == "field")
+        )
+        {
+            UrefMode_ = tok.wordToken();
+        }
+        else
+        {
+            FatalIOErrorInFunction(coupledDict)
+                << "coupled.Uref must be boundary, field or a value > 0,"
+                << " got " << tok << exit(FatalIOError);
+        }
+    }
+
     const dictionary& d = coupledDict.subOrEmptyDict("lineSearch");
     fU_ = d.getOrDefault<scalar>("fU", coupledDefaults::fU);
     fp_ = d.getOrDefault<scalar>("fp", coupledDefaults::fp);
@@ -46,17 +84,42 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
 
 void Foam::lineSearch::setReference(const volVectorField& U)
 {
-    scalar Umax = gMax(mag(U.primitiveField())());
+    const scalar Ufield = gMax(mag(U.primitiveField())());
 
+    scalar Ubnd = 0;
     forAll(U.boundaryField(), patchi)
     {
         const fvPatchVectorField& Up = U.boundaryField()[patchi];
         if (!Up.coupled() && Up.size())
         {
-            Umax = max(Umax, max(mag(Up)()));
+            Ubnd = max(Ubnd, max(mag(Up)()));
         }
     }
-    reduce(Umax, maxOp<scalar>());
+    reduce(Ubnd, maxOp<scalar>());
+
+    scalar Umax = 0;
+    if (UrefMode_ == "explicit")
+    {
+        Umax = UrefExplicit_;
+        UrefSource_ = "explicit";
+    }
+    else if (UrefMode_ == "field")
+    {
+        // The definition before D-050
+        Umax = max(Ufield, Ubnd);
+        UrefSource_ = "field";
+    }
+    else if (Ubnd > coupledDefaults::UrefFallbackFactor*Ufield)
+    {
+        Umax = Ubnd;
+        UrefSource_ = "boundary";
+    }
+    else
+    {
+        // No driving boundary velocity: the field maximum
+        Umax = Ufield;
+        UrefSource_ = "fieldFallback";
+    }
 
     // GUARD: a zero reference would make every omega zero
     Uref_ = max(Umax, VSMALL);
@@ -70,6 +133,7 @@ void Foam::lineSearch::setReference(const scalar Uref, const scalar pref)
     Uref_ = Uref;
     pref_ = pref;
     refSet_ = true;
+    UrefSource_ = "restart";
 }
 
 
@@ -171,6 +235,14 @@ void Foam::lineSearch::writeSettings(dictionary& dict) const
     d.add("maxCflCuts", maxCflCuts_);
     d.add("beta", beta_);
     dict.add("lineSearch", d);
+    if (UrefMode_ == "explicit")
+    {
+        dict.add("Uref", UrefExplicit_);
+    }
+    else
+    {
+        dict.add("Uref", UrefMode_);
+    }
 }
 
 

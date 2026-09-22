@@ -8,6 +8,7 @@
 #include "calculatedFvPatchFields.H"
 #include "PstreamReduceOps.H"
 #include "globalIndex.H"
+#include "fileOperation.H"
 #include <cmath>
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
@@ -202,6 +203,17 @@ void Foam::sentinel::restore
 }
 
 
+bool Foam::sentinel::writeInstance(const regIOobject& io)
+{
+    return fileHandler().writeObject
+    (
+        io,
+        IOstreamOption(io.time().writeFormat(), io.time().writeCompression()),
+        true
+    );
+}
+
+
 void Foam::sentinel::writeLastValid
 (
     const volVectorField& U,
@@ -232,7 +244,7 @@ void Foam::sentinel::writeLastValid
             ),
             fld
         );
-        copy.write();
+        writeInstance(copy);
     };
 
     writeCopy(U);
@@ -261,7 +273,7 @@ void Foam::sentinel::writeLastValid
     {
         flag[celli] = 1;
     }
-    flag.write();
+    writeInstance(flag);
 
     // Offending cell centres, at most maxReport over all ranks
     List<pointField> allC(UPstream::nProcs());
