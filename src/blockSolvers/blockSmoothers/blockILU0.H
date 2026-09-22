@@ -89,8 +89,9 @@ public:
             return nPivotFallback_;
         }
 
-        //- w = M^-1 r
-        void applyInverse(blockScalarUList& w, const blockScalarUList& r) const;
+        //- w = M^-1 r. r is overwritten: it is the accumulator of the
+        //  forward sweep (no per-application work vector, D-069 F12)
+        void applyInverse(blockScalarUList& w, blockScalarUList& r) const;
 
         virtual void smooth
         (

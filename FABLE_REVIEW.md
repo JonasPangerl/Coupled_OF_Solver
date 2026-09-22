@@ -271,7 +271,21 @@ Note: probe c did not change the switch point materially - the start-up
 switch also fires on R < 1e-2 (D-008), so startupUpwindIters alone
 cannot extend the upwind phase.
 
-### 5. np4 runs are not bit-reproducible run to run (found by TASK 5, 2026-09-22)
+### 5. RESOLVED 2026-09-22 (solver-fix, D-069) - np4 runs are not bit-reproducible run to run
+
+Root cause: decomposePar. Scotch 7.0.4 partitions with several threads
+and returns a different decomposition on every run (T0, 4 subdomains:
+256-260 processor faces, cell counts 4096/4096/4134/4058 in one run). The
+solver is deterministic: Test-blockGAMG on a fixed decomposition is
+bitwise reproducible at np4 (V/K, processor agglomeration on/off), and
+fixing the Open MPI allreduce algorithm, excluding han/xhc, processor
+agglomeration none + V cycle and ASLR off all left the runs different
+because the meshes differed. Fix: every Allrun exports
+SCOTCH_PTHREAD_NUMBER=1; T0 np4 Re100 66/66/66 and Re1000 236/236/236
+iterations with identical histories, and a T1 np4 restart 100 + 60 is
+bitwise identical to the continuous 160-iteration run.
+
+Original report:
 
 T0 np4 on the main-install binary: three identical runs gave 7 / 9 / 9
 linear iterations at outer iteration 1, with different rho. Serial runs
@@ -316,13 +330,24 @@ switch counter now available on main).
   prepared but not run (lead: converge): T4a with
   coupled.rhieChow.tensorial no, and with
   coupled.remediation.static.wallStarved no.
-- Restart is not exact on T3 (serial): a 50 + 50 split differs from the
+- RESOLVED (solver-fix, D-069 F1 + F4): Restart is not exact on T3
+  (serial): a 50 + 50 split differs from the
   100-iteration run from the first restarted iteration on (rU 0.0218 vs
   0.0208, linear iterations 3 vs 1), for SST and GEKO, split at 40 too;
   identical before and after D-056 (bitwise), so not caused by it.
   test_restart[T3-SST] fails its 1e-5 tolerance (merged build with SFD:
   relative 2.0e-4 Cd, 5.1e-4 Cl; before the SFD merge 1.3 / 1.6).
   test_restart[T1] passes.
+  Causes: the freestreamPressure valueFraction was never refreshed before
+  an assembly (F1; after it 1.2e-5 / 5.7e-5) and the matrix-weighted GAMG
+  hierarchy was rebuilt from another matrix on restart (F4). With both
+  fixes test_restart[T3-SST] passes with relative difference 0.0 / 0.0
+  (bitwise) and 555 = 555 iterations; [T1] 0.0.
+- T4a Cl with wallStarved off on the solver-fix build (D-069): Cd 0.4009
+  (+1.1 %), Cl 0.0767 vs reference 0.0768 (main with wallStarved off:
+  Cl 0.0818).
+- T3-GEKO lands on the stalled branch after F1 (Cd 0.0786, Cl 0.206;
+  before 0.0363 / 0.788, failing 5 % either way): multi-stability, open.
 - test_blockGAMG_cycles (B9 ordering K <= W <= V: V 11, F 8, W 7, K 11)
   fails identically on main's recorded result; not touched here.
 - T4b Cd is 2.04 % above the simpleFoam reference, tolerance 2 %

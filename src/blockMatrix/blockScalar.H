@@ -26,6 +26,7 @@ Description
 #include "scalar.H"
 #include "List.H"
 #include "label.H"
+#include <cmath>
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -69,6 +70,26 @@ inline blockScalar toBlock
         return static_cast<blockScalar>(-clampValue);
     }
     return static_cast<blockScalar>(v);
+}
+
+
+//- As above, and count NaN input in nNonFinite: a NaN passes both clamp
+//  comparisons. It is stored unmasked (the solve then fails through the B4
+//  path) but reported (D-069 F9); +-inf is clamped and counted in nClamped.
+inline blockScalar toBlock
+(
+    const doubleScalar v,
+    const doubleScalar clampValue,
+    label& nClamped,
+    label& nNonFinite
+)
+{
+    if (std::isnan(v))
+    {
+        ++nNonFinite;
+        return static_cast<blockScalar>(v);
+    }
+    return toBlock(v, clampValue, nClamped);
 }
 
 

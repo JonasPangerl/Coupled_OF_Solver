@@ -37,6 +37,7 @@ SourceFiles
 #define coupledFoam_blockGMRES_H
 
 #include "blockSolver.H"
+#include "alignedList.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -51,6 +52,16 @@ class blockGMRES
 
         //- Krylov subspace size before restart
         const label restart_;
+
+        //- Work vectors, kept across solves: no allocation of m+4 vectors
+        //  per solve (D-069 F12). Sized on first use (and when the level
+        //  size changes); the contents are always written before read.
+        mutable alignedList<blockScalar> r_;
+        mutable alignedList<blockScalar> w_;
+        mutable List<alignedList<blockScalar>> V_;
+        mutable alignedList<blockScalar> z_;
+        mutable alignedList<blockScalar> Vy_;
+        mutable alignedList<reduceScalar> xd_;
 
 
 public:

@@ -31,6 +31,25 @@ namespace
     //- Native agglomerator of the geometric hierarchy that exists before
     //  the first matrix (replaces algebraicPair in the native selector)
     const char* const algebraicPairInitial = "faceAreaPair";
+
+    //- Largest magnitude of a K-cycle / scaleCorrection coefficient after
+    //  narrowing: far inside the float range, so that a*z cannot overflow
+    //  where the double ratio of a nearly vanishing q would (D-069 F9)
+    constexpr double kCoeffLimit = 1e30;
+
+    //- Float-safe narrowing of such a coefficient: non-finite -> 0 (the
+    //  correction is dropped), |a| clamped to kCoeffLimit (GUARD)
+    inline Foam::blockScalar narrowCoeff(const Foam::reduceScalar a)
+    {
+        if (!std::isfinite(a))
+        {
+            return 0;
+        }
+        return static_cast<Foam::blockScalar>
+        (
+            std::max(-kCoeffLimit, std::min(kCoeffLimit, a))
+        );
+    }
 }
 
 // * * * * * * * * * * * * blockGAMGProcAgglomeration  * * * * * * * * * * * //
@@ -407,7 +426,15 @@ Foam::blockGAMG::blockGAMG
     densePivot_(),
     nCoarsestIters_(0),
     hierarchyVersion_(0),
-    diag_(nullptr)
+    diag_(nullptr),
+    fixedPrecon_(dict.getOrDefault<bool>("fixedPreconditioner", false)),
+    allowVariableCoarsest_
+    (
+        dict.getOrDefault<bool>("allowVariableCoarsest", false)
+    ),
+    aggWeights0_(),
+    restoredAggWeights_(),
+    restartUpdates_(-1)
 {
     // Effective defaults written back so that the effective-settings print
     // shows every value actually used
@@ -467,6 +494,15 @@ Foam::blockGAMG::blockGAMG
                 << exit(FatalIOError);
         }
         dict_.set("scaleCorrection", sc);
+        if (fixedPrecon_ && scaleMode_ != 0)
+        {
+            FatalIOErrorInFunction(dict)
+                << "scaleCorrection " << sc << " makes the block-GAMG cycle"
+                << " a variable (data-dependent) preconditioner: it requires"
+                << " solver blockFGMRES; blockGMRES and blockBiCGStab assume"
+                << " a fixed preconditioner (D-069 F10). Use scaleCorrection"
+                << " none or solver blockFGMRES." << exit(FatalIOError);
+        }
     }
     if
     (
@@ -661,6 +697,25 @@ void Foam::blockGAMG::buildHierarchy()
             << ranksPerLevel_.last() << " rank(s)): "
             << (anyDense ? "dense LU" : dict_.get<word>("coarsestSolver"))
             << endl;
+
+        // An iterative coarsest solve (Krylov to a relative tolerance) is
+        // a nonlinear, iteration-dependent operator (D-069 F10)
+        const bool anyIterative =
+            returnReduceOr(hasLevel(L_) && !useDenseLU_, fine_.comm());
+        if (fixedPrecon_ && anyIterative && !allowVariableCoarsest_)
+        {
+            FatalErrorInFunction
+                << "blockGAMG: the coarsest level (" << cellsPerLevel_.last()
+                << " cells, " << ranksPerLevel_.last() << " rank(s)) is"
+                << " solved iteratively (" << dict_.get<word>("coarsestSolver")
+                << "), which makes the cycle a variable preconditioner;"
+                << " blockGMRES and blockBiCGStab assume a fixed one"
+                << " (D-069 F10). Use solver blockFGMRES, a coarsest level"
+                << " that fits the dense LU (one rank, at most "
+                << denseLUMaxCells_ << " cells: nCellsInCoarsestLevel,"
+                << " processorAgglomerator masterCoarsest), or set"
+                << " blockGAMG.allowVariableCoarsest yes." << exit(FatalError);
+        }
     }
 
     allocateWork();
@@ -899,9 +954,27 @@ void Foam::blockGAMG::agglomerate()
             {
                 mesh.thisDb().checkOut(const_cast<GAMGAgglomeration*>(old));
             }
+            // Weights of this agglomeration, kept for the restart state; a
+            // restart rebuilds the hierarchy of the continuous run from the
+            // stored weights (D-069 F4)
+            if (m == m0)
+            {
+                const label nFaces = fine_.lduAddr().lowerAddr().size();
+                if (restoredAggWeights_.size() == nFaces)
+                {
+                    aggWeights0_ = restoredAggWeights_;
+                }
+                else
+                {
+                    aggWeights0_ = matrixFaceWeights();
+                }
+            }
             autoPtr<GAMGAgglomeration> p
             (
-                new blockPairAgglomeration(mesh, aggDict, matrixFaceWeights())
+                new blockPairAgglomeration
+                (
+                    mesh, aggDict, tmp<scalarField>(aggWeights0_)
+                )
             );
             aggP = &regIOobject::store(p);
         }
@@ -2039,7 +2112,7 @@ void Foam::blockGAMG::cycle
             doubleReduce::dot2(q, r_[l], q, q, A.comm());
         // GUARD: a vanishing correction is added unscaled (alpha 1)
         const blockScalar alpha =
-            narrow(s[1] > doubleScalarVSMALL ? s[0]/s[1] : 1.0);
+            narrowCoeff(s[1] > doubleScalarVSMALL ? s[0]/s[1] : 1.0);
         const label n = x.size();
         for (label i = 0; i < n; ++i)
         {
@@ -2126,7 +2199,7 @@ void Foam::blockGAMG::kstep
     const FixedList<reduceScalar, 2> d1 = doubleReduce::dot2(q1, b, q1, q1, comm);
     // GUARD: <q1,q1> > 0 unless the correction vanishes
     const reduceScalar a1 = d1[0]/std::max(d1[1], doubleScalarVSMALL);
-    const blockScalar a1f = narrow(a1);
+    const blockScalar a1f = narrowCoeff(a1);
 
     for (label i = 0; i < n; ++i)
     {
@@ -2163,7 +2236,7 @@ void Foam::blockGAMG::kstep
     // coefficient from the pre-orthogonalisation q2 (6.3.2)
     const reduceScalar c =
         doubleReduce::dot(q2, q1, comm)/std::max(d1[1], doubleScalarVSMALL);
-    const blockScalar cf = narrow(c);
+    const blockScalar cf = narrowCoeff(c);
     for (label i = 0; i < n; ++i)
     {
         q2[i] -= cf*q1[i];
@@ -2173,7 +2246,7 @@ void Foam::blockGAMG::kstep
     const FixedList<reduceScalar, 2> d2 = doubleReduce::dot2(q2, r1, q2, q2, comm);
     // GUARD: <q2,q2> > 0 unless the correction vanishes
     const reduceScalar a2 = d2[0]/std::max(d2[1], doubleScalarVSMALL);
-    const blockScalar a2f = narrow(a2);
+    const blockScalar a2f = narrowCoeff(a2);
     for (label i = 0; i < n; ++i)
     {
         e[i] += a2f*z2[i];
@@ -2228,6 +2301,12 @@ bool Foam::blockGAMG::setCycleType(const cycleKind c) const
     }
     if (c == cycleKind::K)
     {
+        // A fixed-preconditioner Krylov solver cannot take the K cycle
+        // (autoTune promotion refused, D-069 F10)
+        if (fixedPrecon_)
+        {
+            return false;
+        }
         // K workspace may not have been allocated for the start-up cycle
         allocateKWork();
     }
@@ -2236,25 +2315,45 @@ bool Foam::blockGAMG::setCycleType(const cycleKind c) const
 }
 
 
+void Foam::blockGAMG::setRestartAgglomeration
+(
+    const scalarField& weights,
+    const label nUpdates
+) const
+{
+    restoredAggWeights_ = weights;
+    restartUpdates_ = nUpdates;
+}
+
+
 void Foam::blockGAMG::update()
 {
+    // Restart: continue the re-agglomeration schedule of the written run
+    // (D-069 F4)
+    if (restartUpdates_ >= 0)
+    {
+        nUpdates_ = restartUpdates_;
+        restartUpdates_ = -1;
+    }
     ++nUpdates_;
     const bool matrixWeights = (aggWeights_ != "geometric");
-    if
-    (
-        matrixWeights
-     && (
-            !aggFromMatrix_
-         || (reaggInterval_ > 0 && nUpdates_ % reaggInterval_ == 0)
-        )
-    )
+    const bool periodic =
+        (reaggInterval_ > 0 && nUpdates_ % reaggInterval_ == 0);
+    if (matrixWeights && (!aggFromMatrix_ || periodic))
     {
         // First update (the matrix exists only now) or re-agglomeration:
-        // pair agglomeration on the block-matrix weights
+        // pair agglomeration on the block-matrix weights. After a restart
+        // the first build uses the stored weights of the written run,
+        // unless this update is a periodic re-agglomeration anyway.
+        if (periodic)
+        {
+            restoredAggWeights_.clear();
+        }
         clearHierarchy();
         aggPtr_ = nullptr;
         aggFromMatrix_ = true;
         buildHierarchy();
+        restoredAggWeights_.clear();
     }
     else if (!dict_.get<bool>("cacheAgglomeration"))
     {

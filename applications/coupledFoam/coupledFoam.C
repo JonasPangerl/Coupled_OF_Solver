@@ -196,7 +196,10 @@ int main(int argc, char *argv[])
     sfdControl sfd(mesh, coupledDict, ptc.nHold());
 
     // Linear-system dump for offline preconditioner studies
-    // (Test-blockSystem): coupled.dumpLinearSystem (iterations), serial only
+    // (Test-blockSystem): coupled.dumpLinearSystem (iterations). In parallel
+    // every rank writes its local system (without the interface
+    // coefficients) to processorN/linsys, e.g. to compare runs rank by rank
+    // (FABLE_REVIEW 5)
     const labelList dumpIters
     (
         coupledDict.getOrDefault<labelList>("dumpLinearSystem", labelList())
@@ -375,6 +378,8 @@ int main(int argc, char *argv[])
     // * * * * * * * * * * * * * * * Restart (10) * * * * * * * * * * * * * //
 
     label iter = 0;
+    // Consecutive linear-solve failures (B4); restart state (D-069 F4)
+    label linFails = 0;
     scalar R1 = -1;
     scalar phiConsistency = -1;
     bool restarted = false;
@@ -402,6 +407,28 @@ int main(int argc, char *argv[])
             if (tuner)
             {
                 tuner->readState(st);
+            }
+            linFails = st.getOrDefault<label>("linFails", 0);
+            {
+                // Block-GAMG: rebuild the written run's matrix-weighted
+                // hierarchy at the first update, same schedule (D-069 F4)
+                const blockGAMGPrecon* gp =
+                    dynamic_cast<const blockGAMGPrecon*>
+                    (
+                        linSolver->preconditioner()
+                    );
+                if (gp && st.found("gamgUpdates"))
+                {
+                    gp->gamg().setRestartAgglomeration
+                    (
+                        st.getOrDefault<scalarField>
+                        (
+                            "gamgAggWeights",
+                            scalarField()
+                        ),
+                        st.get<label>("gamgUpdates")
+                    );
+                }
             }
 
             Info<< "coupledFoam: restart from " << runTime.timeName()
@@ -435,7 +462,11 @@ int main(int argc, char *argv[])
 
                 // The written phi was built with the explicit term q_f of
                 // the assembly that was solved (rhieChow::updateFlux); use
-                // the stored q_f if present, else recompute it from p
+                // the stored q_f if present, else recompute it from p.
+                // The p coefficients as the first assembly will use them
+                // (a mixed p is constructed with its default valueFraction,
+                // D-069 F1)
+                p.boundaryFieldRef().updateCoeffs();
                 surfaceScalarField phiRe("phiRecomputed", phi);
                 tmp<surfaceScalarField> tQ = state.readQ();
                 if (tQ.valid())
@@ -483,6 +514,11 @@ int main(int argc, char *argv[])
             Info<< "coupledFoam: fresh start"
                 << (potentialInit ? " (potentialInit: fields from"
                     " potentialFoam expected)" : "") << endl;
+            // nut from the turbulence fields, as native simpleFoam; a
+            // restart keeps the nut of the file (the capped model nut of
+            // the written iteration), so that restarts stay exact
+            // (D-069 F2)
+            turbulence->validate();
         }
     }
 
@@ -594,6 +630,30 @@ int main(int argc, char *argv[])
         {
             tuner->writeState(st);
         }
+        // Consecutive B4 failures and the block-GAMG agglomeration: the
+        // matrix-weighted hierarchy in use was built from the matrix of
+        // its last re-agglomeration, which a restart cannot recompute
+        // (D-069 F4)
+        st.set("linFails", linFails);
+        {
+            const blockGAMGPrecon* gp =
+                dynamic_cast<const blockGAMGPrecon*>
+                (
+                    linSolver->preconditioner()
+                );
+            if (gp)
+            {
+                st.set("gamgUpdates", gp->gamg().nUpdates());
+                if (gp->gamg().agglomerationWeights().size())
+                {
+                    st.set
+                    (
+                        "gamgAggWeights",
+                        gp->gamg().agglomerationWeights()
+                    );
+                }
+            }
+        }
         // Anderson history deliberately not part of the state (D-026)
         st.set("refinementHistory", labelList());
         IOstream::defaultPrecision(oldPrecision);
@@ -668,7 +728,6 @@ int main(int argc, char *argv[])
 
     label nCflCutsTotal = 0;
     label nPivotFallbackTotal = 0;
-    label linFails = 0;
     bool converged = false;
     clockTime runTimer;
     scalar lastR = -1;
@@ -755,7 +814,9 @@ int main(int argc, char *argv[])
         }
         // SFD (7.6): activation after the start-up phase; C6 writes USFD
         // while it is active
-        sfd.begin(U, startup.done(iter), iter);
+        // Not while the developed-start probe of iteration 1 is open
+        // (beta(1) is 1 then, D-069 F7)
+        sfd.begin(U, startup.done(iter) && !startup.probing(), iter);
         assembler.setSFD
         (
             sfd.chiStar(),
@@ -785,7 +846,8 @@ int main(int argc, char *argv[])
             startup.startProbe(!potentialInit && nonUniform);
         }
         scalar betaGlobal = startup.beta(iter);
-        const bool startupDone = startup.done(iter);
+        // Updated when the probe of iteration 1 decides (D-069 F7)
+        bool startupDone = startup.done(iter);
         // Effective references of this iteration (D-057 startupReference)
         ls.setStartup(betaGlobal, startupDone);
         if (iter > 1 && betaGlobal != startup.beta(iter - 1))
@@ -824,6 +886,12 @@ int main(int argc, char *argv[])
         {
             clockTime ta;
             scalarField rDTV(ptc.rDeltaTV(phi, nuEff, cflF));
+            // Refresh the p boundary coefficients (valueFraction of the
+            // mixed types) before the assembly, as the native fvMatrix
+            // constructor does for U. Idempotent while updated(); the
+            // post-update p.correctBoundaryConditions() then evaluates with
+            // the coefficients of the solved continuity row (D-069 F1)
+            p.boundaryFieldRef().updateCoeffs();
             assembler.assembleMomentum(U, p, phi, nuEff, beta);
             nLocLim = ptc.applyLocalLimit
             (
@@ -885,7 +953,8 @@ int main(int argc, char *argv[])
                         << " with the start-up beta" << endl;
                     betaGlobal = startup.beta(iter);
                     beta = rem.beta(betaGlobal);
-                    ls.setStartup(betaGlobal, startup.done(iter));
+                    startupDone = startup.done(iter);
+                    ls.setStartup(betaGlobal, startupDone);
                     continue;
                 }
             }
@@ -898,7 +967,7 @@ int main(int argc, char *argv[])
                 linSolver->setRelTol(eta);
             }
 
-            if (!UPstream::parRun() && dumpIters.found(iter) && cuts == 0)
+            if (dumpIters.found(iter) && cuts == 0)
             {
                 const blockLduMatrix4& Am = assembler.matrix();
                 const fileName dumpFile
@@ -1072,6 +1141,14 @@ int main(int argc, char *argv[])
             WarningInFunction
                 << nClamped << " coefficients clamped at +-"
                 << assembler.clampValue() << " (spec 9.2)" << endl;
+        }
+        const label nNaNCoeffs =
+            returnReduce(assembler.nNonFinite(), sumOp<label>());
+        if (nNaNCoeffs)
+        {
+            WarningInFunction
+                << nNaNCoeffs << " NaN coefficients in the assembly of"
+                << " iteration " << iter << " (D-069 F9)" << endl;
         }
         // C2: pseudo-inverse fallbacks of the tensorial Rhie-Chow D
         if (iter % rhieChowWarnInterval == 0)
