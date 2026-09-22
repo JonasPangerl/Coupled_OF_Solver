@@ -91,6 +91,47 @@ Also open from the T1 study:
   R1*residualTol. A cheap code guard (a warning, or a tolerance relative
   to R1) is not implemented.
 
+### 2b. Test status after the fixes (final build, 2026-09-22 02:27)
+
+- T0 Re100/Re1000 at np1 and np4: all PASS.
+
+  | run | its | wall |
+  |---|---|---|
+  | Re100 np1 | 56 | 17 s |
+  | Re100 np4 | 56 | 22 s |
+  | Re1000 np1 | 56 | 27 s |
+  | Re1000 np4 | 214 | 213 s |
+
+  The np4 growth at Re1000 is item 1.
+- T1 np1 and np4: FAIL. The spec criterion is R < 1e-6 within 400
+  iterations; the final R was 1.5e-5 at 400. The converging
+  configuration needs about 483 iterations (item 2). The criterion was
+  not loosened.
+
+### 2c. T4b: the simpleFoam reference itself never meets criterion 12.3(ii)
+
+T4b (motorBike, 1.70 M cells, 10 ranks): simpleFoam ran 4000 iterations
+in 11876 s wall / 33.0 CPU-h (run/ref_T4b_np10). Cd and Cl keep
+oscillating:
+- Cd 0.393-0.405 (±1 %) and Cl 0.061-0.072 (±8 %) over iterations
+  3500-4000.
+- The last 100 iterations span 2.3 % in Cd and 12.5 % in Cl.
+
+Criterion 12.3(ii) needs a 0.2 % window. The flow (a bluff-body wake) is
+physically unsteady, so no steady solver can meet it: test_T4 fails on
+"referenceConverged" whatever coupledFoam does. The same probably holds
+for T5 Ahmed (a 25 degree slant is near the separation switch) and for
+the F1 car.
+
+Proposal (not implemented; changing the criterion is the user's call):
+- Compare the mean Cd over the last N iterations (e.g. 1000) with its
+  statistical uncertainty.
+- Record "converged" as a stationary mean (e.g. a drift of the running
+  mean below 0.2 % over 1000 iterations) rather than a 0.2 % min/max
+  window.
+
+T4b reference, mean over iterations 3500-4000: Cd 0.3993, Cl 0.0671.
+
 ### 3. Build hygiene: the installed binary was stale after the C++ fix commit
 
 After 1171d44 the installed coupledFoam binary still referenced the old
