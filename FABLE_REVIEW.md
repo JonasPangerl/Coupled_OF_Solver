@@ -42,3 +42,62 @@ To do:
 - (c) Decide the tolerance: the orthogonality tolerance is conceptually
   right (coupledDefaults::orthogonalityTolerance exists but is unused).
 Committed state: exact test (f025546).
+
+### 2. coupledFoam is ~5x SLOWER than simpleFoam on a turbulent case (T1)
+
+This is the most important open problem. It blocks the project's goal
+(the fastest solver) on every realistic case, the F1 car included.
+
+Evidence (T1 study, D-038; logs in run/exp_T1_*, summary in
+run/exp_T1_results.txt):
+
+| run | outer its | wall |
+|---|---|---|
+| coupledFoam, converging configuration: ILU0, FGMRES restart 30, K cycle, upwind k/omega, k/omega relax 0.95 | 483 to R < 1e-6 | 364 s (np1) |
+| simpleFoam, same schemes | 769 to 1e-8 | 72 s |
+
+Per outer iteration coupledFoam costs 0.35-0.7 s, simpleFoam 0.09 s.
+Almost all of that is the linear solve:
+- rho (the first preconditioner application) is often > 1.
+- A 0.5 residual reduction needs 20-60 FGMRES iterations.
+- The block-GAMG K cycle cannot solve the upwind CFL-500 system at all.
+- T0 (uniform cavity) shows the opposite (9.6 s vs 173 s), so the
+  weakness is specific to graded, high-aspect-ratio meshes and turbulent
+  viscosity contrasts.
+
+Suspects / directions:
+- (a) Agglomeration: faceAreaPair on the 4x4 system uses geometric
+  weights only. The p-p Rhie-Chow block and the strongly anisotropic
+  momentum coupling across thin boundary-layer cells probably need
+  coefficient-based weights, e.g. the momentum diagonal or
+  |a_PN|/max(a_P,a_N).
+- (b) The coarse operator: Galerkin summation of the saddle-point blocks
+  loses the p-p stabilisation. Check the coarse-level p-row diagonal
+  dominance.
+- (c) The smoother: point-block ILU0 on the saddle-point system. Try a
+  Vanka/SCGS block smoother, or a Schur-complement (SIMPLE-type)
+  preconditioner as smoother or preconditioner.
+- (d) Literature: Uroic & Jasak 2021 (CPC) report coupled speedups with
+  block-selective AMG on OpenFOAM meshes; compare their agglomeration and
+  smoother choices.
+
+Also open from the T1 study:
+- Whether T1 should stay on upwind k/omega (D-038). With the tutorial's
+  limitedLinear k/omega neither solver converges.
+- The motorBike, Ahmed and F1 cases may show the same missing steady
+  state with second-order turbulence convection. Check each before
+  blaming the solver.
+- Every case's absolute linear tolerance must stay below
+  R1*residualTol. A cheap code guard (a warning, or a tolerance relative
+  to R1) is not implemented.
+
+### 3. Build hygiene: the installed binary was stale after the C++ fix commit
+
+After 1171d44 the installed coupledFoam binary still referenced the old
+rhieChow::updateFlux signature: wmake does not relink an application when
+only the library changes. The C++ fix agent's T0 verification may
+therefore have run a mixed build. Clean rebuild at 02:10 on 2026-09-22;
+T0/T1 are being re-verified.
+Recommendation: `./Allwmake` should always rebuild the applications after
+the library (check the top-level Allwmake), or run wclean on the apps when
+headers in src/ change.
