@@ -36,7 +36,7 @@ Foam::staticCriteria::settings::settings()
     maxWallInternalFaces(coupledDefaults::maxWallInternalFaces),
     procAMI(coupledDefaults::procAMIEnabled),
     volumeJump(coupledDefaults::volumeJumpEnabled),
-    volJumpThreshold(coupledDefaults::volJumpThreshold)
+    volJumpThreshold(scalar(coupledDefaults::volJumpThreshold))
 {}
 
 
@@ -320,7 +320,7 @@ void Foam::staticCriteria::report
 )
 {
     // GUARD: nTotal >= 1
-    const scalar percentPerCell = 100.0/max(scalar(nTotal), scalar(1));
+    const scalar percentPerCell = scalar(100.0/max(scalar(nTotal), scalar(1)));
 
     auto item = [&](const bool on, const label n)
     {

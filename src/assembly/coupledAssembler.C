@@ -55,7 +55,7 @@ Foam::coupledAssembler::coupledAssembler
             .getOrDefault<scalar>
             (
                 "nonOrthLimiter",
-                coupledDefaults::staticNonOrthLimiter
+                scalar(coupledDefaults::staticNonOrthLimiter)
             )
     ),
     rc_(mesh, coupledDict),

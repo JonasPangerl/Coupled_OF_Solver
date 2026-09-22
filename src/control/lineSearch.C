@@ -15,8 +15,8 @@
 
 Foam::lineSearch::lineSearch(const dictionary& coupledDict)
 :
-    fU_(coupledDefaults::fU),
-    fp_(coupledDefaults::fp),
+    fU_(scalar(coupledDefaults::fU)),
+    fp_(scalar(coupledDefaults::fp)),
     omegaMin_(coupledDefaults::omegaMin),
     kappa_(coupledDefaults::kappa),
     maxCflCuts_(coupledDefaults::maxCflCuts),
@@ -137,8 +137,8 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
     }
 
     const dictionary& d = coupledDict.subOrEmptyDict("lineSearch");
-    fU_ = d.getOrDefault<scalar>("fU", coupledDefaults::fU);
-    fp_ = d.getOrDefault<scalar>("fp", coupledDefaults::fp);
+    fU_ = d.getOrDefault<scalar>("fU", scalar(coupledDefaults::fU));
+    fp_ = d.getOrDefault<scalar>("fp", scalar(coupledDefaults::fp));
     omegaMin_ = d.getOrDefault<doubleScalar>("omegaMin", coupledDefaults::omegaMin);
     kappa_ = d.getOrDefault<doubleScalar>("kappa", coupledDefaults::kappa);
     maxCflCuts_ =
@@ -198,7 +198,7 @@ void Foam::lineSearch::setReference(const volVectorField& U)
 
     // GUARD: a zero reference would make every omega zero
     Uref_ = max(Umax, cfVSmall<scalar>());
-    pref_ = 0.5*sqr(Uref_);
+    pref_ = scalar(0.5*sqr(Uref_));
     Ufield0_ = max(Ufield, Ubnd);
     refSet_ = true;
     updateStep();
@@ -264,7 +264,7 @@ void Foam::lineSearch::updateStep()
     // reference mode: pstep is pref itself (bitwise D-050 behaviour, also
     // for a restored pref)
     UstepEff_ = Ustep_;
-    pstepEff_ = (stepMode_ == "reference" ? pref_ : 0.5*sqr(Ustep_));
+    pstepEff_ = (stepMode_ == "reference" ? pref_ : scalar(0.5*sqr(Ustep_)));
     excludeDynamic_ = false;
 }
 
@@ -287,16 +287,16 @@ void Foam::lineSearch::setStartup
         // w = 1 at beta 0 (field scale), 0 at beta 1 (frozen values)
         const scalar w = min(max(1 - betaStartup, scalar(0)), scalar(1));
         UrefEff_ = Uref_ + w*max(Ufield0_ - Uref_, scalar(0));
-        prefEff_ = 0.5*sqr(UrefEff_);
+        prefEff_ = scalar(0.5*sqr(UrefEff_));
         UstepEff_ = max(Ustep_, UrefEff_);
-        pstepEff_ = max(pstepEff_, 0.5*sqr(UstepEff_));
+        pstepEff_ = max(pstepEff_, scalar(0.5*sqr(UstepEff_)));
     }
     else if (startupRef_ == "exclude" && Ufield0_ > Ustep_)
     {
         // Only a start whose initial field exceeds the step scale (the
         // singular potential-flow peaks) is affected; otherwise a no-op
         UstepEff_ = Ufield0_;
-        pstepEff_ = max(pstepEff_, 0.5*sqr(UstepEff_));
+        pstepEff_ = max(pstepEff_, scalar(0.5*sqr(UstepEff_)));
         excludeDynamic_ = true;
     }
 }

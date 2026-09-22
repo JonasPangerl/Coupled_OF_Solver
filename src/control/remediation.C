@@ -40,9 +40,9 @@ Foam::remediation::remediation
     nQuietIters_(coupledDefaults::nQuietIters),
     stickyAfter_(coupledDefaults::dynamicStickyAfter),
     releaseIters_(coupledDefaults::dynamicReleaseIters),
-    dynamicCflFactor_(coupledDefaults::dynamicCflFactor),
+    dynamicCflFactor_(scalar(coupledDefaults::dynamicCflFactor)),
     clipToNeighbourMean_(coupledDefaults::clipToNeighbourMean),
-    warnFraction_(coupledDefaults::warnFraction),
+    warnFraction_(scalar(coupledDefaults::warnFraction)),
     warnInterval_(coupledDefaults::warnInterval),
     isStatic_(mesh.nCells(), false),
     age_(mesh.nCells(), -1),
@@ -283,7 +283,7 @@ void Foam::remediation::buildZonal(const dictionary& zonalDict)
 
     const label nTotal = returnReduce(mesh_.nCells(), sumOp<label>());
     // GUARD: nTotal >= 1
-    const scalar percentPerCell = 100.0/max(scalar(nTotal), scalar(1));
+    const scalar percentPerCell = scalar(100.0/max(scalar(nTotal), scalar(1)));
 
     const List<dictionary> zoneDicts
     (
@@ -485,7 +485,7 @@ void Foam::remediation::applyDeferredZonal()
 
     const label nTotal = returnReduce(mesh_.nCells(), sumOp<label>());
     // GUARD: nTotal >= 1
-    const scalar percentPerCell = 100.0/max(scalar(nTotal), scalar(1));
+    const scalar percentPerCell = scalar(100.0/max(scalar(nTotal), scalar(1)));
 
     for (const zonalSets::deferredEntry& e : zonalDeferred_)
     {
@@ -554,7 +554,8 @@ void Foam::remediation::buildStatic()
 
     const scalar cosThreshold = std::cos(degToRad(nonOrthThreshold_));
     // volRatio is min/max <= 1; GUARD: threshold > 0
-    const scalar volRatioMin = 1.0/max(volRatioThreshold_, cfVSmall<scalar>());
+    const scalar volRatioMin =
+        scalar(1.0/max(volRatioThreshold_, cfVSmall<scalar>()));
 
     const labelUList& own = mesh_.faceOwner();
     const labelUList& nei = mesh_.faceNeighbour();
@@ -861,7 +862,7 @@ Foam::label Foam::remediation::clipIncrement
     const vectorField& Ui = U.primitiveField();
     const scalar lim = cSpike_*Uref;
     // GUARD: omega > 0 (>= omegaMin)
-    const scalar rOmega = 1.0/max(omega, cfVSmall<scalar>());
+    const scalar rOmega = scalar(1.0/max(omega, cfVSmall<scalar>()));
 
     label nClipped = 0;
 

@@ -766,15 +766,15 @@ Foam::tmp<Foam::scalarField> Foam::blockGAMG::matrixFaceWeights() const
     {
         if (aggWeights_ == "momentum")
         {
-            w[facei] = strength(facei, uu);
+            w[facei] = scalar(strength(facei, uu));
         }
         else if (aggWeights_ == "pressure")
         {
-            w[facei] = strength(facei, pp);
+            w[facei] = scalar(strength(facei, pp));
         }
         else
         {
-            w[facei] = normalised(facei, uu) + normalised(facei, pp);
+            w[facei] = scalar(normalised(facei, uu) + normalised(facei, pp));
         }
     }
     return tw;

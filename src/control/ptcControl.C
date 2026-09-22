@@ -165,9 +165,11 @@ Foam::tmp<Foam::scalarField> Foam::ptcControl::rDeltaTV
     forAll(r, celli)
     {
         // GUARD: pow argument V > 0; denominator >= cfVSmall (5.4)
-        const scalar lambda =
+        const scalar lambda = scalar
+        (
             0.5*sumPhi[celli]
-          + nu[celli]*std::cbrt(max(V[celli], cfVSmall<scalar>()));
+          + nu[celli]*std::cbrt(max(V[celli], cfVSmall<scalar>()))
+        );
         const scalar cfl = max(scalar(CFL_*cflFactor[celli]), cfVSmall<scalar>());
         r[celli] = max(lambda, cfVSmall<scalar>())/cfl;
     }

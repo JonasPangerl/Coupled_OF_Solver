@@ -112,19 +112,19 @@ inline void fillBlockMatrix
 inline doubleScalar xExact(const label k, const point& C, const scalar L)
 {
     // Wave numbers and phases per component (fixed test data)
-    static const scalar omega[4][3] =
+    static const doubleScalar omega[4][3] =
     {
         {1.0, 2.0, 0.5},
         {2.5, 0.7, 1.3},
         {0.3, 1.9, 2.2},
         {1.7, 1.1, 0.9}
     };
-    static const scalar phi[4] = {0.1, 0.7, 1.3, 2.1};
+    static const doubleScalar phi[4] = {0.1, 0.7, 1.3, 2.1};
 
-    const scalar a =
+    const doubleScalar a =
         (omega[k][0]*C.x() + omega[k][1]*C.y() + omega[k][2]*C.z())/L
       + phi[k];
-    return std::sin(doubleScalar(a));
+    return std::sin(a);
 }
 
 

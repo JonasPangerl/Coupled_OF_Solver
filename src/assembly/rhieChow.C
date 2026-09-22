@@ -278,11 +278,12 @@ void Foam::rhieChow::updateD
             ++nPinv;
         }
         const reduceScalar v = V[celli];
+        // Computed in double, stored as scalar (D2.2 f)
         DTi[celli] = tensor
         (
-            v*Ai[0], v*Ai[1], v*Ai[2],
-            v*Ai[3], v*Ai[4], v*Ai[5],
-            v*Ai[6], v*Ai[7], v*Ai[8]
+            scalar(v*Ai[0]), scalar(v*Ai[1]), scalar(v*Ai[2]),
+            scalar(v*Ai[3]), scalar(v*Ai[4]), scalar(v*Ai[5]),
+            scalar(v*Ai[6]), scalar(v*Ai[7]), scalar(v*Ai[8])
         );
     }
     nPinvLast_ = returnReduce(nPinv, sumOp<label>());

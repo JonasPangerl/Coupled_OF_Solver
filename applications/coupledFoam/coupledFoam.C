@@ -189,8 +189,8 @@ int main(int argc, char *argv[])
             "linFailPolicy",
             word(coupledDefaults::linFailPolicy)
         );
-    const scalar linAcceptReduction =
-        coupledDict.subOrEmptyDict("ptc").getOrDefault<scalar>
+    const doubleScalar linAcceptReduction =
+        coupledDict.subOrEmptyDict("ptc").getOrDefault<doubleScalar>
         (
             "linAcceptReduction",
             coupledDefaults::linAcceptReduction
@@ -695,7 +695,7 @@ int main(int argc, char *argv[])
                     {
                         // GUARD: mu > Umax > 0
                         Ui[celli] *= Umax/mu;
-                        pi[celli] += 0.5*(sqr(mu) - sqr(Umax));
+                        pi[celli] += scalar(0.5*(sqr(mu) - sqr(Umax)));
                         ++nClip;
                     }
                 }
