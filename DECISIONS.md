@@ -1960,3 +1960,20 @@ configuration, not the best of A/B). make_report._speed_record passes the
 same flags for T4a/T4b/T5. run_solver now records the machine state
 before every run (machineBefore) and nativePotentialStart, so a
 reference computed from now on has known timing conditions.
+
+### 6. T3 test requires convergence and compares window means (review M6)
+
+tests/test_T3_airFoil.py compared the LAST Cd/Cl samples, without any
+convergence requirement: a limit cycle passed whenever its last sample fell
+within the tolerance. Now both solvers must be converged - coupledFoam: the
+12.3(ii) window (100 iterations, 0.2 % on Cd and Cl) at the end of the run
+or the solver's own stop (summary converged); simpleFoam: its
+residualControl stop or the 12.3(ii) window at the end of its run - and
+the compared coefficients are the final 100-iteration window means.
+Tolerance unchanged (5 %, D-058). The record carries itersToConv (first
+12.3(ii) window, or the solver's stop) of both solvers, converged,
+finalWindowOk, the last samples and the window ranges. Evidence on main's
+old runs (before D-058, read-only): ref_T3_kOmegaSST and ref_T3_GEKO are
+converged (final window range 0.01 % / 0.03 % of Cd); the old coupledFoam
+runs T3_kOmegaSST_np1 (Cd range 300 % of the mean) and T3_GEKO_np1 (10 %)
+would now fail on convergence.

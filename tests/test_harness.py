@@ -342,3 +342,43 @@ def test_reference_timing_flags(tmp_path):
     f = run_bench.reference_timing_flags(tmp_path, {"machineBefore": {"loadavg": 1}})
     assert not f["referenceNoPotentialStart"]
     assert not f["referenceTimingConditionsUnknown"]
+
+
+# --------------------------------------------------------------------------- #
+# M6: T3 requires convergence and compares window means
+# --------------------------------------------------------------------------- #
+
+def _force_case(tmp_path, cd, cl):
+    d = tmp_path / "postProcessing" / "forceCoeffs" / "0"
+    d.mkdir(parents=True)
+    rows = ["# Time Cd Cl"] + [f"{i + 1} {a!r} {b!r}"
+                                for i, (a, b) in enumerate(zip(cd, cl))]
+    (d / "coefficient.dat").write_text("\n".join(rows) + "\n")
+    return tmp_path
+
+
+def test_t3_limit_cycle_does_not_pass_on_last_sample(tmp_path):
+    import test_T3_airFoil as t3  # noqa: PLC0415
+    n = 600
+    # limit cycle around 0.12 +- 0.1; the last sample is exactly 0.10
+    cd = [0.12 + 0.1 * math.sin(2 * math.pi * i / 40) for i in range(n - 1)]
+    cd.append(0.10)
+    cl = [0.5] * n
+    r = t3.converged_coeffs(_force_case(tmp_path, cd, cl), solver_stop=False)
+    assert r["converged"] is False and r["itersToConv"] is None
+    assert r["CdLast"] == 0.10 and abs(r["Cd"] - 0.10) > 1e-3
+
+
+def test_t3_converged_run(tmp_path):
+    import test_T3_airFoil as t3  # noqa: PLC0415
+    n = 500
+    cd = [0.09 + 0.05 * math.exp(-i / 30) for i in range(n)]
+    cl = [0.25 - 0.1 * math.exp(-i / 30) for i in range(n)]
+    r = t3.converged_coeffs(_force_case(tmp_path, cd, cl), solver_stop=False)
+    assert r["converged"] and r["finalWindowOk"]
+    assert r["itersToConv"] == run_bench.iters_to_conv({"Cd": cd, "Cl": cl})
+    assert r["Cd"] == pytest.approx(sum(cd[-100:]) / 100)
+    # the solver's own stop counts as converged even without the window
+    r2 = t3.converged_coeffs(_force_case(tmp_path / "s", cd[:120], cl[:120]),
+                             solver_stop=True)
+    assert r2["converged"] and r2["itersToConv"] == 120
