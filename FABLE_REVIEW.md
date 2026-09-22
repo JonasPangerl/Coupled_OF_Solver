@@ -287,3 +287,17 @@ TASK 5 (branch task5-diagnostics, commits 28fc54b eaedf50 4085f4d)
 waits for a quiet window: `/home/jonas/bin/cfenv sys bash
 bench/task5_acceptance.sh` (np4 checks + wall-clock overhead gates),
 then merge.
+
+### 4d. T3-SST: the reference is steady, only coupledFoam oscillates (2026-09-22 ~12:10)
+
+Read-only D-042 evaluation (window W = n/2): simpleFoam SST reference
+(run/ref_T3_kOmegaSST, 20000 its) is perfectly steady - Cd 0.0907,
+Cl 0.2527, std ~0 - i.e. strongly separated (Cl vs GEKO 0.84) but NOT
+oscillating. coupledFoam SST oscillates massively: task3_T3sst (3000
+its) Cd 0.125 +- 0.113, Cl 0.344 +- 0.678; probes a/b/c similar. So the
+T3-SST oscillation is a coupledFoam limit cycle, not physics; a
+window-mean criterion would hide it (and still fails: Cd 0.125 vs
+0.091). A mean criterion for T3-SST was briefly applied on a wrong
+premise and reverted before commit. Next steps as in 4c (freestream
+BC switching, k bounding every iteration, level-3 diagnostics patch
+switch counter now available on main).
