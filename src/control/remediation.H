@@ -31,6 +31,13 @@ Description
     consecutive iterations without being re-marked. A cell that entered the
     set stickyAfter times (0 = never, D-049) stays in it for the rest of
     the run; the per-cell entry counters are part of the restart state.
+    Release ramp (dynamic.releaseIters N > 0, D-049): a released cell is
+    out of the set (no clipping, not counted in nDyn) but for N further
+    iterations, with j = N, N-1, ..., 1 iterations of the ramp left, its
+    beta is scaled by 1 - j/(N+1) and its CFL factor is
+    cflFactor^(j/(N+1)). A cell
+    re-marked during the ramp re-enters the set. 0 = the instant release
+    of 8.2 (bit-identical).
 
     Zonal factors (8.3, amendment B6), built once at construction:
     \verbatim
@@ -96,6 +103,7 @@ class remediation
         label nLayers_;
         label nQuietIters_;
         label stickyAfter_;
+        label releaseIters_;
         scalar dynamicCflFactor_;
         bool clipToNeighbourMean_;
         scalar warnFraction_;
@@ -116,6 +124,12 @@ class remediation
 
             //- Global number of sticky cells in the set
             label nSticky_;
+
+            //- Release ramp iterations left per cell (0: none)
+            labelList rampLeft_;
+
+            //- Global number of cells in a release ramp
+            label nRamping_;
 
             //- Cells marked externally since the last update
             //  (line search, sentinel)
@@ -226,6 +240,7 @@ public:
         label nStatic() const noexcept { return nStatic_; }
         label nDynamic() const noexcept { return nDynamic_; }
         label nSticky() const noexcept { return nSticky_; }
+        label nRamping() const noexcept { return nRamping_; }
 
         //- Dynamic age per cell (-1: not in the set) and entry counts
         const labelList& age() const noexcept { return age_; }

@@ -27,11 +27,12 @@ Description
 
     Local limiter with memory (coupled.localLimit.memory, D-049): a per-cell
     factor f_P in (0, 1] multiplies dt_P before the check. When the cell is
-    limited, f_P is reduced to the factor the check needs (and, if the check
-    still fails at a smaller global CFL of a line-search retrial, reduced
-    again). When it is not limited, f_P recovers at the start of the next
-    outer iteration by the factor localRecovery per iteration, after a hold of
-    localHold iterations since the last limit event. A cell that was limited
+    limited, f_P is reduced to the factor the check needs. Every line-search
+    retrial starts from the factor of the start of the outer iteration and
+    the last trial's factor is kept; one outer iteration counts at most one
+    limit event per cell. When it is not limited, f_P recovers at the start
+    of the next outer iteration by the factor localRecovery per iteration,
+    after a hold of localHold iterations since the last limit event. A cell that was limited
     in localStickyAfter iterations (0 = never) keeps its factor for the rest
     of the run: it is never released. memory no is the memoryless limiter of
     7.3 (bit-identical to the implementation before D-049).
@@ -121,6 +122,13 @@ private:
 
             //- Per-cell dt factor f_P in (0, 1] (empty without memory)
             scalarField localFactor_;
+
+            //- f_P at the start of the outer iteration (base of every
+            //  line-search trial)
+            scalarField localFactor0_;
+
+            //- Cell limited in a trial of the current outer iteration
+            boolList localLimitedNow_;
 
             //- Per-cell iterations left before the factor may recover
             labelList localHoldRemaining_;

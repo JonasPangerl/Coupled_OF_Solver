@@ -41,6 +41,8 @@ Foam::ptcControl::ptcControl
     nLocalThrottled_(0),
     nLocalSticky_(0),
     localFactor_(),
+    localFactor0_(),
+    localLimitedNow_(),
     localHoldRemaining_(),
     localCount_()
 {
@@ -110,6 +112,8 @@ Foam::ptcControl::ptcControl
     if (localLimit_ && localMemory_)
     {
         localFactor_.resize(mesh_.nCells(), scalar(1));
+        localFactor0_.resize(mesh_.nCells(), scalar(1));
+        localLimitedNow_.resize(mesh_.nCells(), false);
         localHoldRemaining_.resize(mesh_.nCells(), 0);
         localCount_.resize(mesh_.nCells(), 0);
     }
@@ -196,6 +200,10 @@ void Foam::ptcControl::beginIteration()
                 min(scalar(1), localFactor_[celli]*localRecovery_);
         }
     }
+
+    // Base factors of this iteration's trials; no limit event yet
+    localFactor0_ = localFactor_;
+    localLimitedNow_ = false;
 }
 
 
@@ -260,11 +268,16 @@ Foam::label Foam::ptcControl::applyLocalLimit
         return nLocalLimited_;
     }
 
-    // Limiter with memory (D-049): dt_P <- f_P dt_P first, then the check
+    // Limiter with memory (D-049): dt_P <- f_P dt_P first, then the check.
+    // f_P is the factor at the start of the iteration, so a line-search
+    // retrial (smaller global CFL) does not compound the cut of an earlier
+    // trial; the last trial's factor is the one kept. A cell counts one
+    // limit event per outer iteration, however many trials limit it.
     forAll(rDeltaTV, celli)
     {
         // GUARD: f_P in (0, 1] by construction
-        const scalar f = max(localFactor_[celli], VSMALL);
+        const scalar f = max(localFactor0_[celli], VSMALL);
+        localFactor_[celli] = f;
         rDeltaTV[celli] /= f;
 
         const scalar aP = (localImplicit_ ? aMom[celli] : 0);
@@ -283,7 +296,11 @@ Foam::label Foam::ptcControl::applyLocalLimit
             const scalar cut = rDT0/max(rDeltaTV[celli], VSMALL);
             localFactor_[celli] = f*cut;
             localHoldRemaining_[celli] = localHold_;
-            ++localCount_[celli];
+            if (!localLimitedNow_[celli])
+            {
+                localLimitedNow_[celli] = true;
+                ++localCount_[celli];
+            }
             ++nLocalLimited_;
         }
         if (localFactor_[celli] < 1)

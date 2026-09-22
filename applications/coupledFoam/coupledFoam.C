@@ -1171,6 +1171,7 @@ int main(int argc, char *argv[])
             j.add("nStat", rem.nStatic());
             j.add("nDyn", rem.nDynamic());
             j.add("nDynSticky", rem.nSticky());
+            j.add("nDynRamping", rem.nRamping());
             j.add("version", rem.dynamicVersion());
             j.endObject();
             j.beginObject("anderson");

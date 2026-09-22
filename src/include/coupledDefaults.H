@@ -173,6 +173,10 @@ constexpr label nQuietIters = 20;
 // A cell that entered the dynamic set stickyAfter times stays in it for the
 // rest of the run (D-049); 0 = never (the hysteresis of 8.2 only)
 constexpr label dynamicStickyAfter = 3;
+// Release ramp (D-049): a released cell returns to the global beta and to
+// CFL factor 1 over releaseIters iterations (beta linear, CFL factor
+// geometric from dynamic.cflFactor); 0 = instant release of 8.2
+constexpr label dynamicReleaseIters = 0;
 constexpr doubleScalar dynamicCflFactor = 0.1;
 constexpr bool clipToNeighbourMean = true;
 constexpr doubleScalar warnFraction = 0.01;      // D-008

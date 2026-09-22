@@ -37,6 +37,7 @@ Foam::remediation::remediation
     nLayers_(coupledDefaults::nLayers),
     nQuietIters_(coupledDefaults::nQuietIters),
     stickyAfter_(coupledDefaults::dynamicStickyAfter),
+    releaseIters_(coupledDefaults::dynamicReleaseIters),
     dynamicCflFactor_(coupledDefaults::dynamicCflFactor),
     clipToNeighbourMean_(coupledDefaults::clipToNeighbourMean),
     warnFraction_(coupledDefaults::warnFraction),
@@ -45,6 +46,8 @@ Foam::remediation::remediation
     age_(mesh.nCells(), -1),
     entries_(mesh.nCells(), 0),
     nSticky_(0),
+    rampLeft_(mesh.nCells(), 0),
+    nRamping_(0),
     pending_(mesh.nCells(), false),
     nStatic_(0),
     nDynamic_(0),
@@ -80,6 +83,13 @@ Foam::remediation::remediation
     {
         FatalIOErrorInFunction(d)
             << "dynamic.stickyAfter must be >= 0, got " << stickyAfter_
+            << exit(FatalIOError);
+    }
+    releaseIters_ = d.getOrDefault<label>("releaseIters", releaseIters_);
+    if (releaseIters_ < 0)
+    {
+        FatalIOErrorInFunction(d)
+            << "dynamic.releaseIters must be >= 0, got " << releaseIters_
             << exit(FatalIOError);
     }
     dynamicCflFactor_ = d.getOrDefault<scalar>("cflFactor", dynamicCflFactor_);
@@ -564,7 +574,9 @@ void Foam::remediation::updateDynamic
     {
         pending_ = false;
         age_ = -1;
+        rampLeft_ = 0;
         nDynamic_ = 0;
+        nRamping_ = 0;
         return;
     }
 
@@ -611,10 +623,18 @@ void Foam::remediation::updateDynamic
     // Hysteresis; sticky cells (stickyAfter_ entries) are never released
     nDynamic_ = 0;
     nSticky_ = 0;
+    nRamping_ = 0;
     bool changed = false;
     forAll(age_, celli)
     {
         const bool wasIn = (age_[celli] >= 0);
+        // A running release ramp advances by one iteration (its beta and
+        // dt change: a new operator, as for a membership change)
+        if (rampLeft_[celli] > 0)
+        {
+            --rampLeft_[celli];
+            changed = true;
+        }
         if (mark[celli])
         {
             if (!wasIn)
@@ -622,6 +642,7 @@ void Foam::remediation::updateDynamic
                 ++entries_[celli];
             }
             age_[celli] = 0;
+            rampLeft_[celli] = 0;
         }
         const bool sticky =
             (stickyAfter_ > 0 && entries_[celli] >= stickyAfter_);
@@ -631,12 +652,14 @@ void Foam::remediation::updateDynamic
             if (age_[celli] >= nQuietIters_ && !sticky)
             {
                 age_[celli] = -1;
+                rampLeft_[celli] = releaseIters_;
             }
         }
         const bool isIn = (age_[celli] >= 0);
         changed = changed || (isIn != wasIn);
         nDynamic_ += isIn;
         nSticky_ += (isIn && sticky);
+        nRamping_ += (rampLeft_[celli] > 0);
     }
 
     pending_ = false;
@@ -656,6 +679,7 @@ void Foam::remediation::updateDynamic
 
     reduce(nDynamic_, sumOp<label>());
     reduce(nSticky_, sumOp<label>());
+    reduce(nRamping_, sumOp<label>());
     reduce(nUnion, sumOp<label>());
 
     const label nTotal = returnReduce(mesh_.nCells(), sumOp<label>());
@@ -692,6 +716,12 @@ Foam::tmp<Foam::scalarField> Foam::remediation::beta
         {
             b[celli] = 0;
         }
+        else if (rampLeft_[celli] > 0)
+        {
+            // Release ramp: 1 - j/(N+1), j = iterations left
+            b[celli] *=
+                1 - scalar(rampLeft_[celli])/scalar(releaseIters_ + 1);
+        }
     }
 
     if (zonalEnabled_)
@@ -717,6 +747,19 @@ Foam::tmp<Foam::scalarField> Foam::remediation::cflFactor() const
         if (age_[celli] >= 0)
         {
             f[celli] = min(f[celli], dynamicCflFactor_);
+        }
+        else if (rampLeft_[celli] > 0)
+        {
+            // Release ramp: cflFactor^(j/(N+1)) (GUARD: cflFactor > 0)
+            f[celli] = min
+            (
+                f[celli],
+                std::pow
+                (
+                    max(dynamicCflFactor_, VSMALL),
+                    scalar(rampLeft_[celli])/scalar(releaseIters_ + 1)
+                )
+            );
         }
     }
 
@@ -874,6 +917,19 @@ void Foam::remediation::writeState(dictionary& dict) const
     }
     dict.set("dynamicEntryCells", labelList(entryCells));
     dict.set("dynamicEntryCount", labelList(entryCounts));
+
+    // Release ramps (sparse, local labels)
+    DynamicList<label> rampCells, rampLeft;
+    forAll(rampLeft_, celli)
+    {
+        if (rampLeft_[celli] > 0)
+        {
+            rampCells.append(celli);
+            rampLeft.append(rampLeft_[celli]);
+        }
+    }
+    dict.set("dynamicRampCells", labelList(rampCells));
+    dict.set("dynamicRampLeft", labelList(rampLeft));
 }
 
 
@@ -941,6 +997,40 @@ void Foam::remediation::readState(const dictionary& dict)
         );
     }
     nSticky_ = returnReduce(nSticky, sumOp<label>());
+
+    rampLeft_ = 0;
+    const labelList rampCells
+    (
+        dict.getOrDefault<labelList>("dynamicRampCells", labelList())
+    );
+    const labelList rampLeft
+    (
+        dict.getOrDefault<labelList>("dynamicRampLeft", labelList())
+    );
+    if (rampCells.size() != rampLeft.size())
+    {
+        FatalIOErrorInFunction(dict)
+            << "dynamicRampCells and dynamicRampLeft differ in size"
+            << exit(FatalIOError);
+    }
+    forAll(rampCells, i)
+    {
+        if (rampCells[i] < 0 || rampCells[i] >= mesh_.nCells())
+        {
+            FatalIOErrorInFunction(dict)
+                << "dynamicRampCells cell " << rampCells[i]
+                << " out of range (restart with a different decomposition?)"
+                << exit(FatalIOError);
+        }
+        // A ramp longer than the current releaseIters is shortened
+        rampLeft_[rampCells[i]] = min(rampLeft[i], releaseIters_);
+    }
+    label nRamp = 0;
+    forAll(rampLeft_, celli)
+    {
+        nRamp += (rampLeft_[celli] > 0);
+    }
+    nRamping_ = returnReduce(nRamp, sumOp<label>());
 }
 
 
@@ -963,6 +1053,7 @@ void Foam::remediation::writeSettings(dictionary& dict) const
     d.add("nLayers", nLayers_);
     d.add("nQuietIters", nQuietIters_);
     d.add("stickyAfter", stickyAfter_);
+    d.add("releaseIters", releaseIters_);
     d.add("cflFactor", dynamicCflFactor_);
     d.add("clipToNeighbourMean", clipToNeighbourMean_);
 
