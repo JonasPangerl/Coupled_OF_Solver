@@ -118,6 +118,7 @@ coupled
     {
         enabled         yes;
         fLoc            0.5;
+        implicit        yes;    // Jacobi estimate; with SFD both T3 models converge (D-055)
     }
 
     remediation
@@ -145,6 +146,8 @@ coupled
             cSpike              0.5;
             nLayers             1;
             nQuietIters         20;
+            stickyAfter         0;      // N > 0: never released after the N-th entry (opt-in, D-055)
+            releaseIters        0;      // 0 = instant release; N = ramp over N iterations (D-055)
             cflFactor           0.1;
             clipToNeighbourMean yes;
         }
@@ -175,6 +178,18 @@ coupled
         enabled         no;     // amendment B5
         m               4;
         beta            1.0;
+    }
+
+    sfd                         // amendment C3, D-052
+    {
+        enabled         yes;    // T3 limit cycle / bursts (D-052, D-055)
+        chi             0.5;    // chi* = chi Uref/Lref
+        Delta           1.0;    // Delta* = Delta Lref/Uref
+        Lref            1.0;
+        deactivateBelowR 0;     // never off (spec 1e-4 switches off during the start-up on T3, D-052)
+        resetOnFlush    yes;    // Ubar = U with every Anderson flush
+        afterStartup    yes;    // activate after the start-up phase (D-052)
+        startIter       0;      // earliest activation iteration (0: no delay)
     }
 
     ftz             yes;

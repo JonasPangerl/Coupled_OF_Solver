@@ -59,6 +59,8 @@ Foam::coupledAssembler::coupledAssembler
     ),
     rc_(mesh, coupledDict),
     mrfPtr_(mrfPtr),
+    sfdChi_(0),
+    sfdUbarPtr_(nullptr),
     clampValue_
     (
         coupledDict.subOrEmptyDict("guards").getOrDefault<doubleScalar>
@@ -77,6 +79,7 @@ Foam::coupledAssembler::coupledAssembler
     Ax_(blockDim*mesh.nCells(), Zero),
     b_(blockDim*mesh.nCells(), Zero),
     rMom_(mesh.nCells(), Zero),
+    aMom_(mesh.nCells(), Zero),
     abar_(mesh.nCells(), Zero),
     UPtr_(nullptr),
     pPtr_(nullptr),
@@ -279,6 +282,21 @@ void Foam::coupledAssembler::assembleMomentum
         }
     }
 
+    // --- SFD forcing -chi*(U - Ubar) (7.6), before PTC
+    if (sfdChi_ > 0 && sfdUbarPtr_)
+    {
+        const vectorField& Ub = *sfdUbarPtr_;
+        forAll(V, celli)
+        {
+            const doubleScalar cv = doubleScalar(sfdChi_)*V[celli];
+            for (label c = 0; c < blockP; ++c)
+            {
+                Dd_[di(celli, c, c)] += cv;
+                b_[celli*blockDim + c] += cv*Ub[celli][c];
+            }
+        }
+    }
+
     // --- Internal faces: momentum coupling and pressure gradient
     const scalarField& upperU = UEqn.upper();
     const scalarField& lowerU = UEqn.lower();
@@ -425,6 +443,7 @@ void Foam::coupledAssembler::assembleMomentum
         const doubleScalar x[blockDim] =
             {Ui[celli][0], Ui[celli][1], Ui[celli][2], pi[celli]};
 
+        doubleScalar d = 0;
         for (label r = 0; r < blockP; ++r)
         {
             doubleScalar s = 0;
@@ -434,7 +453,9 @@ void Foam::coupledAssembler::assembleMomentum
             }
             Ax_[celli*blockDim + r] += s;
             rMom_[celli][r] = b_[celli*blockDim + r] - Ax_[celli*blockDim + r];
+            d += Dd_[di(celli, r, r)];
         }
+        aMom_[celli] = scalar(d/blockP);
     }
 
     if (timing_)
@@ -482,7 +503,11 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
             Dd_[di(celli, c, c)] += rDeltaTV[celli];
             s += Dd_[di(celli, c, c)];
         }
-        abar_[celli] = s/blockP;
+        // The SFD term is not part of abar: the Rhie-Chow D = V/abar of a
+        // converged state must not depend on chi (D-052)
+        abar_[celli] =
+            s/blockP
+          - (sfdUbarPtr_ ? doubleScalar(sfdChi_)*mesh_.V()[celli] : 0);
     }
 
     // --- Rhie-Chow D, D_f, explicit face term q
@@ -491,6 +516,7 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
     {
         // C2: 3x3 momentum diagonal block after PTC (incl. MRF Coriolis,
         // excl. the pressure column), double
+        // (C3: without the SFD term, D-052)
         tensorField Amom(nCells);
         for (label celli = 0; celli < nCells; ++celli)
         {
@@ -500,6 +526,15 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
                 for (label c = 0; c < blockP; ++c)
                 {
                     a[r*blockP + c] = Dd_[di(celli, r, c)];
+                }
+            }
+            if (sfdUbarPtr_)
+            {
+                const doubleScalar cv =
+                    doubleScalar(sfdChi_)*mesh_.V()[celli];
+                for (label r = 0; r < blockP; ++r)
+                {
+                    a[r*blockP + r] -= cv;
                 }
             }
         }

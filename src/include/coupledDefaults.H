@@ -230,6 +230,37 @@ constexpr doubleScalar lineSearchBeta = 1.0;
 // Local limit (spec 7.3)
 constexpr bool localLimitEnabled = true;
 constexpr doubleScalar fLoc = 0.5;
+// Local limiter memory (D-055): per-cell dt factor kept between iterations.
+// memory no = the memoryless limiter of 7.3 (bit-identical). localRecovery
+// is the per-iteration release factor of a throttled cell (the global PTC
+// growth betaMax), localHold the iterations without release after a limit
+// event, localStickyAfter the number of limit events after which a cell is
+// never released (0 = never sticky).
+constexpr bool localMemory = false;
+// Implicit (Jacobi) estimate |r_P|/(V_P/dt_P + a_P) of the local limiter
+// instead of the explicit |r_P| dt_P/V_P of 7.3 (D-055)
+constexpr bool localImplicit = false;
+constexpr doubleScalar localRecovery = 1.5;
+constexpr label localHold = 0;
+constexpr label localStickyAfter = 0;
+
+// Selective Frequency Damping (amendment C3, spec 7.6; D-052)
+constexpr bool sfdEnabled = false;
+constexpr doubleScalar sfdChi = 0.5;              // chi* = chi Uref/Lref
+constexpr doubleScalar sfdDelta = 1.0;            // Delta* = Delta Lref/Uref
+constexpr doubleScalar sfdLref = 1.0;
+// SFD-off after nHold iterations below (spec value; on T3 the normalised R
+// drops below 1e-4 during the start-up ramp and the limit cycle returns after
+// SFD-off: the case templates use 0 = never, D-052)
+constexpr doubleScalar sfdDeactivateBelowR = 0;   // never off (user, D-058; spec 1e-4 switched SFD off during the T3 start-up)
+// Ubar = U whenever the Anderson history is flushed (C3); no = keep the
+// filter state (variant)
+constexpr bool sfdResetOnFlush = true;
+// Activation after the start-up phase (D-052); no = from iteration 1
+constexpr bool sfdAfterStartup = true;
+// First iteration SFD may be activated (0 = no delay; branch-selection
+// studies, D-052)
+constexpr label sfdStartIter = 0;
 
 // Remediation, static (spec 8.1)
 constexpr bool staticEnabled = true;
@@ -248,6 +279,16 @@ constexpr doubleScalar cp = 15;   // = cU^2-1: Cp down to -15 (D-044)
 constexpr doubleScalar cSpike = 0.5;
 constexpr label nLayers = 1;
 constexpr label nQuietIters = 20;
+// A cell that entered the dynamic set stickyAfter times stays in it for the
+// rest of the run (D-055); 0 = never (the hysteresis of 8.2 only). Opt-in:
+// sticky cells stay first order at the leading edge of T3 (Cl +7 %
+// vs the clean state), T3-SST converges to the wrong (attached) branch and
+// nDyn == 0 at convergence (spec 13) can no longer hold
+constexpr label dynamicStickyAfter = 0;
+// Release ramp (D-055): a released cell returns to the global beta and to
+// CFL factor 1 over releaseIters iterations (beta linear, CFL factor
+// geometric from dynamic.cflFactor); 0 = instant release of 8.2
+constexpr label dynamicReleaseIters = 0;
 constexpr doubleScalar dynamicCflFactor = 0.1;
 constexpr bool clipToNeighbourMean = true;
 constexpr doubleScalar warnFraction = 0.01;      // D-008
@@ -328,6 +369,9 @@ constexpr const char* diagUpLeg = "first";
 constexpr label diagStallWindow = 50;            // "stalled": no new min R
 constexpr doubleScalar diagAsymptoticResidualFactor = 100;  // R <= 100*tol
 constexpr doubleScalar diagAsymptoticForceFactor = 10;      // window <= 10*tol
+// Level 3: number of locally CFL-limited cells (largest dU/(fLoc Uref))
+// whose centres are logged per iteration (D-055)
+constexpr label diagTopLimited = 20;
 
 // ---------------------------------------------------------------------------
 // Amendment C1/C5/C6 (SPEC_amendment_C.md, D-054)

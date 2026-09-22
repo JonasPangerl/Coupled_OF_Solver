@@ -106,6 +106,10 @@ private:
         //- Implicit MRF (may be null)
         const MRFCoupling* mrfPtr_;
 
+        //- SFD (7.6): chi* and the filtered velocity (null: off)
+        scalar sfdChi_;
+        const vectorField* sfdUbarPtr_;
+
         //- Clamp for the narrowing to blockScalar (9.2)
         const doubleScalar clampValue_;
 
@@ -128,6 +132,9 @@ private:
 
         //- Momentum residual per cell (rows 0-2, without PTC)
         vectorField rMom_;
+
+        //- Mean momentum diagonal per cell (rows 0-2, without PTC)
+        scalarField aMom_;
 
         //- Mean momentum diagonal (incl. PTC)
         scalarField abar_;
@@ -192,6 +199,15 @@ public:
             //- Static remediation cells (8.1): per-face limiter selection
             void setStaticCells(const boolList& isStatic);
 
+            //- SFD forcing (7.6) of the next assemblies: a_P += chi V_P,
+            //  b_P += chi V_P Ubar_P on the momentum rows; chi = 0 or
+            //  Ubar null switches it off
+            void setSFD(const scalar chi, const vectorField* Ubar)
+            {
+                sfdChi_ = chi;
+                sfdUbarPtr_ = Ubar;
+            }
+
 
         // Assembly
 
@@ -209,6 +225,13 @@ public:
             const vectorField& momentumResidual() const noexcept
             {
                 return rMom_;
+            }
+
+            //- Mean momentum diagonal per cell (rows 0-2, no PTC): the
+            //  implicit estimate of the local limiter (D-055)
+            const scalarField& momentumDiag() const noexcept
+            {
+                return aMom_;
             }
 
             //- Stage 2: PTC, D, continuity row, scaling, residual

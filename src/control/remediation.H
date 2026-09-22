@@ -28,7 +28,16 @@ Description
     CFL factor dynamic.cflFactor and optional increment clipping
     |U_P + dU_P - Ubar_N| <= cSpike Uref (the field itself is never
     overwritten). Hysteresis: a cell leaves the set after nQuietIters
-    consecutive iterations without being re-marked.
+    consecutive iterations without being re-marked. A cell that entered the
+    set stickyAfter times (0 = never, D-055) stays in it for the rest of
+    the run; the per-cell entry counters are part of the restart state.
+    Release ramp (dynamic.releaseIters N > 0, D-055): a released cell is
+    out of the set (no clipping, not counted in nDyn) but for N further
+    iterations, with j = N, N-1, ..., 1 iterations of the ramp left, its
+    beta is scaled by 1 - j/(N+1) and its CFL factor is
+    cflFactor^(j/(N+1)). A cell
+    re-marked during the ramp re-enters the set. 0 = the instant release
+    of 8.2 (bit-identical).
 
     Zonal factors (8.3, amendment B6), built once at construction:
     \verbatim
@@ -106,6 +115,8 @@ class remediation
         scalar cSpike_;
         label nLayers_;
         label nQuietIters_;
+        label stickyAfter_;
+        label releaseIters_;
         scalar dynamicCflFactor_;
         bool clipToNeighbourMean_;
         scalar warnFraction_;
@@ -119,6 +130,19 @@ class remediation
             //- Dynamic age per cell: -1 not in the set, else iterations
             //  since the cell was last marked
             labelList age_;
+
+            //- Dynamic entries per cell (transitions into the set); a cell
+            //  with stickyAfter_ or more entries is never released
+            labelList entries_;
+
+            //- Global number of sticky cells in the set
+            label nSticky_;
+
+            //- Release ramp iterations left per cell (0: none)
+            labelList rampLeft_;
+
+            //- Global number of cells in a release ramp
+            label nRamping_;
 
             //- Cells marked externally since the last update
             //  (line search, sentinel)
@@ -235,6 +259,12 @@ public:
         const boolList& isStatic() const noexcept { return isStatic_; }
         label nStatic() const noexcept { return nStatic_; }
         label nDynamic() const noexcept { return nDynamic_; }
+        label nSticky() const noexcept { return nSticky_; }
+        label nRamping() const noexcept { return nRamping_; }
+
+        //- Dynamic age per cell (-1: not in the set) and entry counts
+        const labelList& age() const noexcept { return age_; }
+        const labelList& entries() const noexcept { return entries_; }
         label dynamicVersion() const noexcept { return dynamicVersion_; }
         bool zonalEnabled() const noexcept { return zonalEnabled_; }
 

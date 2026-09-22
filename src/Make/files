@@ -33,6 +33,7 @@ control/convergenceMonitor.C
 control/adaptiveTolerance.C
 control/gamgAutoTune.C
 control/anderson.C
+control/sfdControl.C
 control/startupControl.C
 
 io/jsonWriter.C

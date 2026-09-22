@@ -1431,3 +1431,166 @@ assembled trial step) are written at every write time and into
 <iter>_lastValid on abort, as extrapolatedCalculated fields
 (diagnosticFields.enabled, default yes). USFD follows once SFD (C3) is
 merged.
+
+## D-052 - Selective Frequency Damping (amendment C3; proposed, osc-memory, 2026-09-22)
+
+Implemented as specified in C3 (`coupled.sfd`, src/control/sfdControl.{H,C}):
+chi* = chi Uref/Lref, Delta* = Delta Lref/Uref; filtered velocity USFD
+(implicit-Euler low pass with the local dt_P of the accepted assembly, after
+the local limit); momentum rows a_P += chi* V_P, b_P += chi* V_P Ubar_P
+before PTC; Ubar reset to U with every Anderson flush (incl. rollback);
+SFD-off after nHold (= ptc.nHold) accepted iterations with
+R < deactivateBelowR; restart state sfdOn/sfdQuiet/sfdInitialised + USFD;
+C6 hook diagnosticFields::setSFD while active; level-1 diagnostics
+controls.sfd {active, chiStar, resets, maxDev (rank-local)}.
+
+Choices the spec leaves open:
+- The SFD term is excluded from the Rhie-Chow D (scalar abar and the
+  tensorial A_P of D-053). Otherwise a state converged with SFD active
+  carries a chi-dependent pressure dissipation: with the tensorial path it
+  moved the converged T3-SST Cl by 2 % (-0.7 % vs -2.8 %).
+- Activation after the start-up phase (`afterStartup yes`, default).
+  Activated in iteration 1 the forcing towards the potentialFoam field cut
+  the T3 CFL to 1 and held R ~ 4 for ~500 iterations; T2 aborted via B4
+  (pre-merge build without the ILU0 guard).
+- `resetOnFlush` (default yes = spec) and `startIter` (earliest activation,
+  default 0) as variants for studies.
+
+Evidence (serial, merged build = main 05f7467 + osc, 3000 its max):
+- T3-SST: the only mechanism that removes the limit cycle. Converges in
+  628 its / 65 s (R 9.6e-7, nDyn 0): Cd 0.0910 (+0.4 %), Cl 0.2460
+  (-2.8 %) vs simpleFoam 0.0907 / 0.253. Cl amplitude over the last 200
+  iterations 0.005 (without SFD: 1.04, Cd 0.123 +- 0.114). At convergence
+  max|U - Ubar| = 1.1e-6 Uref: the forcing has vanished (unbiased).
+  "enabled no" does not converge, so the C3 1e-3 comparison is made
+  against the reference instead.
+- The spec deactivation (1e-4) is harmful on T3: the normalised R is
+  below 1e-4 already during the start-up ramp (SFD-off at iteration 39)
+  and the limit cycle returns (identical to no SFD). Pre-merge, with a later
+  SFD-off (iteration 775), R jumped from 9e-5 to 0.18 within 100 its.
+  The case templates therefore use deactivateBelowR 0 (never off); the
+  coupledDefaults value stays at the spec's 1e-4 (user decision).
+- T3-GEKO: T3 is multi-stable in coupledFoam. SFD from the end of the
+  start-up converges (487 its) to a stalled branch (Cd 0.079, Cl 0.21 vs
+  reference 0.0343 / 0.838). With startIter 300, or with the implicit local
+  limit (D-055), it converges to Cd 0.0363 (+6 %), Cl 0.788 (-6 %) in
+  482 its.
+- T0: not worse (Re100 64 vs 65 its, Re1000 79 vs 99). T1: first R < 1e-5
+  at 396 vs 387 (limit 400). T2: first R < 1e-5 at 454 vs 497 but late
+  bursts, final R 1.7e-4 vs 8.5e-6.
+
+Decision: default `enabled no` (T3-GEKO lands on the stalled branch, and
+the T2 end state is worse). The T3 template enables it together with the
+implicit local limit (D-055): both models converge with nDyn 0.
+Recommended keywords when enabling: deactivateBelowR 0, Lref 1. With
+Lref = chord (35 m, chi* 0.37 1/s) the damping was too weak on T3.
+
+## D-055 - T3 bursts: root cause, local-limit and dynamic-set memory (proposed, osc-memory, 2026-09-22)
+
+Root cause of the T3-GEKO bursts:
+- The explicit solution-limited local CFL of 7.3, dU_P = |r_P| dt_P/V_P,
+  overestimates the update of stiff cells by 1 + a_P dt_P/V_P. At CFL 500
+  it limits 20-2400 cells even in the nearly converged state. That makes
+  the pseudo-time diagonal a non-smooth function of the residual
+  (V_P/dt_P ~ |r_P|).
+- A burst starts as a mode growing about 1.25x per iteration from
+  R ~ 2e-4, at global CFL 500, omega 1, no cuts. nLocLim grows with it
+  (23 -> 1400), and the line search stops it at omega ~0.8.
+- Evidence (3000 its, iterations with R > 3e-3 after iteration 200):
+
+| variant | iterations R > 3e-3 |
+|---|---|
+| explicit limiter (baseline) | 761 |
+| localLimit off | 20 |
+| implicit estimate (limiter practically never fires) | 9 |
+| memory with permanent throttling | converges at 1193 |
+| fLoc 0.2 (more limiting) | 2300 |
+
+  - The implicit-estimate row counts 8 on the merged build.
+- Second mechanism: the dynamic set releases 3-7 leading-edge cells
+  (marked by cSpike) after nQuietIters. Each release switches beta 0 -> 1
+  and the CFL factor 0.1 -> 1 at once, which gives a sawtooth with period
+  about 24 and an R floor of about 2e-4.
+- Not involved:
+  - ILU0 pivot growth: the D-049 guard never fired.
+  - Uref: 25.905 is the boundary maximum as well, so the T3 trajectory is
+    bit-identical with and without the Uref change.
+  - Freestream flips: 0.
+  - k bounding: fires in every iteration, also in converged states.
+  - Eisenstat-Walker: eta = 0.5 throughout.
+  - Global CFL, line-search cuts and sentinel: CFL stays at 500, there
+    are 0 cuts and 0 rollbacks during bursts. Their release after a cut
+    is already gradual: a hold of nHold, then growth of at most betaMax
+    per iteration.
+- The T3-SST "limit cycle" is the iteration alternating between an
+  attached branch (Cd ~0.032, Cl ~0.9-1.0) and a stalled branch
+  (Cd ~0.09, Cl ~0.25; the simpleFoam SST reference sits on this one).
+  The Cl amplitude over 200 iterations is 1.0.
+
+Implemented (all default off, "off" = bit-identical old behaviour):
+- `localLimit.implicit` (no): Jacobi estimate
+  dU_P = |r_P|/(V_P/dt_P + a_P), with a_P the mean momentum diagonal
+  without PTC (coupledAssembler::momentumDiag).
+- `localLimit.memory` (no), `localRecovery` 1.5, `localHold` 0,
+  `localStickyAfter` 0: a per-cell dt factor f_P in (0, 1].
+  - When the cell is limited, f_P is cut to what the check needs. Every
+    line-search trial starts from the factor at the start of the
+    iteration; at most one limit event is counted per iteration.
+  - f_P recovers by x1.5 per iteration after the hold.
+  - After localStickyAfter events the factor is kept permanently.
+- `remediation.dynamic.stickyAfter` (0): a cell that enters the set for
+  the N-th time stays in it.
+- `remediation.dynamic.releaseIters` (0): release ramp. Over N iterations
+  beta goes linearly 0 -> 1 and the CFL factor geometrically
+  cflFactor -> 1.
+- Restart state: sparse lists localLimit*, dynamicEntry*, dynamicRamp*.
+  Diagnostics:
+  - level 1: nLocThrottled, nLocSticky, nDynSticky, nDynRamping;
+  - level 3: the top-20 locally limited cells and the dynamic-set members
+    with their positions.
+
+Evidence on the merged build (T0 Re100 / Re1000 iterations; T1 and T2:
+first iteration with R < 1e-5; T3-GEKO: iterations with R > 3e-3 after
+iteration 200):
+
+| mechanism | T0 | T1 | T2 | T3-GEKO | result |
+|---|---|---|---|---|---|
+| stickyAfter 3 | bit-identical | bit-identical | bit-identical | converges at 404 its: Cd -6.4 %, Cl +6.9 % | opt-in |
+| memory 1.5 | 66 / 63 | 394 | 561, final 3.7e-5 (worse) | 157 over (441) | opt-in |
+| release ramp 10 | bit-identical | 378 | 466, but late bursts (final 5.4e-3) | 125 over | opt-in |
+| implicit | 66 / 116 | 390 | 496 | 8 over | opt-in, T3 template yes |
+| baseline | 65 / 99 | 387 | 497 | 441 over, not converged | - |
+
+Notes on the table:
+- stickyAfter 3 keeps 3 first-order leading-edge cells, so nDyn == 0 at
+  convergence (spec 13) fails by construction. On T3-SST it converges to
+  the wrong (attached) branch: Cd -65 %, Cl +288 %.
+- Memory 1.5: T3-SST is unchanged.
+- Implicit: T3-SST still limit-cycles. T4/T5 have not been tested.
+
+Defaults: all opt-in. Fable's WIP default stickyAfter 3 is reverted to 0.
+The T3 template uses implicit yes together with SFD (D-052).
+
+## D-058 - SFD default never off; T3 template with SFD; T3 tolerance 5 % (user, 2026-09-22)
+
+The user took three decisions on the evidence of D-052/D-055 (branch
+osc-memory, merged):
+
+1. **SFD never switches off by default.** coupled.sfd.deactivateBelowR
+   defaults to 0 (coupledDefaults::sfdDeactivateBelowR). With the spec
+   value of 1e-4, SFD switched off at iteration 39 of T3-SST (R drops
+   below 1e-4 briefly during the start-up) and the limit cycle returned.
+   Keeping SFD on is harmless: the forcing -chi*(U - Ubar) vanishes at
+   convergence (|U - Ubar| = 1.1e-6 Uref measured), so the converged
+   solution is unbiased. SFD itself stays OFF by default and is enabled
+   per case.
+2. **The T3 template keeps the implicit local-limit estimate and SFD
+   enabled.** Both turbulence models then converge without dynamic-set
+   cells: SST in 628 iterations, Cd +0.4 % and Cl -2.8 % vs simpleFoam;
+   GEKO about +-6 %. This is how a user would set up such a case.
+   T3 has several steady branches in coupledFoam (attached and stalled),
+   and simpleFoam's heavy relaxation lands on a different branch, so the
+   remaining offsets reflect the near-stall physics of this case (D-055).
+3. **T3 Cd/Cl tolerance 2 % -> 5 %** (tests/test_T3_airFoil.py; history:
+   0.5 % spec -> 2 % D-046 -> 5 % D-058). User-approved relaxation, not an
+   agent loosening.
