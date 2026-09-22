@@ -49,6 +49,17 @@ Configurations (DECISIONS.md D-025, amendment B10):
                     often"). T2, T4b, T5
     T4a is in the scope of the heavy-case variants because every change is
     tried on T4a before T4b (user rule, 2026-09-22).
+    F1   simpleFoam in single precision (amendment D11): the settings of B
+         (SIMPLEC), SP build. Compared with B.
+    F2   coupledFoam in single precision: the settings of C, SP build.
+         Compared with C.
+         Scope T1, T3-SST, T4a (D-063: SP vs DP on a few cases only), one
+         repeat by default. F1/F2 run from a shell with the SP OpenFOAM
+         environment and the SP private install (they are refused in a DP
+         shell, and the DP configurations in an SP shell); the case is
+         prepared by tests/cflib/precision.py (mesh in DP, origin shift,
+         checkMesh gate; SP-geometry-fail -> recorded and skipped). Records
+         carry the D11 fields (bench/SCHEMA_precision.md).
 Configurations with a scope run only on the cases of their scope unless
 --no-scope is given.
 
@@ -101,7 +112,7 @@ sys.path.insert(0, str(REPO / "tests"))
 
 from cflib import case as cfcase          # noqa: E402
 from cflib import env as cfenv            # noqa: E402
-from cflib import logs, post, results     # noqa: E402
+from cflib import logs, post, precision, results   # noqa: E402
 
 WRAPPER = REPO / "bench" / "rank_wrapper.sh"
 
@@ -151,8 +162,17 @@ E_VARIANTS = {
                 "solvers.coupled.minIter": 2},
 }
 
-CONFIGS = ("A", "B", "C", "D", "E", "F", "G", "H") + tuple(E_VARIANTS)
-NATIVE_CONFIGS = frozenset({"A", "B"})
+CONFIGS = (("A", "B", "C", "D", "E", "F", "G", "H") + tuple(E_VARIANTS)
+           + ("F1", "F2"))
+NATIVE_CONFIGS = frozenset({"A", "B", "F1"})
+
+# Amendment D11: single-precision configurations and their DP counterpart
+# (same settings, DP build); Cd_rel_to_DP etc. are relative to it
+SP_BASE = {"F1": "B", "F2": "C"}
+SP_CONFIGS = frozenset(SP_BASE)
+# Repeats when --repeats is not given (D-063: SP on a few cases, 1 repeat)
+DEFAULT_REPEATS = 3
+CONFIG_REPEATS = {"F1": 1, "F2": 1}
 
 # B10 case scoping (default when E, F, G, H are requested)
 CONFIG_SCOPE = {
@@ -167,6 +187,9 @@ CONFIG_SCOPE = {
     "E-algPair": frozenset({"T4a", "T4b", "T5"}),
     "E-sfd": frozenset({"T3-SST", "T3-GEKO"}),
     "E-eta07": frozenset({"T2", "T4b", "T5"}),
+    # D11 single precision, scoped per D-063
+    "F1": frozenset({"T1", "T3-SST", "T4a"}),
+    "F2": frozenset({"T1", "T3-SST", "T4a"}),
 }
 
 # Per-case overrides of a configuration (foamDictionary sets).
@@ -254,8 +277,10 @@ def in_scope(name: str, cfg: str) -> bool:
 def config_sets(cfg: str, spec: dict, name: str | None = None
                 ) -> tuple[str, dict, dict]:
     """(solver, foamDictionary sets, files to write) of a configuration,
-    including the per-case overrides of CASE_OVERRIDES for case `name`."""
+    including the per-case overrides of CASE_OVERRIDES for case `name`.
+    F1/F2 (D11) have the settings of their DP counterpart SP_BASE."""
     solver = solver_of(cfg)
+    cfg = SP_BASE.get(cfg, cfg)
     n = spec["iters"][solver]
     sets = {"system/controlDict": {"endTime": n, "writeInterval": n}}
     files = {}
@@ -301,6 +326,10 @@ def config_hash(name: str, cfg: str) -> str:
          "monitor": spec["monitor"], "solver": solver,
          "sets": sets, "files": files,
          "window": WINDOW, "tol": TOL}
+    if cfg in SP_CONFIGS:
+        # only the SP configurations: the DP hashes stay unchanged
+        d["precision"] = "sp"
+        d["spHarness"] = {"tolSpVsDp": precision.TOL_SP_VS_DP}
     if spec.get("oscillatory"):
         # D-042 evaluation: only the wake cases' records become stale
         d["criterion"] = {"name": STAT_CRITERION, "wmin": STAT_WINDOW_MIN,
@@ -762,6 +791,73 @@ def _stale_move(tag: str) -> None:
     print(f"stale result {tag} moved to {dst}")
 
 
+# --------------------------------------------------------------------------- #
+# amendment D11: single-precision record fields (bench/SCHEMA_precision.md)
+# --------------------------------------------------------------------------- #
+
+# Quantities compared with the DP counterpart: value at convergence and at
+# the end of the fixed budget
+D11_METRICS = ("Cd", "Cl", "dp", "Cd_final", "Cl_final", "dp_final")
+
+
+def dp_counterpart(name: str, cfg: str) -> list[dict]:
+    """Current records of the DP configuration of an SP configuration
+    (F1 -> B, F2 -> C) on case `name`."""
+    base = SP_BASE.get(cfg)
+    if base is None:
+        return []
+    recs, _ = load_current([name], [base])
+    return [r for r in recs if not r.get("skipped")]
+
+
+def precision_fields(name: str, cfg: str, case: Path, rec: dict) -> dict:
+    """D11 fields of a benchmark record, in place. DP configurations get
+    precision "dp" and None for the SP-only fields."""
+    sp = cfg in SP_CONFIGS
+    rec["precision"] = precision.label() if sp else "dp"
+    rec["buildPrecision"] = precision.build_precision()
+    if not sp:
+        rec.update({"meshShift": None, "checkMeshDiff": None,
+                    "nCheckMeshDiff": None,
+                    "spGeometry": None, "staticSetSizeDP": None,
+                    "staticSetSizeDiff": None, "Cd_rel_to_DP": None})
+        return rec
+    info = precision.read_info(case)
+    rec["meshShift"] = info.get("shift")
+    rec["checkMeshDiff"] = info.get("checkMeshDiff")
+    rec["nCheckMeshDiff"] = (len(rec["checkMeshDiff"])
+                             if rec["checkMeshDiff"] is not None else None)
+    rec["spGeometry"] = info.get("status")
+    rec["spHarness"] = {k: info.get(k) for k in (
+        "bboxCentreDP", "shiftedEntries", "unclassifiedVectors", "reasons",
+        "wallSecondsDPMesh", "wallSecondsPrepare")}
+    dps = dp_counterpart(name, cfg)
+    rec["dpCounterpart"] = {"config": SP_BASE[cfg],
+                            "runs": [r.get("run") for r in dps]}
+    sizes = [r["staticSetSize"] for r in dps
+             if r.get("staticSetSize") is not None]
+    rec["staticSetSizeDP"] = sizes[0] if sizes else None
+    s = rec.get("staticSetSize")
+    rec["staticSetSizeDiff"] = (s - rec["staticSetSizeDP"]
+                                if None not in (s, rec["staticSetSizeDP"])
+                                else None)
+    for m in D11_METRICS:
+        v, ref = rec.get(m), _med(dps, m)
+        rec[f"{m}_rel_to_DP"] = ((v - ref) / abs(ref)
+                                 if v is not None and ref not in (None, 0)
+                                 else None)
+        rec[f"{m}_DP"] = ref
+    mon = ("dp",) if CASES[name]["monitor"] == "dp" else ("Cd", "Cl")
+    rels = [rec.get(f"{m}_rel_to_DP") for m in mon]
+    rec["spVsDpTol"] = precision.TOL_SP_VS_DP
+    rec["spVsDpPass"] = (None if None in rels else
+                         all(abs(r) <= precision.TOL_SP_VS_DP for r in rels))
+    for k, kk in (("wall_to_conv_s", "Wall"), ("cpu_to_conv_h", "Cpu")):
+        ref, v = _med(dps, k), rec.get(k)
+        rec[f"speedup{kk}_DP_over_SP"] = (ref / v if ref and v else None)
+    return rec
+
+
 def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
     spec = CASES[name]
     tag = f"{name}_{cfg}_{run}"
@@ -785,16 +881,27 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
         # mean fields over the force window (D-042 addendum)
         set_field_average_start(case, field_average_start(spec["iters"][solver]))
 
-    rc = cfcase.allrun(
-        case, ["-solver", solver, "-np", str(nprocs)] + spec["args"],
-        fpe=False,
-        extra_env={"CF_RANK_WRAPPER": str(WRAPPER),
-                   "CF_TIMING_DIR": str(case / "timing"),
-                   # motorBike tutorial: potentialFoam before simpleFoam
-                   "CF_NATIVE_POTENTIAL":
-                   "yes" if (cfg == "A" and name in NATIVE_POTENTIAL_CASES)
-                   else "no"},
-    )
+    try:
+        rc = cfcase.allrun(
+            case, ["-solver", solver, "-np", str(nprocs)] + spec["args"],
+            fpe=False,
+            extra_env={"CF_RANK_WRAPPER": str(WRAPPER),
+                       "CF_TIMING_DIR": str(case / "timing"),
+                       # motorBike tutorial: potentialFoam before simpleFoam
+                       "CF_NATIVE_POTENTIAL":
+                       "yes" if (cfg == "A" and name in NATIVE_POTENTIAL_CASES)
+                       else "no"},
+        )
+    except precision.SPGeometryFail as err:
+        # D5.3: not a solver failure; the SP run of this case is skipped
+        rec = {"case": name, "config": cfg, "run": run, "solver": solver,
+               "nProcs": nprocs, "rc": None, "machineBefore": state,
+               "configHash": chash, "harnessVersion": HARNESS_VERSION,
+               "sets": sets, "skipped": True, "error": str(err)}
+        precision_fields(name, cfg, case, rec)
+        results.write("bench", tag, rec)
+        print(f"{tag}: {precision.SP_GEOMETRY_FAIL}, skipped ({err})")
+        return rec
     rec = {"case": name, "config": cfg, "run": run, "solver": solver,
            "nProcs": nprocs, "rc": rc, "machineBefore": state,
            "configHash": chash, "harnessVersion": HARNESS_VERSION,
@@ -822,6 +929,9 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
         rec["cycleTypeFinal"] = rec["gamg"].get("gamgCycleFinal")
         rec["nPostSweepsFinal"] = rec["gamg"].get("gamgNPostSweepsFinal")
         rec["gamgTuneEvents"] = summ.get("gamgTuneEvents")
+        # static remediation set of this build (D5.5, D11 staticSetSizeDiff)
+        rows0 = logs.parse_cf(case / "log.coupledFoam")[:1]
+        rec["staticSetSize"] = rows0[0].get("nStat") if rows0 else None
         if "andersonApplied" in summ:
             rec["anderson"] = {k: summ.get(k) for k in (
                 "andersonApplied", "andersonSkipped", "andersonRejected",
@@ -830,6 +940,7 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
         hist = monitor_history(case, spec["monitor"])
     except (FileNotFoundError, IndexError) as err:
         rec["error"] = f"monitor: {err}"
+        precision_fields(name, cfg, case, rec)
         results.write("bench", tag, rec)
         return rec
 
@@ -866,6 +977,9 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
                         for k, v in hist.items()})
         if solver == "coupledFoam":
             rec.update(coupled_breakdown(case, it))
+    rec["forceSource"] = (post.force_source(case)
+                          if spec["monitor"] == "forces" else None)
+    precision_fields(name, cfg, case, rec)
     results.write("bench", tag, rec)
     print(f"{tag}: iters {it}, wall {rec.get('wall_to_conv_s')}, "
           f"CPU-h {rec.get('cpu_to_conv_h')}")
@@ -920,6 +1034,16 @@ def summary_rows(recs: list[dict]) -> list[dict]:
                                                if x.get("cycleTypeFinal")}))
             or None,
             "nPostSweepsFinal": _med(g, "nPostSweepsFinal"),
+            # D11 (single precision)
+            "precision": ",".join(sorted({str(x.get("precision", "dp"))
+                                          for x in g})),
+            "Cd_rel_to_DP": _med(g, "Cd_rel_to_DP"),
+            "Cl_rel_to_DP": _med(g, "Cl_rel_to_DP"),
+            "dp_rel_to_DP": _med(g, "dp_rel_to_DP"),
+            "staticSetSizeDiff": _med(g, "staticSetSizeDiff"),
+            "spGeometry": ",".join(sorted({str(x["spGeometry"]) for x in g
+                                           if x.get("spGeometry")})) or None,
+            "nCheckMeshDiff": _med(g, "nCheckMeshDiff"),
         })
     by = {(t["case"], t["config"]): t for t in table}
     for t in table:
@@ -928,6 +1052,12 @@ def summary_rows(recs: list[dict]) -> list[dict]:
             t["speedup_wall_B_over_C"] = b["wall_median"] / cc["wall_median"]
         if b and cc and b["cpuh_median"] and cc["cpuh_median"]:
             t["speedup_cpu_B_over_C"] = b["cpuh_median"] / cc["cpuh_median"]
+        # D11: DP counterpart over SP (F1 vs B, F2 vs C)
+        base = by.get((t["case"], SP_BASE.get(t["config"], "")))
+        if base:
+            for k, kk in (("wall_median", "wall"), ("cpuh_median", "cpu")):
+                if base[k] and t[k]:
+                    t[f"speedup_{kk}_DP_over_SP"] = base[k] / t[k]
     return table
 
 
@@ -1042,7 +1172,10 @@ SUMMARY_FIELDS = [
     "rss_sum_GB", "nCells", "Cd", "Cl", "dp", "Cd_final", "Cl_final",
     "dp_final", "Cd_std", "Cl_std", "W", "criterion", "cycleTypeFinal",
     "nPostSweepsFinal",
-    "speedup_wall_B_over_C", "speedup_cpu_B_over_C"]
+    "speedup_wall_B_over_C", "speedup_cpu_B_over_C",
+    "precision", "Cd_rel_to_DP", "Cl_rel_to_DP", "dp_rel_to_DP",
+    "staticSetSizeDiff", "spGeometry", "nCheckMeshDiff",
+    "speedup_wall_DP_over_SP", "speedup_cpu_DP_over_SP"]
 B10_FIELDS = [
     "case", "config", "reference", "status", "pass", "criterion",
     "wall_X", "wall_C", "dWall_X_vs_C", "cpuh_X", "cpuh_C", "dCpu_X_vs_C",
@@ -1084,7 +1217,9 @@ def main() -> int:
                          "their scope (see --no-scope)")
     ap.add_argument("--no-scope", action="store_true",
                     help="run E/F/G/H/E-* on every requested case")
-    ap.add_argument("--repeats", type=int, default=3)
+    ap.add_argument("--repeats", type=int, default=None,
+                    help=f"repeats per configuration (default "
+                         f"{DEFAULT_REPEATS}; F1, F2: 1)")
     ap.add_argument("--np", type=int, default=0,
                     help="ranks (0: the case default)")
     ap.add_argument("--force", action="store_true", help="rerun existing")
@@ -1109,11 +1244,36 @@ def main() -> int:
             ap.error(f"unknown configuration {c!r} (known: {','.join(CONFIGS)})")
     if not a.summary_only:
         cfenv.foam_env()
+        # D11: precision is a build choice - SP configurations from an SP
+        # shell only, DP configurations from a DP shell only
+        sp_cfgs = [c for c in cfgs if c in SP_CONFIGS]
+        if sp_cfgs and len(sp_cfgs) != len(cfgs):
+            if "--configs" in " ".join(sys.argv):
+                ap.error("run the SP configurations (F1, F2) separately, "
+                         "from a shell with the SP environment")
+            # default list: keep what the sourced build can run
+            sp_env = precision.build_precision() == "SP"
+            cfgs = sp_cfgs if sp_env else [c for c in cfgs
+                                           if c not in SP_CONFIGS]
+            sp_cfgs = sp_cfgs if sp_env else []
+        if sp_cfgs:
+            os.environ["CF_PRECISION"] = "sp"
+        else:
+            os.environ["CF_PRECISION"] = "dp"
+        try:
+            precision.check_environment()
+        except RuntimeError as err:
+            ap.error(str(err))
+        rep_max = a.repeats or max([CONFIG_REPEATS.get(c, DEFAULT_REPEATS)
+                                    for c in cfgs] or [DEFAULT_REPEATS])
         for name in names:
             nprocs = a.np or CASES[name]["np"]
-            for run in range(1, a.repeats + 1):
+            for run in range(1, rep_max + 1):
                 for cfg in cfgs:
                     if not a.no_scope and not in_scope(name, cfg):
+                        continue
+                    if run > (a.repeats
+                              or CONFIG_REPEATS.get(cfg, DEFAULT_REPEATS)):
                         continue
                     st = cfenv.machine_state()
                     if st.busy and not a.allow_busy:
