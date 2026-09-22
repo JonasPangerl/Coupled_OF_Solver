@@ -432,6 +432,11 @@ int main(int argc, char *argv[])
             Info<< "coupledFoam: fresh start"
                 << (potentialInit ? " (potentialInit: fields from"
                     " potentialFoam expected)" : "") << endl;
+            // nut from the turbulence fields, as native simpleFoam; a
+            // restart keeps the nut of the file (the capped model nut of
+            // the written iteration), so that restarts stay exact
+            // (D-069 F2)
+            turbulence->validate();
         }
     }
 
