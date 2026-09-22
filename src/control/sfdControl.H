@@ -27,7 +27,8 @@ Description
 
     Ubar (volVectorField USFD) is initialised to U at activation: the first
     outer iteration after the start-up phase (beta 0 -> 1, D-008/D-048;
-    afterStartup no: the first outer iteration), reset to U whenever the Anderson history is flushed (7.5,
+    afterStartup no: the first outer iteration) and not before iteration
+    startIter (0: no delay), reset to U whenever the Anderson history is flushed (7.5,
     includes the rollback of 9.3; resetOnFlush no keeps the filter state as
     a variant), written at write times (C6) and read back on restart
     together with the coupledState entries sfdOn, sfdQuiet.
@@ -37,7 +38,7 @@ Description
     stays in the state.
 
     Dictionary: coupled.sfd { enabled chi Delta Lref deactivateBelowR
-    resetOnFlush afterStartup }.
+    resetOnFlush afterStartup startIter }.
 
 SourceFiles
     sfdControl.C
@@ -71,6 +72,7 @@ class sfdControl
         scalar deactivateBelowR_;
         bool resetOnFlush_;
         bool afterStartup_;
+        label startIter_;
         label nHold_;
 
         // State
@@ -129,9 +131,15 @@ public:
         //- chi*, Delta* from Uref (7.2); prints the parameter guidance
         void setReference(const scalar Uref);
 
-        //- Activation: Ubar = U unless initialised or restored (start of an
-        //  outer iteration); with afterStartup only once startupDone
-        void begin(const volVectorField& U, const bool startupDone);
+        //- Activation: Ubar = U unless initialised or restored (start of
+        //  outer iteration iter); with afterStartup only once startupDone,
+        //  and not before iteration startIter
+        void begin
+        (
+            const volVectorField& U,
+            const bool startupDone,
+            const label iter
+        );
 
         //- Anderson flush: Ubar = U (if active and resetOnFlush)
         void reset(const volVectorField& U);

@@ -516,6 +516,7 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
     {
         // C2: 3x3 momentum diagonal block after PTC (incl. MRF Coriolis,
         // excl. the pressure column), double
+        // (C3: without the SFD term, D-052)
         tensorField Amom(nCells);
         for (label celli = 0; celli < nCells; ++celli)
         {
@@ -525,6 +526,15 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
                 for (label c = 0; c < blockP; ++c)
                 {
                     a[r*blockP + c] = Dd_[di(celli, r, c)];
+                }
+            }
+            if (sfdUbarPtr_)
+            {
+                const doubleScalar cv =
+                    doubleScalar(sfdChi_)*mesh_.V()[celli];
+                for (label r = 0; r < blockP; ++r)
+                {
+                    a[r*blockP + r] -= cv;
                 }
             }
         }

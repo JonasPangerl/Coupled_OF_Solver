@@ -643,7 +643,7 @@ int main(int argc, char *argv[])
         }
         // SFD (7.6): activation after the start-up phase; C6 writes USFD
         // while it is active
-        sfd.begin(U, startup.done(iter));
+        sfd.begin(U, startup.done(iter), iter);
         assembler.setSFD
         (
             sfd.chiStar(),

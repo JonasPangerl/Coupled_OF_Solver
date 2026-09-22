@@ -25,6 +25,7 @@ Foam::sfdControl::sfdControl
     deactivateBelowR_(coupledDefaults::sfdDeactivateBelowR),
     resetOnFlush_(coupledDefaults::sfdResetOnFlush),
     afterStartup_(coupledDefaults::sfdAfterStartup),
+    startIter_(coupledDefaults::sfdStartIter),
     nHold_(nHold),
     UbarPtr_(nullptr),
     chiStar_(0),
@@ -43,6 +44,7 @@ Foam::sfdControl::sfdControl
         d.getOrDefault<scalar>("deactivateBelowR", deactivateBelowR_);
     resetOnFlush_ = d.getOrDefault<bool>("resetOnFlush", resetOnFlush_);
     afterStartup_ = d.getOrDefault<bool>("afterStartup", afterStartup_);
+    startIter_ = d.getOrDefault<label>("startIter", startIter_);
 
     // Negated comparisons also reject non-finite input
     if
@@ -51,13 +53,15 @@ Foam::sfdControl::sfdControl
      || !(Delta_ > 0) || !std::isfinite(Delta_)
      || !(Lref_ > 0) || !std::isfinite(Lref_)
      || !(deactivateBelowR_ >= 0)
+     || startIter_ < 0
     )
     {
         FatalIOErrorInFunction(d)
             << "sfd: require chi >= 0, Delta > 0, Lref > 0 (finite) and"
             << " deactivateBelowR >= 0; got chi " << chi_ << ", Delta "
             << Delta_ << ", Lref " << Lref_ << ", deactivateBelowR "
-            << deactivateBelowR_ << exit(FatalIOError);
+            << deactivateBelowR_ << ", startIter " << startIter_
+            << exit(FatalIOError);
     }
 
     if (enabled_)
@@ -122,10 +126,15 @@ void Foam::sfdControl::setReference(const scalar Uref)
 void Foam::sfdControl::begin
 (
     const volVectorField& U,
-    const bool startupDone
+    const bool startupDone,
+    const label iter
 )
 {
-    if (!enabled_ || initialised_ || !on_ || (afterStartup_ && !startupDone))
+    if
+    (
+        !enabled_ || initialised_ || !on_
+     || (afterStartup_ && !startupDone) || iter < startIter_
+    )
     {
         return;
     }
@@ -133,8 +142,7 @@ void Foam::sfdControl::begin
     Ub.primitiveFieldRef() = U.primitiveField();
     Ub.boundaryFieldRef() == U.boundaryField();
     initialised_ = true;
-    Info<< "coupledFoam: SFD active from iteration "
-        << mesh_.time().timeIndex() << endl;
+    Info<< "coupledFoam: SFD active from iteration " << iter << endl;
 }
 
 
@@ -297,6 +305,7 @@ void Foam::sfdControl::writeSettings(dictionary& dict) const
     s.add("deactivateBelowR", deactivateBelowR_);
     s.add("resetOnFlush", resetOnFlush_);
     s.add("afterStartup", afterStartup_);
+    s.add("startIter", startIter_);
     s.add("nHold", nHold_);
     dict.add("sfd", s);
 }

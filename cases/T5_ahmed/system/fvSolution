@@ -192,6 +192,7 @@ coupled
         deactivateBelowR 1e-4;  // SFD-off after nHold iterations below
         resetOnFlush    yes;    // Ubar = U with every Anderson flush
         afterStartup    yes;    // activate after the start-up phase (D-052)
+        startIter       0;      // earliest activation iteration (0: no delay)
     }
 
     ftz             yes;
