@@ -60,6 +60,7 @@ sys.path.insert(0, str(REPO / "tests"))
 sys.path.insert(0, str(REPO / "bench"))
 from cflib import logs, post, provenance  # noqa: E402
 import run_bench  # noqa: E402
+import user_convergence as ucv  # noqa: E402
 
 RESULTS = REPO / "results"
 RUN = REPO / "run"
@@ -119,7 +120,7 @@ EXPECTED_TESTS = [
     "T0_Re100_np1", "T0_Re100_np4", "T0_Re1000_np1", "T0_Re1000_np4",
     "T1_np1", "T1_np4", "T2_np1", "T2_np4",
     "T3_kOmegaSST_np1", "T3_kOmegaSST_np4", "T3_GEKO_np1", "T3_GEKO_np4",
-    "T4a_np*", "T4b_np*", "T5_np*",
+    "T4a_np*", "T4b_np*", "T5*_np*",
     "T-restart_T1", "T-restart_T3-SST", "T-fpe_*", "T_scaling_T4a",
     "diagnostics_*", "Test-*", "test_env",
 ]
@@ -385,6 +386,78 @@ def flat(v) -> str:
 # --------------------------------------------------------------------------- #
 # figures
 # --------------------------------------------------------------------------- #
+
+def table_convergence(tests: dict, bench: list[dict], uc: dict) -> None:
+    """tables/convergence_choice.tex: automatic and user convergence
+    iteration of every force-case run (D-060), and the skeleton
+    report/user_convergence_template.json with the automatic iterations as
+    hints for filling in report/user_convergence.json."""
+    tmpl = REPO / "report" / "user_convergence_template.json"
+    tmpl.write_text(json.dumps(ucv.template(tests, bench), indent=2) + "\n")
+    rows = []
+
+    def row(label, solver, r, auto_it, case_dir=None):
+        u = r.get("user") or {}
+        missing = ((r.get("wallToConv_s") or r.get("wall_to_conv_s")) is None
+                   or (r.get("Cd") if r.get("Cd") is not None
+                       else r.get("Cd_mean")) is None)
+        if missing and auto_it and case_dir is not None and case_dir.is_dir():
+            # not stored by the record (T3, references): time and the
+            # coefficient means at the automatic point
+            a = ucv.evaluate(case_dir, solver, auto_it, r)
+            r = dict(r)
+            for k, v in (("wallToConv_s", a.get("wall_to_conv_s")),
+                         ("cpuHoursToConv", a.get("cpu_to_conv_h")),
+                         ("Cd", a.get("Cd")), ("Cl", a.get("Cl"))):
+                if r.get(k) is None:
+                    r[k] = v
+        used = "user" if u and not u.get("ignored") else "auto"
+        rows.append([
+            label, solver, fmt(u.get("iterationsRun") or r.get("iterationsRun")
+                               or r.get("iterations"), "{}"),
+            fmt(auto_it, "{}"),
+            fmt(u.get("iters"), "{}") if u else "-",
+            used + (" (user value ignored)" if r.get("userIgnored") else ""),
+            fmt(r.get("wallToConv_s") or r.get("wall_to_conv_s")),
+            fmt(r.get("cpuHoursToConv") or r.get("cpu_to_conv_h")),
+            fmt(r.get("Cd") if r.get("Cd") is not None else r.get("Cd_mean"),
+                "{:.4f}"),
+            fmt(r.get("Cl") if r.get("Cl") is not None else r.get("Cl_mean"),
+                "{:.4f}"),
+        ])
+
+    for name in sorted(tests):
+        if ucv.case_key(name) is None:
+            continue
+        r = tests[name]
+        row(name, "coupledFoam", r, r.get("autoIteration"), ucv.RUN / name)
+        ref = r.get("reference") or {}
+        row(name + " ref", "simpleFoam", ref, ref.get("autoIteration"),
+            ucv.ref_dir(name))
+    for r in sorted(bench, key=lambda d: (d.get("case", ""), d.get("config", ""),
+                                          d.get("run", 0))):
+        if r.get("case") in ucv.CASES and r.get("convergenceSource") == "user":
+            row(f"bench {r['case']} run {r.get('run')}", r["config"], r,
+                (r.get("auto") or {}).get("iters_to_conv"))
+    if not rows:
+        notes.append("convergence choice: no force-case results yet")
+        return
+    write_table(
+        "convergence_choice",
+        ["run", "solver / config", "iterations run",
+         "automatic (criterion or solver stop)", "user",
+         "used", "wall to conv. [s]", "CPU-h to conv.", "Cd", "Cl"],
+        rows,
+        "Convergence point of the force cases: automatic criterion "
+        "(T3: 12.3(ii); T4, T5: D-042 stationary mean) and the iteration "
+        "named by the user after inspecting the load histories (D-060). "
+        "With a user iteration N, time and CPU-hours count up to N and "
+        "Cd, Cl are the means over iterations N to the end of the run.",
+        "tab:convchoice", resize=True,
+        note=f"{len(uc)} case(s) with user entries. The pass/fail of the "
+        "tests is unchanged and uses the automatic criteria. Benchmark rows "
+        "appear only where a user value was given.")
+
 
 def fig_T0_profiles() -> None:
     for re_ in (100, 1000):
@@ -1496,6 +1569,12 @@ def main(argv: list[str] | None = None) -> int:
     setup_guard(parse_args(argv))
     tests = guard_tests(load_json("tests"))
     bench = guard_bench(load_bench())
+    # user-judged convergence iterations (D-060) replace the automatic
+    # ones in every number derived from the convergence point
+    uc = ucv.load()
+    tests = {n: ucv.apply_test(n, d, uc) for n, d in tests.items()}
+    bench = [ucv.apply_bench(r, uc) for r in bench]
+    table_convergence(tests, bench, uc)
 
     fig_T0_profiles()
     fig_histories(tests)
