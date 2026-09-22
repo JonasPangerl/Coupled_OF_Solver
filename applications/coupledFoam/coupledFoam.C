@@ -405,7 +405,7 @@ int main(int argc, char *argv[])
                 "controls.dt", "turbulence.nBoundK",
                 "turbulence.nBoundOmega", "timings", "memory",
                 "controls.trials.violU", "controls.trials.violP",
-                "bcFlips", "gamgSetup"
+                "bcFlips", "gamgSetup", "localLimit", "dynamicSet"
             }
         )
         {
@@ -587,6 +587,16 @@ int main(int argc, char *argv[])
         scalar eta = 0;
         bool skipStep = false;
 
+        // Local limiter memory: release step (no effect without memory)
+        ptc.beginIteration();
+
+        // Level 3: dU_P/(fLoc Uref) per cell of the accepted assembly
+        scalarField locRatio;
+        if (diag.active(3))
+        {
+            locRatio.resize(mesh.nCells(), Zero);
+        }
+
         // --- Assemble, solve, line search with CFL cuts (7.2)
         while (true)
         {
@@ -597,7 +607,9 @@ int main(int argc, char *argv[])
             (
                 rDTV,
                 assembler.momentumResidual(),
-                ls.Uref()
+                assembler.momentumDiag(),
+                ls.Uref(),
+                (diag.active(3) ? &locRatio : nullptr)
             );
             assembler.assembleContinuity(rDTV);
             tAsm += ta.elapsedTime();
@@ -1135,6 +1147,8 @@ int main(int argc, char *argv[])
             j.add("strategy", std::string(ptc.strategyName()));
             j.add("hold", ptc.holdRemaining());
             j.add("nLocLim", nLocLim);
+            j.add("nLocThrottled", ptc.nLocalThrottled());
+            j.add("nLocSticky", ptc.nLocalSticky());
             j.beginObject("dt");
             j.add("min", dtMin);
             j.add("median", dtMed);
@@ -1156,6 +1170,7 @@ int main(int argc, char *argv[])
             j.beginObject("remediation");
             j.add("nStat", rem.nStatic());
             j.add("nDyn", rem.nDynamic());
+            j.add("nDynSticky", rem.nSticky());
             j.add("version", rem.dynamicVersion());
             j.endObject();
             j.beginObject("anderson");
@@ -1364,6 +1379,106 @@ int main(int argc, char *argv[])
                 bcInit = true;
                 e.endObject();
 
+                // h. Locally CFL-limited cells (D-049): the diagTopLimited
+                // cells with the largest dU_P/(fLoc Uref) of the accepted
+                // assembly, their centres and memory factors, plus the
+                // centroid of all limited cells (rank-local)
+                {
+                    const label nTop = coupledDefaults::diagTopLimited;
+                    DynamicList<label> lim;
+                    vector centroid(Zero);
+                    forAll(locRatio, celli)
+                    {
+                        if (locRatio[celli] > 1)
+                        {
+                            lim.append(celli);
+                            centroid += mesh.C()[celli];
+                        }
+                    }
+                    if (lim.size())
+                    {
+                        centroid /= scalar(lim.size());
+                    }
+                    std::partial_sort
+                    (
+                        lim.begin(),
+                        lim.begin() + min(nTop, lim.size()),
+                        lim.end(),
+                        [&](const label a, const label b)
+                        {
+                            return locRatio[a] > locRatio[b];
+                        }
+                    );
+                    const scalarField& fLocal = ptc.localFactor();
+                    const labelList& cLocal = ptc.localCount();
+                    e.beginObject("localLimit");
+                    e.add("nLimited", label(lim.size()));
+                    e.beginArray("centroid");
+                    for (direction c = 0; c < vector::nComponents; ++c)
+                    {
+                        e.value(doubleScalar(centroid[c]));
+                    }
+                    e.endArray();
+                    e.beginArray("top");
+                    for (label i = 0; i < min(nTop, lim.size()); ++i)
+                    {
+                        const label celli = lim[i];
+                        e.beginObject();
+                        e.add("cell", celli);
+                        e.beginArray("C");
+                        for (direction c = 0; c < vector::nComponents; ++c)
+                        {
+                            e.value(doubleScalar(mesh.C()[celli][c]));
+                        }
+                        e.endArray();
+                        e.add("ratio", doubleScalar(locRatio[celli]));
+                        if (fLocal.size())
+                        {
+                            e.add("f", doubleScalar(fLocal[celli]));
+                            e.add("count", cLocal[celli]);
+                        }
+                        e.endObject();
+                    }
+                    e.endArray();
+                    e.endObject();
+                }
+
+                // i. Dynamic-set members (D-049): the first diagTopLimited
+                // cells of the set with centre, age and entry count
+                {
+                    const label nTop = coupledDefaults::diagTopLimited;
+                    const labelList& age = rem.age();
+                    const labelList& entries = rem.entries();
+                    label n = 0;
+                    e.beginObject("dynamicSet");
+                    e.beginArray("cells");
+                    forAll(age, celli)
+                    {
+                        if (age[celli] < 0)
+                        {
+                            continue;
+                        }
+                        if (n < nTop)
+                        {
+                            e.beginObject();
+                            e.add("cell", celli);
+                            e.beginArray("C");
+                            for (direction c = 0; c < vector::nComponents; ++c)
+                            {
+                                e.value(doubleScalar(mesh.C()[celli][c]));
+                            }
+                            e.endArray();
+                            e.add("age", age[celli]);
+                            e.add("entries", entries[celli]);
+                            e.endObject();
+                        }
+                        ++n;
+                    }
+                    e.endArray();
+                    e.add("n", n);
+                    e.endObject();
+                }
+
                 // g. Anderson internals
                 if (aa.enabled())
                 {
@@ -1453,6 +1568,9 @@ int main(int argc, char *argv[])
         j.add("rollbacks", sen.nRollbacks());
         j.add("staticCells", rem.nStatic());
         j.add("dynamicCells", rem.nDynamic());
+        j.add("dynamicStickyCells", rem.nSticky());
+        j.add("localThrottledCells", ptc.nLocalThrottled());
+        j.add("localStickyCells", ptc.nLocalSticky());
         j.add("wallSeconds", runTimer.elapsedTime());
         j.add("cpuSeconds", cpuSum);
         j.add("cpuHours", cpuSum/3600.0);

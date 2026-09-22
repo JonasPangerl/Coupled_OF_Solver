@@ -6,6 +6,7 @@
 #include "ptcControl.H"
 #include "coupledDefaults.H"
 #include "PstreamReduceOps.H"
+#include "DynamicList.H"
 #include <cmath>
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
@@ -28,10 +29,20 @@ Foam::ptcControl::ptcControl
     nHold_(coupledDefaults::nHold),
     localLimit_(coupledDefaults::localLimitEnabled),
     fLoc_(coupledDefaults::fLoc),
+    localImplicit_(coupledDefaults::localImplicit),
+    localMemory_(coupledDefaults::localMemory),
+    localRecovery_(coupledDefaults::localRecovery),
+    localHold_(coupledDefaults::localHold),
+    localStickyAfter_(coupledDefaults::localStickyAfter),
     CFL_(coupledDefaults::CFL0),
     Rprev_(-1),
     holdRemaining_(0),
-    nLocalLimited_(0)
+    nLocalLimited_(0),
+    nLocalThrottled_(0),
+    nLocalSticky_(0),
+    localFactor_(),
+    localHoldRemaining_(),
+    localCount_()
 {
     const dictionary& d = coupledDict.subOrEmptyDict("ptc");
 
@@ -67,6 +78,45 @@ Foam::ptcControl::ptcControl
     localLimit_ =
         ll.getOrDefault<bool>("enabled", coupledDefaults::localLimitEnabled);
     fLoc_ = ll.getOrDefault<scalar>("fLoc", coupledDefaults::fLoc);
+    localImplicit_ =
+        ll.getOrDefault<bool>("implicit", coupledDefaults::localImplicit);
+    localMemory_ =
+        ll.getOrDefault<bool>("memory", coupledDefaults::localMemory);
+    localRecovery_ =
+        ll.getOrDefault<scalar>("localRecovery", coupledDefaults::localRecovery);
+    localHold_ = ll.getOrDefault<label>("localHold", coupledDefaults::localHold);
+    localStickyAfter_ =
+        ll.getOrDefault<label>
+        (
+            "localStickyAfter",
+            coupledDefaults::localStickyAfter
+        );
+
+    // Negated comparisons also reject non-finite input
+    if (!(localRecovery_ >= 1) || !std::isfinite(localRecovery_))
+    {
+        FatalIOErrorInFunction(ll)
+            << "localLimit.localRecovery must be a finite value >= 1, got "
+            << localRecovery_ << exit(FatalIOError);
+    }
+    if (localHold_ < 0 || localStickyAfter_ < 0)
+    {
+        FatalIOErrorInFunction(ll)
+            << "localLimit.localHold and localStickyAfter must be >= 0, got "
+            << localHold_ << " and " << localStickyAfter_
+            << exit(FatalIOError);
+    }
+
+    if (localLimit_ && localMemory_)
+    {
+        localFactor_.resize(mesh_.nCells(), scalar(1));
+        localHoldRemaining_.resize(mesh_.nCells(), 0);
+        localCount_.resize(mesh_.nCells(), 0);
+    }
+    else
+    {
+        localMemory_ = false;
+    }
 
     CFL_ = CFL0_;
 }
@@ -121,35 +171,134 @@ Foam::tmp<Foam::scalarField> Foam::ptcControl::rDeltaTV
 }
 
 
+void Foam::ptcControl::beginIteration()
+{
+    if (!localMemory_)
+    {
+        return;
+    }
+
+    // Recovery of the memory factors: after the per-cell hold, and never
+    // for sticky cells (limited in localStickyAfter iterations)
+    forAll(localFactor_, celli)
+    {
+        if (localHoldRemaining_[celli] > 0)
+        {
+            --localHoldRemaining_[celli];
+        }
+        else if
+        (
+            localFactor_[celli] < 1
+         && !(localStickyAfter_ > 0 && localCount_[celli] >= localStickyAfter_)
+        )
+        {
+            localFactor_[celli] =
+                min(scalar(1), localFactor_[celli]*localRecovery_);
+        }
+    }
+}
+
+
 Foam::label Foam::ptcControl::applyLocalLimit
 (
     scalarField& rDeltaTV,
     const vectorField& rMom,
-    const scalar Uref
+    const scalarField& aMom,
+    const scalar Uref,
+    scalarField* ratio
 )
 {
     nLocalLimited_ = 0;
+    nLocalThrottled_ = 0;
+    nLocalSticky_ = 0;
 
     if (!localLimit_)
     {
+        if (ratio)
+        {
+            *ratio = Zero;
+        }
         return 0;
     }
 
     const scalar dUmax = fLoc_*Uref;
 
+    if (!localMemory_)
+    {
+        // Memoryless limiter (7.3); implicit: |r| / (V/dt + a_P)
+        forAll(rDeltaTV, celli)
+        {
+            // dU = |r| dt/V = |r| / (V/dt); GUARD: rDeltaTV >= VSMALL/CFL
+            const scalar dU =
+                mag(rMom[celli])
+               /max
+                (
+                    rDeltaTV[celli] + (localImplicit_ ? aMom[celli] : 0),
+                    VSMALL
+                );
+            if (ratio)
+            {
+                (*ratio)[celli] = dU/max(dUmax, VSMALL);
+            }
+            if (dU > dUmax)
+            {
+                if (localImplicit_)
+                {
+                    rDeltaTV[celli] =
+                        mag(rMom[celli])/max(dUmax, VSMALL) - aMom[celli];
+                }
+                else
+                {
+                    // dt <- dt*dUmax/dU  <=>  V/dt <- V/dt * dU/dUmax
+                    rDeltaTV[celli] *= dU/max(dUmax, VSMALL);
+                }
+                ++nLocalLimited_;
+            }
+        }
+
+        reduce(nLocalLimited_, sumOp<label>());
+        return nLocalLimited_;
+    }
+
+    // Limiter with memory (D-049): dt_P <- f_P dt_P first, then the check
     forAll(rDeltaTV, celli)
     {
-        // dU = |r| dt/V = |r| / (V/dt); GUARD: rDeltaTV >= VSMALL/CFL
-        const scalar dU = mag(rMom[celli])/max(rDeltaTV[celli], VSMALL);
+        // GUARD: f_P in (0, 1] by construction
+        const scalar f = max(localFactor_[celli], VSMALL);
+        rDeltaTV[celli] /= f;
+
+        const scalar aP = (localImplicit_ ? aMom[celli] : 0);
+        const scalar dU = mag(rMom[celli])/max(rDeltaTV[celli] + aP, VSMALL);
+        if (ratio)
+        {
+            (*ratio)[celli] = dU/max(dUmax, VSMALL);
+        }
         if (dU > dUmax)
         {
-            // dt <- dt*dUmax/dU  <=>  V/dt <- V/dt * dU/dUmax
-            rDeltaTV[celli] *= dU/max(dUmax, VSMALL);
+            // Explicit: V/dt <- V/dt dU/dUmax. Implicit: V/dt <- the value
+            // that makes |r|/(V/dt + a_P) = dUmax, i.e. |r|/dUmax - a_P
+            // (> V/dt since dU > dUmax)
+            const scalar rDT0 = rDeltaTV[celli];
+            rDeltaTV[celli] = mag(rMom[celli])/max(dUmax, VSMALL) - aP;
+            const scalar cut = rDT0/max(rDeltaTV[celli], VSMALL);
+            localFactor_[celli] = f*cut;
+            localHoldRemaining_[celli] = localHold_;
+            ++localCount_[celli];
             ++nLocalLimited_;
+        }
+        if (localFactor_[celli] < 1)
+        {
+            ++nLocalThrottled_;
+        }
+        if (localStickyAfter_ > 0 && localCount_[celli] >= localStickyAfter_)
+        {
+            ++nLocalSticky_;
         }
     }
 
     reduce(nLocalLimited_, sumOp<label>());
+    reduce(nLocalThrottled_, sumOp<label>());
+    reduce(nLocalSticky_, sumOp<label>());
     return nLocalLimited_;
 }
 
@@ -226,6 +375,32 @@ void Foam::ptcControl::writeState(dictionary& dict) const
     dict.set("CFL", CFL_);
     dict.set("Rprev", Rprev_);
     dict.set("nHoldRemaining", holdRemaining_);
+
+    if (localMemory_)
+    {
+        // Sparse: cells with any memory (local labels, D-034)
+        DynamicList<label> cells, holds, counts;
+        DynamicList<scalar> factors;
+        forAll(localFactor_, celli)
+        {
+            if
+            (
+                localFactor_[celli] < 1
+             || localHoldRemaining_[celli] > 0
+             || localCount_[celli] > 0
+            )
+            {
+                cells.append(celli);
+                factors.append(localFactor_[celli]);
+                holds.append(localHoldRemaining_[celli]);
+                counts.append(localCount_[celli]);
+            }
+        }
+        dict.set("localLimitCells", labelList(cells));
+        dict.set("localLimitFactor", scalarList(factors));
+        dict.set("localLimitHold", labelList(holds));
+        dict.set("localLimitCount", labelList(counts));
+    }
 }
 
 
@@ -234,6 +409,62 @@ void Foam::ptcControl::readState(const dictionary& dict)
     CFL_ = dict.get<scalar>("CFL");
     Rprev_ = dict.getOrDefault<scalar>("Rprev", -1);
     holdRemaining_ = dict.getOrDefault<label>("nHoldRemaining", 0);
+
+    if (localMemory_)
+    {
+        localFactor_ = scalar(1);
+        localHoldRemaining_ = 0;
+        localCount_ = 0;
+
+        const labelList cells
+        (
+            dict.getOrDefault<labelList>("localLimitCells", labelList())
+        );
+        const scalarList factors
+        (
+            dict.getOrDefault<scalarList>("localLimitFactor", scalarList())
+        );
+        const labelList holds
+        (
+            dict.getOrDefault<labelList>("localLimitHold", labelList())
+        );
+        const labelList counts
+        (
+            dict.getOrDefault<labelList>("localLimitCount", labelList())
+        );
+
+        if
+        (
+            cells.size() != factors.size()
+         || cells.size() != holds.size()
+         || cells.size() != counts.size()
+        )
+        {
+            FatalIOErrorInFunction(dict)
+                << "localLimitCells/Factor/Hold/Count differ in size"
+                << exit(FatalIOError);
+        }
+
+        forAll(cells, i)
+        {
+            if (cells[i] < 0 || cells[i] >= mesh_.nCells())
+            {
+                FatalIOErrorInFunction(dict)
+                    << "localLimitCells cell " << cells[i]
+                    << " out of range (restart with a different"
+                    << " decomposition?)" << exit(FatalIOError);
+            }
+            if (!(factors[i] > 0) || factors[i] > 1)
+            {
+                FatalIOErrorInFunction(dict)
+                    << "localLimitFactor " << factors[i]
+                    << " outside (0, 1]" << exit(FatalIOError);
+            }
+            localFactor_[cells[i]] = factors[i];
+            localHoldRemaining_[cells[i]] = holds[i];
+            localCount_[cells[i]] = counts[i];
+        }
+    }
 }
 
 
@@ -253,6 +484,11 @@ void Foam::ptcControl::writeSettings(dictionary& dict) const
     dictionary l;
     l.add("enabled", localLimit_);
     l.add("fLoc", fLoc_);
+    l.add("implicit", localImplicit_);
+    l.add("memory", localMemory_);
+    l.add("localRecovery", localRecovery_);
+    l.add("localHold", localHold_);
+    l.add("localStickyAfter", localStickyAfter_);
     dict.add("localLimit", l);
 }
 

@@ -110,6 +110,7 @@ coupled
     {
         enabled         yes;
         fLoc            0.5;
+        implicit        no;     // explicit estimate of 7.3 (D-049: yes on T3)
     }
 
     remediation
@@ -137,6 +138,7 @@ coupled
             cSpike              0.5;
             nLayers             1;
             nQuietIters         20;
+            stickyAfter         3;      // never released after the 3rd entry (D-049)
             cflFactor           0.1;
             clipToNeighbourMean yes;
         }

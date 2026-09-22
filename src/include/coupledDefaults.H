@@ -139,6 +139,19 @@ constexpr doubleScalar lineSearchBeta = 1.0;
 // Local limit (spec 7.3)
 constexpr bool localLimitEnabled = true;
 constexpr doubleScalar fLoc = 0.5;
+// Local limiter memory (D-049): per-cell dt factor kept between iterations.
+// memory no = the memoryless limiter of 7.3 (bit-identical). localRecovery
+// is the per-iteration release factor of a throttled cell (the global PTC
+// growth betaMax), localHold the iterations without release after a limit
+// event, localStickyAfter the number of limit events after which a cell is
+// never released (0 = never sticky).
+constexpr bool localMemory = false;
+// Implicit (Jacobi) estimate |r_P|/(V_P/dt_P + a_P) of the local limiter
+// instead of the explicit |r_P| dt_P/V_P of 7.3 (D-049)
+constexpr bool localImplicit = false;
+constexpr doubleScalar localRecovery = 1.5;
+constexpr label localHold = 0;
+constexpr label localStickyAfter = 0;
 
 // Remediation, static (spec 8.1)
 constexpr bool staticEnabled = true;
@@ -157,6 +170,9 @@ constexpr doubleScalar cp = 15;   // = cU^2-1: Cp down to -15 (D-044)
 constexpr doubleScalar cSpike = 0.5;
 constexpr label nLayers = 1;
 constexpr label nQuietIters = 20;
+// A cell that entered the dynamic set stickyAfter times stays in it for the
+// rest of the run (D-049); 0 = never (the hysteresis of 8.2 only)
+constexpr label dynamicStickyAfter = 3;
 constexpr doubleScalar dynamicCflFactor = 0.1;
 constexpr bool clipToNeighbourMean = true;
 constexpr doubleScalar warnFraction = 0.01;      // D-008
@@ -223,6 +239,9 @@ constexpr const char* diagUpLeg = "first";
 constexpr label diagStallWindow = 50;            // "stalled": no new min R
 constexpr doubleScalar diagAsymptoticResidualFactor = 100;  // R <= 100*tol
 constexpr doubleScalar diagAsymptoticForceFactor = 10;      // window <= 10*tol
+// Level 3: number of locally CFL-limited cells (largest dU/(fLoc Uref))
+// whose centres are logged per iteration (D-049)
+constexpr label diagTopLimited = 20;
 
 // Misc (spec 9.1, 10)
 constexpr bool ftz = true;

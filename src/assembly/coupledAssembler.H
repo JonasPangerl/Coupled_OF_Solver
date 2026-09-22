@@ -129,6 +129,9 @@ private:
         //- Momentum residual per cell (rows 0-2, without PTC)
         vectorField rMom_;
 
+        //- Mean momentum diagonal per cell (rows 0-2, without PTC)
+        scalarField aMom_;
+
         //- Mean momentum diagonal (incl. PTC)
         scalarField abar_;
 
@@ -209,6 +212,13 @@ public:
             const vectorField& momentumResidual() const noexcept
             {
                 return rMom_;
+            }
+
+            //- Mean momentum diagonal per cell (rows 0-2, no PTC): the
+            //  implicit estimate of the local limiter (D-049)
+            const scalarField& momentumDiag() const noexcept
+            {
+                return aMom_;
             }
 
             //- Stage 2: PTC, D, continuity row, scaling, residual

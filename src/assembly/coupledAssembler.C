@@ -77,6 +77,7 @@ Foam::coupledAssembler::coupledAssembler
     Ax_(blockDim*mesh.nCells(), Zero),
     b_(blockDim*mesh.nCells(), Zero),
     rMom_(mesh.nCells(), Zero),
+    aMom_(mesh.nCells(), Zero),
     abar_(mesh.nCells(), Zero),
     UPtr_(nullptr),
     pPtr_(nullptr),
@@ -425,6 +426,7 @@ void Foam::coupledAssembler::assembleMomentum
         const doubleScalar x[blockDim] =
             {Ui[celli][0], Ui[celli][1], Ui[celli][2], pi[celli]};
 
+        doubleScalar d = 0;
         for (label r = 0; r < blockP; ++r)
         {
             doubleScalar s = 0;
@@ -434,7 +436,9 @@ void Foam::coupledAssembler::assembleMomentum
             }
             Ax_[celli*blockDim + r] += s;
             rMom_[celli][r] = b_[celli*blockDim + r] - Ax_[celli*blockDim + r];
+            d += Dd_[di(celli, r, r)];
         }
+        aMom_[celli] = scalar(d/blockP);
     }
 
     if (timing_)

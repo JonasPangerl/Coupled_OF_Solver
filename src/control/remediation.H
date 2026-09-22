@@ -28,7 +28,9 @@ Description
     CFL factor dynamic.cflFactor and optional increment clipping
     |U_P + dU_P - Ubar_N| <= cSpike Uref (the field itself is never
     overwritten). Hysteresis: a cell leaves the set after nQuietIters
-    consecutive iterations without being re-marked.
+    consecutive iterations without being re-marked. A cell that entered the
+    set stickyAfter times (0 = never, D-049) stays in it for the rest of
+    the run; the per-cell entry counters are part of the restart state.
 
     Zonal factors (8.3, amendment B6), built once at construction:
     \verbatim
@@ -93,6 +95,7 @@ class remediation
         scalar cSpike_;
         label nLayers_;
         label nQuietIters_;
+        label stickyAfter_;
         scalar dynamicCflFactor_;
         bool clipToNeighbourMean_;
         scalar warnFraction_;
@@ -106,6 +109,13 @@ class remediation
             //- Dynamic age per cell: -1 not in the set, else iterations
             //  since the cell was last marked
             labelList age_;
+
+            //- Dynamic entries per cell (transitions into the set); a cell
+            //  with stickyAfter_ or more entries is never released
+            labelList entries_;
+
+            //- Global number of sticky cells in the set
+            label nSticky_;
 
             //- Cells marked externally since the last update
             //  (line search, sentinel)
@@ -215,6 +225,11 @@ public:
         const boolList& isStatic() const noexcept { return isStatic_; }
         label nStatic() const noexcept { return nStatic_; }
         label nDynamic() const noexcept { return nDynamic_; }
+        label nSticky() const noexcept { return nSticky_; }
+
+        //- Dynamic age per cell (-1: not in the set) and entry counts
+        const labelList& age() const noexcept { return age_; }
+        const labelList& entries() const noexcept { return entries_; }
         label dynamicVersion() const noexcept { return dynamicVersion_; }
         bool zonalEnabled() const noexcept { return zonalEnabled_; }
 
