@@ -58,6 +58,45 @@ default is listed in spec Section 11 and printed at start-up under
     ~/OF/venv/bin/python bench/run_bench.py     # writes results/bench/*.json
     ~/OF/venv/bin/python bench/make_report.py   # report/REPORT.md + paper figures
 
+## Diagnostics
+
+`coupled.diagnostics.level` 1-3 writes one JSON object per outer iteration
+and rank to `<case>/diagnostics/diag.rank<N>.jsonl` (JSON Lines). The default
+is level 0, which is off and adds no work. The `CF|` log lines do not change.
+
+- Level 1: residuals, controls (CFL/PTC, local dt, Eisenstat-Walker,
+  line-search trials, sentinel, remediation, Anderson), turbulence, timing
+  split, GAMG hierarchy, memory, force window statistics, and the phase
+  (`startup | stalled | asymptotic | ramp`).
+- Level 2 adds per linear solve: the Krylov history, per-level GAMG norms,
+  the K-cycle values and rhoOpt.
+- Level 3 adds per-sweep norms, operator dominance, line-search violations,
+  inflow/outflow flips on mixed patches, and Anderson internals.
+
+Field list, cost and file sizes: DECISIONS.md D-045.
+
+Turn it on for a case (always use `-disableFunctionEntries`):
+
+    foamDictionary -disableFunctionEntries -entry coupled/diagnostics \
+        -set "{ level 2; echo no; }" system/fvSolution
+    ./Allrun
+
+Load and plot in Python:
+
+    import sys; sys.path.insert(0, "bench")
+    import diag_tools as d
+    df = d.load("run/T1_np1")                # level-1 DataFrame, index = iteration
+    df[["residuals.R", "controls.CFL", "phase"]].tail()
+    d.linear_history("run/T1_np1", 120)      # level-2 solves of iteration 120
+    d.make_figures("run/T1_np1")             # 3 figures, PDF + PNG
+
+    ~/OF/venv/bin/python bench/diag_tools.py run/T1_np1 [--report]
+
+With forceCoeffs, the `CF|` line ends with `CdMean= CdRms= ClMean= ClRms=`
+(and `CmMean= CmRms=`). These are the window mean and the RMS fluctuation.
+An optional stationary-mean stop rule is available:
+`coupled.convergence.forceCoeffsDriftTol` (default 0, off).
+
 ## Repository layout
 
     src/            libcoupledFoam (blockMatrix, blockSolvers, assembly, control, io)
