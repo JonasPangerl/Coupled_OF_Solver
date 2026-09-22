@@ -61,7 +61,8 @@ Foam::blockSolver::blockSolver
         dict.getOrDefault<label>("maxRestarts", coupledDefaults::maxRestarts)
     ),
     preconPtr_(),
-    preconVersion_(-1)
+    preconVersion_(-1),
+    diag_(nullptr)
 {
     const word preconName =
         dict.getOrDefault<word>("preconditioner", "none");
@@ -131,7 +132,16 @@ void Foam::blockSolver::updatePreconditioner() const
 {
     if (preconPtr_ && preconVersion_ != matrix_.version())
     {
-        preconPtr_->update();
+        if (diagActive(1))
+        {
+            const doubleScalar t0 = diagnostics::clock();
+            preconPtr_->update();
+            diag_->addPrecSetup(diagnostics::clock() - t0);
+        }
+        else
+        {
+            preconPtr_->update();
+        }
         preconVersion_ = matrix_.version();
     }
 }
@@ -145,11 +155,55 @@ void Foam::blockSolver::precondition
 {
     if (preconPtr_)
     {
-        preconPtr_->precondition(w, r);
+        if (diagActive(1))
+        {
+            if (diag_->active(2))
+            {
+                diag_->beginApplication();
+            }
+            const doubleScalar t0 = diagnostics::clock();
+            preconPtr_->precondition(w, r);
+            diag_->addPrecApply(diagnostics::clock() - t0);
+            if (diag_->active(2))
+            {
+                diag_->endApplication();
+            }
+        }
+        else
+        {
+            preconPtr_->precondition(w, r);
+        }
     }
     else
     {
         blockKernels::copy(r.size(), r.cdata(), w.data());
+    }
+}
+
+
+void Foam::blockSolver::diagBeginSolve() const
+{
+    if (diagActive(2))
+    {
+        diag_->beginSolve();
+    }
+}
+
+
+void Foam::blockSolver::diagEndSolve(const blockSolverPerformance& perf) const
+{
+    if (diagActive(2))
+    {
+        diag_->endSolve
+        (
+            perf.solverName.c_str(),
+            perf.initialResidual,
+            perf.finalResidual,
+            perf.nIterations,
+            perf.nRestarts,
+            perf.converged,
+            perf.rho
+        );
     }
 }
 

@@ -43,6 +43,7 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
 {
     blockSolverPerformance perf;
     perf.solverName = typeName;
+    const diagSolveScope diagScope(*this, perf);
 
     const label comm = matrix_.comm();
     const label n = matrix_.nRows();
@@ -236,6 +237,12 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
         const reduceScalar sRes = std::sqrt(ss > 0 ? ss : 0)/nf;
         if (converged(sRes, perf.initialResidual, perf.nIterations))
         {
+            if (diagActive(2))
+            {
+                // One entry per iteration: the half-step residual only
+                // when the iteration ends there
+                diag_->krylovResidual(sRes);
+            }
             #pragma omp simd
             for (label i = 0; i < n; ++i)
             {
@@ -277,6 +284,10 @@ Foam::blockSolverPerformance Foam::blockBiCGStab::solve
 
         // GUARD: sum of squares >= 0 by construction; clamp for sqrt
         perf.finalResidual = std::sqrt(rsums[0] > 0 ? rsums[0] : 0)/nf;
+        if (diagActive(2))
+        {
+            diag_->krylovResidual(perf.finalResidual);
+        }
 
         if (converged(perf.finalResidual, perf.initialResidual, perf.nIterations))
         {

@@ -53,6 +53,7 @@ SourceFiles
 #include "convection.H"
 #include "nonOrthCorrection.H"
 #include "rhieChow.H"
+#include "diagnostics.H"
 #include "MRFCoupling.H"
 #include "volFields.H"
 #include "surfaceFields.H"
@@ -64,7 +65,26 @@ namespace Foam
 
 class coupledAssembler
 {
+public:
+
+    //- Wall-time split of the assembly (diagnostics, TASK 5), seconds,
+    //  accumulated until resetTimes()
+    struct timings
+    {
+        doubleScalar momentumOps = 0;   //!< stage 1 without boundary faces
+        doubleScalar boundary = 0;      //!< boundary faces, stage 1 and 2
+        doubleScalar continuity = 0;    //!< stage 2 without RC, boundary
+        doubleScalar rhieChow = 0;      //!< D, D_f and explicit face term
+    };
+
+
+private:
+
     // Private Data
+
+        //- Timing of the stages on (diagnostics level >= 1 only)
+        bool timing_;
+        timings times_;
 
         const fvMesh& mesh_;
 
@@ -194,6 +214,14 @@ public:
             //- Stage 2: PTC, D, continuity row, scaling, residual
             //  rDeltaTV = V_P/dt_P per cell (after the local limit)
             void assembleContinuity(const scalarField& rDeltaTV);
+
+
+        // Diagnostics
+
+            //- Switch the stage timing on (no clock reads when off)
+            void setTiming(const bool on) noexcept { timing_ = on; }
+            const timings& times() const noexcept { return times_; }
+            void resetTimes() noexcept { times_ = timings(); }
 
 
         // Access

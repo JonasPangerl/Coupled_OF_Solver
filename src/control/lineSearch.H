@@ -90,6 +90,16 @@ public:
         //- Cells violating the omegaMin bound (local labels)
         labelList offendingCells(const blockScalarUList& dx) const;
 
+        //- Diagnostics (rank-local, no reduction): cells whose increment
+        //  violates the velocity / pressure limit at the given omega
+        void countViolations
+        (
+            const blockScalarUList& dx,
+            const scalar omega,
+            label& nU,
+            label& np
+        ) const;
+
         //- Effective settings
         void writeSettings(dictionary& dict) const;
 };

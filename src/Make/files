@@ -35,5 +35,6 @@ control/anderson.C
 io/jsonWriter.C
 io/runInfo.C
 io/coupledState.C
+io/diagnostics.C
 
 LIB = $(FOAM_USER_LIBBIN)/libcoupledFoam

@@ -31,6 +31,7 @@ SourceFiles
 #define coupledFoam_blockSolver_H
 
 #include "blockLduMatrix4.H"
+#include "diagnostics.H"
 #include "dictionary.H"
 #include "runTimeSelectionTables.H"
 #include "autoPtr.H"
@@ -103,6 +104,10 @@ protected:
         //- Matrix version the preconditioner was last updated for
         mutable label preconVersion_;
 
+        //- Deep diagnostics (TASK 5; null: off). Hooks are guarded with
+        //  diagActive(level) at every call site.
+        mutable diagnostics* diag_;
+
 
     // Protected Member Functions
 
@@ -123,6 +128,47 @@ protected:
             blockScalarUList& w,
             const blockScalarUList& r
         ) const;
+
+        //- True if diagnostics at level l are on
+        bool diagActive(const label l) const noexcept
+        {
+            return diag_ && diag_->active(l);
+        }
+
+        //- Level-2 hooks shared by the Krylov solvers
+        void diagBeginSolve() const;
+        void diagEndSolve(const blockSolverPerformance& perf) const;
+
+        //- Scope of one solve for the level-2 log: begins the solve record
+        //  on construction and closes it with the final performance on
+        //  destruction (every return path). Declare right after perf.
+        class diagSolveScope
+        {
+            const blockSolver& s_;
+            const blockSolverPerformance& perf_;
+
+        public:
+
+            diagSolveScope
+            (
+                const blockSolver& s,
+                const blockSolverPerformance& perf
+            )
+            :
+                s_(s),
+                perf_(perf)
+            {
+                s_.diagBeginSolve();
+            }
+
+            ~diagSolveScope()
+            {
+                s_.diagEndSolve(perf_);
+            }
+
+            diagSolveScope(const diagSolveScope&) = delete;
+            void operator=(const diagSolveScope&) = delete;
+        };
 
         //- Compute normFactor from x, b (sum |A x| + |b| + SMALL)
         reduceScalar normFactor
@@ -198,6 +244,11 @@ public:
         {
             return preconPtr_.get();
         }
+
+        //- Attach deep diagnostics (null: off); also used by the
+        //  preconditioner (blockGAMG level-2/3 hooks)
+        void setDiagnostics(diagnostics* d) const noexcept { diag_ = d; }
+        diagnostics* diag() const noexcept { return diag_; }
 
         //- Solve A x = b. x holds the initial guess on input.
         //  normFactor < 0: computed from x and b.

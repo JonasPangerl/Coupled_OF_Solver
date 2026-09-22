@@ -1040,3 +1040,232 @@ are unchanged.
 
 All T4 coupledFoam results obtained before this entry used the old
 thresholds and are rerun.
+## D-045 - Deep diagnostics logging, levels 0-3 (TASK 5, 2026-09-22)
+
+User request: an optional mega-verbose log of every sub-step, so that
+parameters can later be tuned to the state of the run.
+
+**Control.** Sub-dictionary `coupled.diagnostics`:
+
+| keyword | values | default |
+|---|---|---|
+| `level` | 0-3 | 0 (off) |
+| `echo` | yes/no | no |
+| `maxBytes` | bytes per rank | 2 GiB |
+| `upLeg` | first/all | first |
+
+Constants live in coupledDefaults.H: `diag*`, and `forceCoeffsDrift*` for
+item b below.
+
+**Output.**
+- File: `<case>/diagnostics/diag.rank<N>.jsonl`, one per rank, JSON Lines.
+- Line 1 is a `header` record. It holds the level, rank, restart flag and
+  the list `localKeys` of rank-local fields.
+- Then one `iter` record per outer iteration. Doubles are written with
+  `%.17g` (max_digits10); non-finite values become `null`.
+- The file is flushed once per iteration.
+- If `maxBytes` is exceeded, one `truncated` record is written and logging
+  stops. The run continues.
+- A restart appends to the existing file.
+- `echo yes` also prints the level-1 part pretty-printed into the log
+  (`CFdiag|`).
+- The `CF|` lines themselves are unchanged. Item b only appends fields.
+
+**Design.**
+- Class `src/io/diagnostics.{H,C}` contains a streaming JSON builder
+  (`diagJson`), the writer, and the phase classifier (`diagPhase`).
+- The solver hands a pointer to the Krylov solver (`blockSolver::
+  setDiagnostics`). The Krylov solver passes it on to blockGAMG through
+  blockGAMGPrecon. The assembler gets `setTiming(true)`.
+- Level 0 guarantee (every hook is guarded at its call site with
+  `active(n)`):
+  - the solver and the assembler get no pointer and no timing;
+  - no strings are built, no fields are gathered, no collectives are
+    added, and there are no clock reads;
+  - no `diagnostics/` directory is created.
+- Level 0 and levels 1-3 give identical solver trajectories: the serial
+  T0 `CF|` lines are equal to those of a level-0 run (tests/test_diagnostics.py).
+- The GAMG per-sweep logging at level 3 splits `smooth(x, b, n)` into n
+  single sweeps. This is equivalent for both smoothers.
+
+**Phase** (TASK 5.2, field `phase`; rules checked in this order):
+1. `startup` if the global blending factor beta < 1.
+2. `stalled` if the minimum of R over the last 50 iterations is not below
+   the minimum of all earlier iterations. In other words: no new minimum
+   for 50 iterations.
+3. `asymptotic` if R <= 100 residualTol, or if the Cd/Cl window spread is
+   at most 10 times its tolerance.
+4. `ramp` otherwise.
+
+Nothing tunes itself from the phase yet.
+
+**Level 1 record** (key paths):
+- Top level: `iter`, `phase`, `wallTime`.
+- `residuals`: R, Rraw, rU, rp, R1, normFactor, linInitial, linFinal,
+  linIts, linRestarts, linConverged, linBreakdown, rho, massErrMax*,
+  massErrSum*. The mass error is sum_f phi_f per cell after the flux
+  update.
+- `controls`:
+  - CFL, CFLstart, growth, strategy, hold, nLocLim, dt{min,median,max}*;
+  - eta, etaRaw, etaClip (none | fixed | noHistory | safeguard1 | etaMin
+    | etaMax);
+  - omega, cuts, skipStep;
+  - trials[] (CFL, eta, linIts, linConverged, linFinal, failed, omega);
+  - sentinel{checks, rolledBack, nRollbacks, consecutive};
+  - remediation{nStat, nDyn, version};
+  - anderson{enabled, status, m, nHistory, gammaNorm, maxAbsGamma,
+    flushes, flushReason};
+  - beta, startupDone.
+- `turbulence`: k/omega {init, final, its} from the native solver
+  performance, nBoundK*, nBoundOmega*, nNutCapped, nClamped. The two bound
+  counts are the cells below kMin / omegaMin before `applyBounds`. Bounding
+  inside the turbulence model is not counted.
+- `timings`*:
+  - tAsm, split into tMomentumOps, tBoundary, tContinuity and tRhieChow;
+  - tFlux;
+  - tSolve, split into tPrecSetup, tPrecApply and tKrylov (= the rest,
+    including Amul), with nPrecSetup and nPrecApply;
+  - tTurb, tIter, tWall (the CF| value);
+  - tDiag: all diagnostics work of the iteration, plus writing the
+    previous record (tDiagWritePrev).
+- `gamg`: nLevels, Cop, cycle, nPostSweeps, setups, reagglomerated,
+  hierarchyVersion. `hierarchy` holds cellsPerLevel, ranksPerLevel, ratios,
+  Cop, mergeLevels and denseCoarsest when the hierarchy changed, otherwise
+  "unchanged".
+- `memory`*: rssKB, peakRssKB.
+- `forces`: see item b.
+
+Keys marked * are rank-local; `bench/diag_tools.load` combines them
+across ranks.
+
+**Level 2** (key `linear`, one object per solve attempt):
+- solver, initial, final, its, restarts, converged, rho;
+- rhoOpt of the first preconditioner application, taken from the
+  FGMRES/GMRES values of that pass at no extra cost;
+- krylov[]: the residual estimate of every Krylov iteration;
+- trueResidualAtRestart[]: the double-precision true residual at every
+  restart / end of cycle;
+- precon[] per application:
+  - levels[] {l, pre[||b||, ||r||], post[before, after]};
+  - coarse[] {its, res} or {dense};
+  - k[] {l, r0, r1, threshold, second, a1, a2}.
+
+The down-leg norms of every application are computed inside the cycle's
+own residual: one pass that is bit-identical to the plain residual, plus
+one reduction. The up-leg norms cost two extra residuals per level visit.
+With `upLeg first` (default) they are only logged for the first
+application of each solve (`post: null` otherwise). With every
+application, the level-2 cost on T0 was 13-18 % of the iteration time
+(self-measured tDiag), too close to the 15 % gate. `upLeg all`, and every
+level-3 run, log every application.
+
+**Level 3:**
+- `gamgSetup`* {l, rows, dominanceMin, dominanceMedian,
+  rowsWithoutOffDiagonal} after every GAMG update. Dominance =
+  |a_ii| / sum_{j != i} |a_ij| per scalar row, over the diagonal and
+  internal-face blocks.
+- preSweeps/postSweeps norm arrays in levels[].
+- trials[] gain violU/violP* (cells over the fU/fp limit at the full step)
+  and violUAtOmega/violPAtOmega*.
+- `bcFlips`* {patch: nFaces, nOutflow, nFlips}: faces whose sign of phi
+  changed since the previous iteration, on patches whose U or p boundary
+  condition is a mixedFvPatchField (inletOutlet, freestream*). This is the
+  T3 chatter probe.
+- `andersonInternals` {conditionEstimate = max|R_jj| / min|R_jj|,
+  absGamma[], maxAlpha, maxAlphaClip, nSkippedTotal}.
+
+**Extra parallel reductions:**
+- Level 1: none. Global values are the ones the solver has already
+  reduced; rank-local values stay rank-local.
+- Level 2: one 2-value sum per level visit (down leg). On the up-leg
+  applications, add two single-value sums per visit. Both use the level's
+  communicator.
+- Level 3: one sum per smoother sweep. Operator stats, violations and
+  flips are rank-local.
+
+**b. Force-coefficient window statistics** (lead/user scope extension:
+"stop some cases based on the RMS of the loads, or at least monitor and
+display the RMS"):
+- convergenceMonitor keeps, for Cd, Cl and Cm (= CmPitch, which forceCoeffs
+  always provides), over the last `forceCoeffsRmsWindow` samples (default:
+  forceCoeffsWindow):
+  - the mean;
+  - the RMS fluctuation (population standard deviation);
+  - the half-window mean drift |m_old - m_new|.
+- The sums are shifted by the first window sample, so a constant sequence
+  gives RMS and drift of exactly 0.
+- `CF|` gets `CdMean= CdRms= ClMean= ClRms= CmMean= CmRms=` appended after
+  `Cl=`. Existing fields and their order are unchanged.
+- The diagnostics record gets `forces`. summary.json gets `forceStats`
+  (final values) and `forceHistory` (per-iteration arrays).
+- Optional stop rule, off by default (`forceCoeffsDriftTol` 0): drift <=
+  max(forceCoeffsDriftTol |mean|, forceCoeffsDriftAbs = 0.005) for every
+  coefficient over a full window. This is the D-042 rule. It is an
+  alternative way to satisfy criterion (ii) and combines with mode any|all
+  as in D-005.
+- Restart: the last max(window, rmsWindow) samples of Cd, Cl and Cm are in
+  coupledState. The T3 split run continues the window: n = 30 after the
+  restart, from 29 restored samples plus 1 new one.
+- Found on the way, fixed in `stateDict()` and convergenceMonitor: the
+  restart scalars (CFL, R1, Uref, pref, PTC/EW state, Cd/Cl window) were
+  rounded to 6 digits. Dictionary entries are formatted with
+  IOstream::defaultPrecision() when they are created, before coupledState
+  writes with max_digits10 (D-034). The state is now built with
+  max_digits10.
+- Test-convergenceMonitor checks, on synthetic sequences:
+  - a constant: RMS and drift exactly 0;
+  - a sinusoid: RMS = A/sqrt(2); the drift rule converges only when
+    enabled;
+  - a ramp: drift = slope W/2, no convergence;
+  - the restart round trip is bit-identical.
+
+**Measured** (T0 Re100 np1 = 57 iterations, T1 np1 = 100 iterations):
+
+| run | level 1 | level 2 | level 3 |
+|---|---|---|---|
+| T0 file [B] | 109 083 | 637 610 | 1 049 142 |
+| T1 file [B] | 201 612 | 349 215 | 541 380 |
+| T0 bytes/iteration | 1.9 k | 11.2 k | 18.4 k |
+| T0 tDiag / (tIter - tDiag) | 0.3 % | 2.4 % | ~25 % |
+
+The last row is provisional evidence: the solver's own measurement of the
+diagnostics cost, from runs pinned to a free core. It is robust against
+the load of other jobs.
+
+A wall-clock check on a lightly loaded machine (load ~2, before the
+level-2 fusion and `upLeg first`) gave these medians of 3:
+- pre-TASK-5 build: 6.256 s
+- level 0: 6.273 s (+0.3 %)
+- level 1: 6.359 s (+1.4 % vs level 0)
+- level 2: 8.338 s (+33 %). This measurement led to `upLeg first`.
+
+Measurements taken during the 10-rank T4a/T4b runs varied by +-30 %
+between identical runs, so they cannot be used for the gates.
+
+**PENDING (next quiet window, lead):**
+- the wall-clock medians of the final build (gates: level 0 +-5 %,
+  level 1 <= 2 %, level 2 <= 15 %);
+- test_diagnostics np4;
+- the np4 unit battery.
+
+Run them unchanged with
+`/home/jonas/bin/cfenv sys bash bench/task5_acceptance.sh`. It writes
+run/task5_acceptance.log and run/overhead.txt.
+
+Already passed on the final build, serially:
+- test_diagnostics np1: level-3 records, level 0 writes nothing, the CF|
+  lines are identical to level 0, T3 force statistics including a
+  restart;
+- Test-convergenceMonitor;
+- test_env (Test-precision, all apps);
+- Test-block4Ops;
+- Test-blockFGMRES.
+
+An earlier build of this branch also passed test_diagnostics np4 (quiet
+window, before item b).
+
+**Known issue found on the way (not caused by TASK 5):** T0 np4 is not
+reproducible from run to run. In three identical runs of the pre-TASK-5
+main-install binary, the iteration-1 linIters were 7/9/9 and rho
+differed. The level-0 equality check of test_diagnostics is therefore
+asserted serially only.

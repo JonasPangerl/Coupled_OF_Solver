@@ -182,6 +182,11 @@ private:
             status lastStatus_;
             doubleScalar lastMaxAlpha_;
 
+            //- Diagnostics: coefficients of the last least-squares solve
+            //  and the reason of the last flush (static string)
+            List<doubleScalar> lastGamma_;
+            const char* lastFlushReason_;
+
 
     // Private Member Functions
 
@@ -227,6 +232,23 @@ public:
         label nFlushed() const noexcept { return nFlushed_; }
         status lastStatus() const noexcept { return lastStatus_; }
         doubleScalar lastMaxAlpha() const noexcept { return lastMaxAlpha_; }
+        doubleScalar maxAlpha() const noexcept { return maxAlpha_; }
+
+        //- Coefficients gamma of the last least-squares solve
+        const List<doubleScalar>& lastGamma() const noexcept
+        {
+            return lastGamma_;
+        }
+
+        //- Reason given to the last flush that cleared a history
+        const char* lastFlushReason() const noexcept
+        {
+            return lastFlushReason_;
+        }
+
+        //- Condition estimate of the history QR: max|R_jj|/min|R_jj|
+        //  (1 for one column, 0 for an empty history; no reduction)
+        doubleScalar conditionEstimate() const;
 
         //- Name of a status for the log
         static word statusName(const status s);
@@ -251,8 +273,9 @@ public:
         //  un-extrapolated state y_k into U, p and flush the history
         void reject(volVectorField& U, volScalarField& p);
 
-        //- Clear the history (CFL cut, remediation change, rollback)
-        void flush();
+        //- Clear the history (CFL cut, remediation change, rollback);
+        //  reason: static string kept for the diagnostics
+        void flush(const char* reason = "internal");
 
         //- Effective settings
         void writeSettings(dictionary& dict) const;

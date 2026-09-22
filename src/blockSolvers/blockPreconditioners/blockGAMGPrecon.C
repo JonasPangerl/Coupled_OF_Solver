@@ -53,6 +53,7 @@ Foam::blockGAMGPrecon::blockGAMGPrecon
 
 void Foam::blockGAMGPrecon::update()
 {
+    gamg_.setDiagnostics(solver_.diag());
     gamg_.update();
 }
 
@@ -63,6 +64,7 @@ void Foam::blockGAMGPrecon::precondition
     const blockScalarUList& r
 ) const
 {
+    gamg_.setDiagnostics(solver_.diag());
     gamg_.apply(w, r);
 }
 

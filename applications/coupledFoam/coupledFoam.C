@@ -56,6 +56,13 @@ Description
 #include "gamgAutoTune.H"
 #include "anderson.H"
 #include "adaptiveTolerance.H"
+#include "diagnostics.H"
+#include "mixedFvPatchFields.H"
+#include "SolverPerformance.H"
+#include "Pair.H"
+#include <algorithm>
+#include <limits>
+#include <vector>
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -173,6 +180,16 @@ int main(int argc, char *argv[])
     convergenceMonitor conv(coupledDict);
     coupledState state(mesh, coupledDict);
 
+    // Deep diagnostics (TASK 5, D-045): level 0 = off. Every hook below is
+    // guarded with diag.active(n); at level 0 the solver and the assembler
+    // get no diagnostics object and take no clock readings.
+    diagnostics diag(coupledDict);
+    if (diag.active(1))
+    {
+        linSolver->setDiagnostics(&diag);
+        assembler.setTiming(true);
+    }
+
     volScalarField* kPtr = mesh.getObjectPtr<volScalarField>("k");
     volScalarField* omegaPtr = mesh.getObjectPtr<volScalarField>("omega");
     volScalarField* nutPtr = mesh.getObjectPtr<volScalarField>("nut");
@@ -223,6 +240,12 @@ int main(int argc, char *argv[])
         if (tuner)
         {
             eff.add("autoTune", tuner->settings());
+        }
+        {
+            dictionary dg;
+            dg.add("level", diag.level());
+            dg.add("echo", diag.echo());
+            eff.add("diagnostics", dg);
         }
 
         Info<< nl << "coupledFoam: effective settings" << nl
@@ -343,12 +366,95 @@ int main(int argc, char *argv[])
         }
     }
 
+    // * * * * * * * * * * * * * Diagnostics set-up * * * * * * * * * * * * * //
+
+    const blockGAMGPrecon* gpDiag =
+        dynamic_cast<const blockGAMGPrecon*>(linSolver->preconditioner());
+    diagPhase phase;
+    label diagHierVersion = -1;
+    doubleScalar diagWritePrev = 0;
+
+    // Level 3: inflow/outflow state of the faces of mixed-type patches
+    // (inletOutlet, freestream*, ...), rank-local
+    labelList bcPatches;
+    List<boolList> bcOut;
+    bool bcInit = false;
+
+    if (diag.active(1))
+    {
+        diagJson h;
+        h.beginObject();
+        h.add("type", "header");
+        h.add("format", label(1));
+        h.add("solver", "coupledFoam");
+        h.add("level", diag.level());
+        h.add("rank", label(UPstream::myProcNo()));
+        h.add("nProcs", label(UPstream::nProcs()));
+        h.add("nCellsLocal", label(mesh.nCells()));
+        h.add("restarted", restarted);
+        h.add("startIter", iter);
+        h.add("case", std::string(runTime.globalPath()));
+        // Fields evaluated on this rank only (no reduction added, TASK
+        // 5.4): merge over the rank files (bench/diag_tools.py)
+        h.beginArray("localKeys");
+        for
+        (
+            const char* k
+          : {
+                "residuals.massErrMax", "residuals.massErrSum",
+                "controls.dt", "turbulence.nBoundK",
+                "turbulence.nBoundOmega", "timings", "memory",
+                "controls.trials.violU", "controls.trials.violP",
+                "bcFlips", "gamgSetup"
+            }
+        )
+        {
+            h.valueRaw("\"" + std::string(k) + "\"");
+        }
+        h.endArray();
+        h.endObject();
+        diag.open(runTime, restarted, h.str());
+
+        if (diag.active(3))
+        {
+            DynamicList<label> pl;
+            forAll(mesh.boundary(), patchi)
+            {
+                if (mesh.boundary()[patchi].coupled())
+                {
+                    continue;
+                }
+                if
+                (
+                    isA<mixedFvPatchVectorField>(U.boundaryField()[patchi])
+                 || isA<mixedFvPatchScalarField>(p.boundaryField()[patchi])
+                )
+                {
+                    pl.append(patchi);
+                }
+            }
+            bcPatches.transfer(pl);
+            bcOut.resize(bcPatches.size());
+        }
+
+        Info<< "coupledFoam: diagnostics level " << diag.level()
+            << " -> " << runTime.globalPath()/"diagnostics" << endl;
+    }
+
     // * * * * * * * * * * * * * * * Helpers * * * * * * * * * * * * * * * * //
 
     const Vector<label>& solD = mesh.solutionD();
 
     auto stateDict = [&]() -> dictionary
     {
+        // Entries are formatted with IOstream::defaultPrecision() when they
+        // are created (6 digits by default): round-trip precision here, or
+        // the restart scalars (CFL, R1, Uref, ...) are quantised before
+        // coupledState writes them with max_digits10 (D-034, D-045)
+        const unsigned oldPrecision = IOstream::defaultPrecision
+        (
+            std::numeric_limits<doubleScalar>::max_digits10
+        );
         dictionary st;
         st.set("iter", iter);
         st.set("startupDone", startupDone);
@@ -366,6 +472,7 @@ int main(int argc, char *argv[])
         }
         // Anderson history deliberately not part of the state (D-026)
         st.set("refinementHistory", labelList());
+        IOstream::defaultPrecision(oldPrecision);
         return st;
     };
 
@@ -415,6 +522,12 @@ int main(int argc, char *argv[])
         return nCapped;
     };
 
+    // Force-coefficient window statistics per iteration (summary.json)
+    DynamicList<label> forceHistIter;
+    List<DynamicList<doubleScalar>> forceHistMean(3);
+    List<DynamicList<doubleScalar>> forceHistRms(3);
+    List<DynamicList<doubleScalar>> forceHistDrift(3);
+
     label nCflCutsTotal = 0;
     label linFails = 0;
     bool converged = false;
@@ -432,6 +545,24 @@ int main(int argc, char *argv[])
         clockTime iterTimer;
         scalar tAsm = 0, tSolve = 0, tTurb = 0;
 
+        // Diagnostics state of this iteration (filled only if active)
+        const scalar CFLstart = ptc.CFL();
+        const label nFlushedStart = aa.nFlushed();
+        label nSenChecks = 0;
+        doubleScalar tFlux = 0;
+        doubleScalar tDiagMain = 0;
+        doubleScalar dtMin = 0, dtMed = 0, dtMax = 0;
+        doubleScalar massErrMax = 0, massErrSum = 0;
+        label nBoundK = 0, nBoundOmega = 0;
+        bool turbSolved = false;
+        diagJson trialsJ;
+        if (diag.active(1))
+        {
+            diag.beginIteration();
+            assembler.resetTimes();
+            trialsJ.beginArray();
+        }
+
         mrfc.update();
         MRF.correctBoundaryVelocity(U);
 
@@ -443,7 +574,8 @@ int main(int argc, char *argv[])
         }
 
         const volScalarField nuEff("nuEff", turbulence->nuEff());
-        const scalarField beta(rem.beta(startupDone ? 1.0 : 0.0));
+        const scalar betaGlobal = (startupDone ? 1.0 : 0.0);
+        const scalarField beta(rem.beta(betaGlobal));
         const scalarField cflF(rem.cflFactor());
 
         blockScalarList dx(blockDim*mesh.nCells(), Zero);
@@ -469,6 +601,31 @@ int main(int argc, char *argv[])
             );
             assembler.assembleContinuity(rDTV);
             tAsm += ta.elapsedTime();
+
+            if (diag.active(1))
+            {
+                // Local pseudo-time step dt_P = V_P/(V_P/dt_P) after the
+                // local limit: min/median/max on this rank
+                const doubleScalar t0 = diagnostics::clock();
+                const scalarField& V = mesh.V();
+                std::vector<doubleScalar> dts(std::size_t(rDTV.size()));
+                forAll(rDTV, celli)
+                {
+                    // GUARD: rDeltaTV >= VSMALL by construction (5.4)
+                    dts[std::size_t(celli)] =
+                        V[celli]/max(rDTV[celli], VSMALL);
+                }
+                if (!dts.empty())
+                {
+                    const auto mm = std::minmax_element(dts.begin(), dts.end());
+                    dtMin = *mm.first;
+                    dtMax = *mm.second;
+                    const auto mid = std::ptrdiff_t(dts.size()/2);
+                    std::nth_element(dts.begin(), dts.begin() + mid, dts.end());
+                    dtMed = dts[std::size_t(mid)];
+                }
+                tDiagMain += diagnostics::clock() - t0;
+            }
 
             Rraw = assembler.residualL2();
 
@@ -560,6 +717,33 @@ int main(int argc, char *argv[])
 
             omega = (solveFailed ? 0 : ls.omega(dx));
 
+            if (diag.active(1))
+            {
+                const doubleScalar t0 = diagnostics::clock();
+                trialsJ.beginObject();
+                trialsJ.add("CFL", doubleScalar(ptc.CFL()));
+                trialsJ.add("eta", doubleScalar(eta));
+                trialsJ.add("linIts", perf.nIterations);
+                trialsJ.add("linConverged", perf.converged);
+                trialsJ.add("linFinal", doubleScalar(perf.finalResidual));
+                trialsJ.add("failed", solveFailed);
+                trialsJ.add("omega", doubleScalar(omega));
+                if (diag.active(3) && !solveFailed)
+                {
+                    // Physicality violations (rank-local) at the full step
+                    // and at the line-search omega
+                    label nU = 0, np = 0;
+                    ls.countViolations(dx, 1, nU, np);
+                    trialsJ.add("violU", nU);
+                    trialsJ.add("violP", np);
+                    ls.countViolations(dx, omega, nU, np);
+                    trialsJ.add("violUAtOmega", nU);
+                    trialsJ.add("violPAtOmega", np);
+                }
+                trialsJ.endObject();
+                tDiagMain += diagnostics::clock() - t0;
+            }
+
             if
             (
                 (solveFailed || omega < ls.omegaMin())
@@ -583,7 +767,7 @@ int main(int argc, char *argv[])
             {
                 omega = ls.omegaMin();
                 rem.markDynamic(ls.offendingCells(dx));
-                aa.flush();
+                aa.flush("omegaMin");
             }
             break;
         }
@@ -591,7 +775,7 @@ int main(int argc, char *argv[])
         // Anderson history is invalid after a CFL change (B5)
         if (cuts > 0 || skipStep)
         {
-            aa.flush();
+            aa.flush(skipStep ? "skipStep" : "cflCut");
         }
 
         // GUARD: R1 >= VSMALL before division (9.2)
@@ -651,6 +835,7 @@ int main(int argc, char *argv[])
             {
                 U.correctBoundaryConditions();
                 p.correctBoundaryConditions();
+                ++nSenChecks;
                 const sentinel::checkResult chkA =
                     sen.check(U, p, kPtr, omegaPtr, ls.Uref(), ls.pref());
                 if (!chkA.ok)
@@ -666,15 +851,52 @@ int main(int argc, char *argv[])
         // Flux with the explicit Rhie-Chow term of the solved assembly: the
         // continuity row that was solved, evaluated at the new (U, p)
         // (conservative to the solver tolerance for omega = 1)
-        assembler.rc().updateFlux(phi, U, p, assembler.noc(), false);
-        MRF.makeRelative(phi);
+        if (diag.active(1))
+        {
+            const doubleScalar t0 = diagnostics::clock();
+            assembler.rc().updateFlux(phi, U, p, assembler.noc(), false);
+            MRF.makeRelative(phi);
+            tFlux = diagnostics::clock() - t0;
+
+            // Cell mass error sum_f phi_f of the new flux (rank-local)
+            const doubleScalar t1 = diagnostics::clock();
+            scalarField div(mesh.nCells(), Zero);
+            const labelUList& own = mesh.owner();
+            const labelUList& nei = mesh.neighbour();
+            const scalarField& phiI = phi.primitiveField();
+            forAll(own, facei)
+            {
+                div[own[facei]] += phiI[facei];
+                div[nei[facei]] -= phiI[facei];
+            }
+            forAll(phi.boundaryField(), patchi)
+            {
+                const labelUList& fc = mesh.boundary()[patchi].faceCells();
+                const scalarField& pp = phi.boundaryField()[patchi];
+                forAll(fc, pf)
+                {
+                    div[fc[pf]] += pp[pf];
+                }
+            }
+            for (const scalar d : div)
+            {
+                massErrMax = max(massErrMax, doubleScalar(mag(d)));
+                massErrSum += mag(d);
+            }
+            tDiagMain += diagnostics::clock() - t1;
+        }
+        else
+        {
+            assembler.rc().updateFlux(phi, U, p, assembler.noc(), false);
+            MRF.makeRelative(phi);
+        }
 
         // --- Sentinel (9.3)
         bool rolledBack = false;
         auto rollback = [&](const sentinel::checkResult& chk)
         {
             sen.restore(U, p, phi, kPtr, omegaPtr, nutPtr);
-            aa.flush();
+            aa.flush("rollback");
             ptc.decrease(sen.cflFactor());
             rem.markDynamic(chk.offending);
             rolledBack = true;
@@ -704,6 +926,7 @@ int main(int argc, char *argv[])
         };
 
         {
+            ++nSenChecks;
             const sentinel::checkResult chk =
                 sen.check(U, p, kPtr, omegaPtr, ls.Uref(), ls.pref());
             if (!chk.ok)
@@ -724,16 +947,38 @@ int main(int argc, char *argv[])
             if (rem.dynamicVersion() != dynVersion)
             {
                 // Membership changed (beta and dt of those cells change)
-                aa.flush();
+                aa.flush("dynamicSet");
             }
 
             // --- Turbulence, segregated (5.8)
             clockTime tt;
             laminarTransport.correct();
             turbulence->correct();
+            turbSolved = true;
+            if (diag.active(1))
+            {
+                // Cells the bounds below will modify (rank-local)
+                const doubleScalar t0 = diagnostics::clock();
+                if (kPtr)
+                {
+                    for (const scalar v : kPtr->primitiveField())
+                    {
+                        nBoundK += (v < kMin ? 1 : 0);
+                    }
+                }
+                if (omegaPtr)
+                {
+                    for (const scalar v : omegaPtr->primitiveField())
+                    {
+                        nBoundOmega += (v < omegaMinBound ? 1 : 0);
+                    }
+                }
+                tDiagMain += diagnostics::clock() - t0;
+            }
             nNutCapped = applyBounds();
             tTurb = tt.elapsedTime();
 
+            ++nSenChecks;
             const sentinel::checkResult chk =
                 sen.check(U, p, kPtr, omegaPtr, ls.Uref(), ls.pref());
             if (!chk.ok)
@@ -768,7 +1013,7 @@ int main(int argc, char *argv[])
                 startupDone = true;
                 // beta 0 -> 1 changes the discretisation: the Anderson
                 // history refers to the upwind operator
-                aa.flush();
+                aa.flush("startupEnd");
                 Info<< "coupledFoam: start-up phase done at iteration "
                     << iter << " (R " << R << ")" << endl;
             }
@@ -786,7 +1031,7 @@ int main(int argc, char *argv[])
             if (tuner->record(iter, useRho ? scalar(perf.rho) : scalar(-1)))
             {
                 // Different preconditioner from the next solve on
-                aa.flush();
+                aa.flush("autoTune");
             }
         }
 
@@ -823,15 +1068,338 @@ int main(int argc, char *argv[])
         if (conv.haveForces())
         {
             Info<< " Cd=" << conv.Cd() << " Cl=" << conv.Cl();
+            // Window mean and RMS fluctuation (D-045 b), appended at the end
+            // so that existing parsers of the CF| line keep working
+            forceHistIter.append(iter);
+            for (label ci = 0; ci < conv.nCoeffs(); ++ci)
+            {
+                const convergenceMonitor::coeffStats st = conv.stats(ci);
+                const char* cn = convergenceMonitor::coeffName(ci);
+                Info<< ' ' << cn << "Mean=" << st.mean
+                    << ' ' << cn << "Rms=" << st.rms;
+                forceHistMean[ci].append(st.mean);
+                forceHistRms[ci].append(st.rms);
+                forceHistDrift[ci].append(st.drift);
+            }
         }
         Info<< endl;
+
+        // --- Diagnostics record (TASK 5), no collectives at any level here
+        if (diag.active(1))
+        {
+            const doubleScalar tRec0 = diagnostics::clock();
+            trialsJ.endArray();
+
+            diagJson j;
+            j.beginObject();
+            j.add("type", "iter");
+            j.add("iter", iter);
+            j.add
+            (
+                "phase",
+                phase.classify
+                (
+                    betaGlobal, R, conv.residualTol(),
+                    conv.forceCriterionRatio()
+                )
+            );
+            j.add("wallTime", doubleScalar(runTimer.elapsedTime()));
+
+            j.beginObject("residuals");
+            j.add("R", doubleScalar(R));
+            j.add("Rraw", doubleScalar(Rraw));
+            j.add("rU", doubleScalar(assembler.rU()));
+            j.add("rp", doubleScalar(assembler.rp()));
+            j.add("R1", doubleScalar(R1));
+            j.add("normFactor", doubleScalar(assembler.normFactor()));
+            j.add("linInitial", doubleScalar(perf.initialResidual));
+            j.add("linFinal", doubleScalar(perf.finalResidual));
+            j.add("linIts", perf.nIterations);
+            j.add("linRestarts", perf.nRestarts);
+            j.add("linConverged", perf.converged);
+            j.add("linBreakdown", perf.breakdown);
+            j.add("rho", doubleScalar(perf.rho));
+            j.add("massErrMax", massErrMax);
+            j.add("massErrSum", massErrSum);
+            j.endObject();
+
+            j.beginObject("controls");
+            j.add("CFL", doubleScalar(ptc.CFL()));
+            j.add("CFLstart", doubleScalar(CFLstart));
+            // GUARD: CFL >= CFLmin > 0
+            j.add
+            (
+                "growth",
+                doubleScalar(ptc.CFL()/max(CFLstart, VSMALL))
+            );
+            j.add("strategy", std::string(ptc.strategyName()));
+            j.add("hold", ptc.holdRemaining());
+            j.add("nLocLim", nLocLim);
+            j.beginObject("dt");
+            j.add("min", dtMin);
+            j.add("median", dtMed);
+            j.add("max", dtMax);
+            j.endObject();
+            j.add("eta", doubleScalar(eta));
+            j.add("etaRaw", doubleScalar(ew.lastRaw()));
+            j.add("etaClip", ew.lastClip());
+            j.add("omega", doubleScalar(omega));
+            j.add("cuts", cuts);
+            j.add("skipStep", skipStep);
+            j.addRaw("trials", trialsJ.str());
+            j.beginObject("sentinel");
+            j.add("checks", nSenChecks);
+            j.add("rolledBack", rolledBack);
+            j.add("nRollbacks", sen.nRollbacks());
+            j.add("consecutive", sen.consecutive());
+            j.endObject();
+            j.beginObject("remediation");
+            j.add("nStat", rem.nStatic());
+            j.add("nDyn", rem.nDynamic());
+            j.add("version", rem.dynamicVersion());
+            j.endObject();
+            j.beginObject("anderson");
+            j.add("enabled", aa.enabled());
+            if (aa.enabled())
+            {
+                doubleScalar g2 = 0;
+                for (const doubleScalar g : aa.lastGamma())
+                {
+                    g2 += g*g;
+                }
+                j.add("status", andersonStatus);
+                j.add("m", aa.m());
+                j.add("nHistory", aa.nHistory());
+                j.add("gammaNorm", std::sqrt(g2));
+                j.add("maxAbsGamma", aa.lastMaxAlpha());
+                const label nFl = aa.nFlushed() - nFlushedStart;
+                j.add("flushes", nFl);
+                if (nFl > 0)
+                {
+                    j.add("flushReason", aa.lastFlushReason());
+                }
+                else
+                {
+                    j.addNull("flushReason");
+                }
+            }
+            j.endObject();
+            j.add("beta", doubleScalar(betaGlobal));
+            j.add("startupDone", startupDone);
+            j.endObject();
+
+            j.beginObject("turbulence");
+            for (const char* fld : {"k", "omega"})
+            {
+                Pair<SolverPerformance<scalar>> sp;
+                if
+                (
+                    turbSolved
+                 && mesh.data().solverPerformanceDict().readIfPresent(word(fld), sp)
+                )
+                {
+                    j.beginObject(fld);
+                    j.add("init", doubleScalar(sp.first().initialResidual()));
+                    j.add("final", doubleScalar(sp.second().finalResidual()));
+                    j.add("its", label(sp.second().nIterations()));
+                    j.endObject();
+                }
+                else
+                {
+                    j.addNull(fld);
+                }
+            }
+            j.add("nBoundK", nBoundK);
+            j.add("nBoundOmega", nBoundOmega);
+            j.add("nNutCapped", nNutCapped);
+            j.add("nClamped", nClamped);
+            j.endObject();
+
+            if (conv.haveForces())
+            {
+                j.beginObject("forces");
+                j.add("window", conv.rmsWindow());
+                j.add("driftEnabled", conv.driftEnabled());
+                j.add("driftConverged", conv.driftConverged());
+                for (label ci = 0; ci < conv.nCoeffs(); ++ci)
+                {
+                    const convergenceMonitor::coeffStats st = conv.stats(ci);
+                    j.beginObject(convergenceMonitor::coeffName(ci));
+                    j.add("last", doubleScalar(conv.last(ci)));
+                    j.add("mean", doubleScalar(st.mean));
+                    j.add("rms", doubleScalar(st.rms));
+                    j.add("drift", doubleScalar(st.drift));
+                    j.add("n", st.n);
+                    j.endObject();
+                }
+                j.endObject();
+            }
+            else
+            {
+                j.addNull("forces");
+            }
+
+            {
+                const coupledAssembler::timings& at = assembler.times();
+                const doubleScalar tKrylov =
+                    tSolve - diag.tPrecSetup() - diag.tPrecApply();
+                j.beginObject("timings");
+                j.add("tAsm", doubleScalar(tAsm));
+                j.add("tMomentumOps", at.momentumOps);
+                j.add("tBoundary", at.boundary);
+                j.add("tContinuity", at.continuity);
+                j.add("tRhieChow", at.rhieChow);
+                j.add("tFlux", tFlux);
+                j.add("tSolve", doubleScalar(tSolve));
+                j.add("tPrecSetup", diag.tPrecSetup());
+                j.add("tPrecApply", diag.tPrecApply());
+                j.add("nPrecSetup", diag.nPrecSetup());
+                j.add("nPrecApply", diag.nPrecApply());
+                j.add("tKrylov", tKrylov);
+                j.add("tTurb", doubleScalar(tTurb));
+                // tDiag: diagnostics work of this iteration so far (hooks
+                // in the solver/GAMG, the evaluations here, building this
+                // record) plus the serialisation/write of the previous
+                // record (tDiagWritePrev)
+                j.add
+                (
+                    "tDiag",
+                    diag.tDiag() + tDiagMain + diagWritePrev
+                  + (diagnostics::clock() - tRec0)
+                );
+                j.add("tDiagWritePrev", diagWritePrev);
+                j.add("tIter", doubleScalar(iterTimer.elapsedTime()));
+                j.add("tWall", doubleScalar(runTime.elapsedClockTime()));
+                j.endObject();
+            }
+
+            j.beginObject("gamg");
+            if (gpDiag)
+            {
+                const blockGAMG& g = gpDiag->gamg();
+                const bool changed = (g.hierarchyVersion() != diagHierVersion);
+                j.add("nLevels", g.nLevels());
+                j.add("Cop", doubleScalar(g.operatorComplexity()));
+                j.add("cycle", std::string(blockGAMG::cycleName(g.cycleType())));
+                j.add("nPostSweeps", g.nPostSweeps());
+                j.add("setups", diag.nPrecSetup());
+                j.add("reagglomerated", changed && diagHierVersion >= 0);
+                j.add("hierarchyVersion", g.hierarchyVersion());
+                if (changed)
+                {
+                    j.beginObject("hierarchy");
+                    j.add("nLevels", g.nLevels());
+                    j.addList("cellsPerLevel", g.globalCellsPerLevel());
+                    j.addList("ranksPerLevel", g.ranksPerLevel());
+                    List<doubleScalar> ratios(g.ratios().size());
+                    forAll(ratios, i)
+                    {
+                        ratios[i] = g.ratios()[i];
+                    }
+                    j.addList("ratios", ratios);
+                    j.add("Cop", doubleScalar(g.operatorComplexity()));
+                    j.add("mergeLevels", g.mergeLevels());
+                    j.add("denseCoarsest", g.denseCoarsest());
+                    j.endObject();
+                    diagHierVersion = g.hierarchyVersion();
+                }
+                else
+                {
+                    j.add("hierarchy", "unchanged");
+                }
+            }
+            j.endObject();
+
+            j.beginObject("memory");
+            {
+                // getrusage updates the peak lazily: never below current
+                const label rss = diagnostics::currentRSSkB();
+                j.add("rssKB", rss);
+                j.add("peakRssKB", max(rss, diagnostics::peakRSSkB()));
+            }
+            j.endObject();
+
+            j.endObject();
+
+            // --- Level 3 items (rank-local)
+            if (diag.active(3))
+            {
+                diagJson& e = diag.ext();
+
+                // f. inflow/outflow switches of mixed-type patch faces
+                e.beginObject("bcFlips");
+                forAll(bcPatches, i)
+                {
+                    const label patchi = bcPatches[i];
+                    const scalarField& pp = phi.boundaryField()[patchi];
+                    boolList& prev = bcOut[i];
+                    label nFlip = 0, nOut = 0;
+                    if (!bcInit)
+                    {
+                        prev.resize(pp.size());
+                    }
+                    forAll(pp, pf)
+                    {
+                        const bool out = (pp[pf] > 0);
+                        nOut += (out ? 1 : 0);
+                        if (bcInit && out != prev[pf])
+                        {
+                            ++nFlip;
+                        }
+                        prev[pf] = out;
+                    }
+                    e.beginObject(mesh.boundary()[patchi].name().c_str());
+                    e.add("nFaces", label(pp.size()));
+                    e.add("nOutflow", nOut);
+                    if (bcInit)
+                    {
+                        e.add("nFlips", nFlip);
+                    }
+                    else
+                    {
+                        e.addNull("nFlips");
+                    }
+                    e.endObject();
+                }
+                bcInit = true;
+                e.endObject();
+
+                // g. Anderson internals
+                if (aa.enabled())
+                {
+                    e.beginObject("andersonInternals");
+                    e.add("conditionEstimate", aa.conditionEstimate());
+                    List<doubleScalar> ag(aa.lastGamma().size());
+                    forAll(ag, i)
+                    {
+                        ag[i] = std::fabs(aa.lastGamma()[i]);
+                    }
+                    e.addList("absGamma", ag);
+                    e.add("maxAlpha", aa.maxAlpha());
+                    e.add
+                    (
+                        "maxAlphaClip",
+                        andersonStatus == label(anderson::status::skipped)
+                     && aa.lastMaxAlpha() > aa.maxAlpha()
+                    );
+                    e.add("nSkippedTotal", aa.nSkipped());
+                    e.endObject();
+                }
+            }
+
+            const doubleScalar tW0 = diagnostics::clock();
+            diag.writeRecord(j.str());
+            diagWritePrev = diagnostics::clock() - tW0;
+        }
 
         // --- Write
         if (!rolledBack && conv.converged(R))
         {
             converged = true;
             Info<< "coupledFoam: converged at iteration " << iter
-                << " (R " << R << ")" << endl;
+                << " (R " << R << ")"
+                << (conv.driftConverged() ? ", force-coefficient drift rule" : "")
+                << endl;
             // As native solvers: write, end, and let runTime.loop() run the
             // function objects for the final state
             runTime.writeAndEnd();
@@ -898,6 +1466,39 @@ int main(int argc, char *argv[])
         {
             j.add("Cd", conv.Cd());
             j.add("Cl", conv.Cl());
+
+            // Window statistics (D-045 b): final values and histories
+            diagJson fs;
+            fs.beginObject();
+            fs.add("window", conv.rmsWindow());
+            fs.add("driftEnabled", conv.driftEnabled());
+            fs.add("driftConverged", conv.driftConverged());
+            for (label ci = 0; ci < conv.nCoeffs(); ++ci)
+            {
+                const convergenceMonitor::coeffStats st = conv.stats(ci);
+                fs.beginObject(convergenceMonitor::coeffName(ci));
+                fs.add("last", doubleScalar(conv.last(ci)));
+                fs.add("mean", doubleScalar(st.mean));
+                fs.add("rms", doubleScalar(st.rms));
+                fs.add("drift", doubleScalar(st.drift));
+                fs.add("n", st.n);
+                fs.endObject();
+            }
+            fs.endObject();
+            j.addRaw("forceStats", fs.str());
+
+            diagJson fh;
+            fh.beginObject();
+            fh.addList("iter", forceHistIter);
+            for (label ci = 0; ci < conv.nCoeffs(); ++ci)
+            {
+                const std::string cn(convergenceMonitor::coeffName(ci));
+                fh.addList((cn + "Mean").c_str(), forceHistMean[ci]);
+                fh.addList((cn + "Rms").c_str(), forceHistRms[ci]);
+                fh.addList((cn + "Drift").c_str(), forceHistDrift[ci]);
+            }
+            fh.endObject();
+            j.addRaw("forceHistory", fh.str());
         }
         if (tuner)
         {

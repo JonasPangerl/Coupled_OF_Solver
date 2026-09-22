@@ -18,6 +18,7 @@
 #include "addToRunTimeSelectionTable.H"
 #include "pairGAMGAgglomeration.H"
 #include <algorithm>
+#include <vector>
 #include <cmath>
 #include <cstdint>
 
@@ -382,7 +383,9 @@ Foam::blockGAMG::blockGAMG
     useDenseLU_(false),
     denseLU_(),
     densePivot_(),
-    nCoarsestIters_(0)
+    nCoarsestIters_(0),
+    hierarchyVersion_(0),
+    diag_(nullptr)
 {
     // Effective defaults written back so that the effective-settings print
     // shows every value actually used
@@ -465,6 +468,7 @@ Foam::blockGAMG::~blockGAMG()
 
 void Foam::blockGAMG::buildHierarchy()
 {
+    ++hierarchyVersion_;
     agglomerate();
 
     const GAMGAgglomeration& agg = *aggPtr_;
@@ -1623,6 +1627,10 @@ void Foam::blockGAMG::solveCoarsest
         x = Zero;
         const blockSolverPerformance perf = coarsestSolver_->solve(x, b);
         nCoarsestIters_ = perf.nIterations;
+        if (diagOn(2))
+        {
+            diag_->coarseSolve(perf.nIterations, perf.finalResidual, false);
+        }
         return;
     }
 
@@ -1663,6 +1671,163 @@ void Foam::blockGAMG::solveCoarsest
         x[i] = narrow(y[i]);
     }
     nCoarsestIters_ = 0;
+    if (diagOn(2))
+    {
+        diag_->coarseSolve(0, 0, true);
+    }
+}
+
+
+void Foam::blockGAMG::smoothLogged
+(
+    const label l,
+    blockScalarUList& x,
+    const blockScalarUList& b,
+    const label nSweeps,
+    DynamicList<doubleScalar>& norms
+) const
+{
+    for (label sweep = 0; sweep < nSweeps; ++sweep)
+    {
+        smoothers_[l].smooth(x, b, 1);
+        norms.append(residualNorm(l, x, b));
+    }
+}
+
+
+void Foam::blockGAMG::residualSums
+(
+    const label l,
+    const blockScalarUList& x,
+    const blockScalarUList& b,
+    reduceScalar& bb,
+    reduceScalar& rr
+) const
+{
+    const blockLduMatrix4& A = matrixLevel(l);
+    blockScalarList& r = r_[l];
+    A.Amul(r, x);
+
+    const label n = A.nRows();
+    blockScalar* __restrict__ rPtr = r.data();
+    const blockScalar* __restrict__ bPtr = b.cdata();
+    reduceScalar sb = 0;
+    reduceScalar sr = 0;
+    #pragma omp simd reduction(+:sb, sr)
+    for (label i = 0; i < n; ++i)
+    {
+        const blockScalar ri = bPtr[i] - rPtr[i];
+        rPtr[i] = ri;
+        sb += toDouble(bPtr[i])*toDouble(bPtr[i]);
+        sr += toDouble(ri)*toDouble(ri);
+    }
+    bb = sb;
+    rr = sr;
+}
+
+
+Foam::doubleScalar Foam::blockGAMG::residualNorm
+(
+    const label l,
+    const blockScalarUList& x,
+    const blockScalarUList& b
+) const
+{
+    const doubleScalar t0 = diagnostics::clock();
+    reduceScalar s2[2] = {0, 0};
+    residualSums(l, x, b, s2[0], s2[1]);
+    const reduceScalar rr =
+        doubleReduce::parSum(s2[1], matrixLevel(l).comm());
+    diag_->addDiagTime(diagnostics::clock() - t0);
+    return std::sqrt(rr);
+}
+
+
+void Foam::blockGAMG::diagOperatorStats() const
+{
+    // Per scalar row i of the 4x4-block system:
+    //   dominance_i = |a_ii| / sum_(j != i) |a_ij|
+    // over the diagonal block and the internal-face blocks (processor
+    // interface coefficients excluded); rows without off-diagonal entries
+    // (e.g. the pressure-reference row) are counted separately.
+    for (label l = 0; l <= L_; ++l)
+    {
+        if (!hasLevel(l) || (l > 0 && !coarse_.set(l - 1)))
+        {
+            continue;
+        }
+        const blockLduMatrix4& A = matrixLevel(l);
+        const label nC = A.nCells();
+        const label nR = blockDim*nC;
+        List<doubleScalar> dg(nR, Zero);
+        List<doubleScalar> off(nR, Zero);
+
+        const blockScalar* D = A.diag().cdata();
+        for (label c = 0; c < nC; ++c)
+        {
+            for (label r = 0; r < blockDim; ++r)
+            {
+                for (label k = 0; k < blockDim; ++k)
+                {
+                    const doubleScalar a =
+                        std::abs(toDouble(D[c*blockSize + r*blockDim + k]));
+                    if (k == r)
+                    {
+                        dg[c*blockDim + r] = a;
+                    }
+                    else
+                    {
+                        off[c*blockDim + r] += a;
+                    }
+                }
+            }
+        }
+
+        const labelUList& lo = A.lduAddr().lowerAddr();
+        const labelUList& up = A.lduAddr().upperAddr();
+        const blockScalar* Up = A.upper().cdata();
+        const blockScalar* Lw = A.lower().cdata();
+        forAll(lo, f)
+        {
+            const label P = lo[f];
+            const label N = up[f];
+            for (label r = 0; r < blockDim; ++r)
+            {
+                for (label k = 0; k < blockDim; ++k)
+                {
+                    const label i = f*blockSize + r*blockDim + k;
+                    off[P*blockDim + r] += std::abs(toDouble(Up[i]));
+                    off[N*blockDim + r] += std::abs(toDouble(Lw[i]));
+                }
+            }
+        }
+
+        std::vector<doubleScalar> ratio;
+        ratio.reserve(std::size_t(nR));
+        label nNoOff = 0;
+        for (label i = 0; i < nR; ++i)
+        {
+            if (off[i] > 0)
+            {
+                ratio.push_back(dg[i]/off[i]);
+            }
+            else
+            {
+                ++nNoOff;
+            }
+        }
+
+        doubleScalar dMin = -1;
+        doubleScalar dMed = -1;
+        if (!ratio.empty())
+        {
+            dMin = *std::min_element(ratio.begin(), ratio.end());
+            const auto mid = std::ptrdiff_t(ratio.size()/2);
+            std::nth_element(ratio.begin(), ratio.begin() + mid, ratio.end());
+            dMed = ratio[std::size_t(mid)];
+        }
+        diag_->operatorStats(l, nC, dMin, dMed, nNoOff);
+    }
 }
 
 
@@ -1684,13 +1849,45 @@ void Foam::blockGAMG::cycle
     const label nPre = (l == 0 ? nFinestSweeps_ : nPreSweeps_);
     const label nPost = (l == 0 ? nFinestSweeps_ : nPostSweeps_);
 
+    // Diagnostics (level 2: per-level norms, level 3: per sweep); the
+    // lists stay empty (no allocation) below level 3
+    const bool d2 = diagOn(2);
+    const bool d3 = diagOn(3);
+    doubleScalar preBefore = 0;
+    doubleScalar preAfter = 0;
+    DynamicList<doubleScalar> preSweeps;
+    DynamicList<doubleScalar> postSweeps;
+
     x = Zero;
     if (nPre > 0)
     {
-        smoothers_[l].smooth(x, b, nPre);
+        if (d3)
+        {
+            smoothLogged(l, x, b, nPre, preSweeps);
+        }
+        else
+        {
+            smoothers_[l].smooth(x, b, nPre);
+        }
     }
 
-    A.residual(r_[l], x, b);
+    if (d2)
+    {
+        // The residual of the cycle with ||b|| (x = 0 before smoothing) and
+        // ||r|| in the same pass, one reduction; r_[l] is bit-identical to
+        // A.residual. Only the reduction counts as diagnostics time.
+        reduceScalar s2[2] = {0, 0};
+        residualSums(l, x, b, s2[0], s2[1]);
+        const doubleScalar t0 = diagnostics::clock();
+        doubleReduce::parSum(s2, 2, A.comm());
+        preBefore = std::sqrt(s2[0]);
+        preAfter = std::sqrt(s2[1]);
+        diag_->addDiagTime(diagnostics::clock() - t0);
+    }
+    else
+    {
+        A.residual(r_[l], x, b);
+    }
 
     // Collective within the group if level l+1 is processor-agglomerated
     restrictVector(l, r_[l], b_[l + 1]);
@@ -1771,9 +1968,43 @@ void Foam::blockGAMG::cycle
         prolongAdd(l, ec, x);
     }
 
+    // r_[l] is free from here on (scratch of the diagnostics norms). The
+    // up-leg norms cost two residuals: first application of a solve only
+    // unless upLeg all or level 3 (diagnostics::upLeg)
+    const bool dUp = d2 && diag_->upLeg();
+    const doubleScalar postBefore = (dUp ? residualNorm(l, x, b) : 0);
+
     if (nPost > 0)
     {
-        smoothers_[l].smooth(x, b, nPost);
+        if (d3)
+        {
+            smoothLogged(l, x, b, nPost, postSweeps);
+        }
+        else
+        {
+            smoothers_[l].smooth(x, b, nPost);
+        }
+    }
+
+    if (d2)
+    {
+        const doubleScalar postAfter =
+        (
+            !dUp
+          ? 0
+          : (
+                postSweeps.size()
+              ? postSweeps.last()
+              : (nPost > 0 ? residualNorm(l, x, b) : postBefore)
+            )
+        );
+        const doubleScalar t0 = diagnostics::clock();
+        diag_->levelVisit
+        (
+            l, preBefore, preAfter, dUp, postBefore, postAfter,
+            preSweeps, postSweeps
+        );
+        diag_->addDiagTime(diagnostics::clock() - t0);
     }
 }
 
@@ -1820,13 +2051,25 @@ void Foam::blockGAMG::kstep
         r1[i] = b[i] - a1f*q1[i];
     }
 
+    // Diagnostics: r1norm -1 = not computed (single-step K cycle)
     if (kMaxSteps_ < 2)
     {
+        if (diagOn(2))
+        {
+            diag_->kStep(l, r0norm, -1, kThreshold_*r0norm, false, a1, 0);
+        }
         return;
     }
     const reduceScalar r1norm = doubleReduce::norm2(r1, comm);
     if (r1norm <= kThreshold_*r0norm)
     {
+        if (diagOn(2))
+        {
+            diag_->kStep
+            (
+                l, r0norm, r1norm, kThreshold_*r0norm, false, a1, 0
+            );
+        }
         return;
     }
 
@@ -1851,6 +2094,11 @@ void Foam::blockGAMG::kstep
     for (label i = 0; i < n; ++i)
     {
         e[i] += a2f*z2[i];
+    }
+
+    if (diagOn(2))
+    {
+        diag_->kStep(l, r0norm, r1norm, kThreshold_*r0norm, true, a1, a2);
     }
 }
 
@@ -1950,6 +2198,13 @@ void Foam::blockGAMG::update()
     }
 
     factoriseDense();
+
+    if (diagOn(3))
+    {
+        const doubleScalar t0 = diagnostics::clock();
+        diagOperatorStats();
+        diag_->addDiagTime(diagnostics::clock() - t0);
+    }
 }
 
 
