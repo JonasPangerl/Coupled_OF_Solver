@@ -22,6 +22,17 @@
 #include <cmath>
 #include <cstdint>
 
+namespace
+{
+    //- Amendment C4 agglomerator keyword: pair agglomeration on the p-p
+    //  block magnitudes (= agglomerationWeights pressure)
+    const char* const algebraicPairName = "algebraicPair";
+
+    //- Native agglomerator of the geometric hierarchy that exists before
+    //  the first matrix (replaces algebraicPair in the native selector)
+    const char* const algebraicPairInitial = "faceAreaPair";
+}
+
 // * * * * * * * * * * * * blockGAMGProcAgglomeration  * * * * * * * * * * * //
 // Implemented here (not in its own translation unit) so that the library
 // file list does not change.
@@ -404,6 +415,28 @@ Foam::blockGAMG::blockGAMG
     setDefault("coarsestTolerance", coupledDefaults::coarsestTolerance);
     setDefault("coarsestMaxIter", coupledDefaults::coarsestMaxIter);
     setDefault("cacheAgglomeration", coupledDefaults::cacheAgglomeration);
+
+    // Amendment C4: "agglomerator algebraicPair" = pair agglomeration on the
+    // p-p block (row 3, col 3) magnitudes, which is agglomerationWeights
+    // pressure (D-039). The old keyword stays valid; a contradicting
+    // explicit agglomerationWeights is an error, not silently overridden.
+    if (dict_.get<word>("agglomerator") == algebraicPairName)
+    {
+        if (dict.found("agglomerationWeights") && aggWeights_ != "pressure")
+        {
+            FatalIOErrorInFunction(dict)
+                << "agglomerator " << algebraicPairName
+                << " means agglomerationWeights pressure (p-p block"
+                << " magnitudes), but agglomerationWeights " << aggWeights_
+                << " is given: remove it or set it to pressure"
+                << exit(FatalIOError);
+        }
+        aggWeights_ = "pressure";
+        Info<< "blockGAMG: agglomerator " << algebraicPairName
+            << " = agglomerationWeights pressure (p-p block magnitudes,"
+            << " C4/D-039); faceAreaPair until the first matrix exists"
+            << endl;
+    }
     {
         const word sc
         (
@@ -829,6 +862,11 @@ void Foam::blockGAMG::agglomerate()
         }
         else
         {
+            if (aggDict.get<word>("agglomerator") == algebraicPairName)
+            {
+                // C4: no matrix yet, geometric start-up hierarchy
+                aggDict.set("agglomerator", word(algebraicPairInitial));
+            }
             aggP = &GAMGAgglomeration::New(mesh, aggDict);
         }
         const GAMGAgglomeration& agg = *aggP;
