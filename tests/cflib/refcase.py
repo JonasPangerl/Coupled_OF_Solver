@@ -100,8 +100,10 @@ def reference(template: str, name: str, args: list[str],
     }
     rec.update(native_timing(case / "log.simpleFoam", 1, timing))
     meta.write_text(json.dumps(rec, indent=2))
-    assert rc == 0 and cfcase.solver_ok(case, "simpleFoam"), \
-        f"simpleFoam reference {name} failed"
+    failure = cfcase.run_failure(case, "simpleFoam", rc)
+    assert not failure, (f"simpleFoam reference {name} failed "
+                         f"({'; '.join(failure)}):\n"
+                         + cfcase.log_tail(case, "simpleFoam"))
     return case, rec
 
 
@@ -113,9 +115,19 @@ def coupled(template: str, name: str, args: list[str],
     timing = cfenv.last_timing.as_dict()
     log = case / "log.coupledFoam"
     rows = logs.parse_cf(log) if log.exists() else []
+    # M3: fail loudly with the log tail when the run left nothing to
+    # evaluate (e.g. mpirun refused an invalid --cpu-set: rc 1, no output);
+    # any other failure is flagged in the record for the test's asserts
+    failure = cfcase.run_failure(case, "coupledFoam", rc)
+    tail = cfcase.log_tail(case, "coupledFoam") if failure else None
+    if failure and not rows:
+        raise AssertionError(f"coupledFoam run {name} failed "
+                             f"({'; '.join(failure)}) without output:\n"
+                             f"{tail}")
     summ = logs.coupled_summary(case)
     rec = {
         "solver": "coupledFoam", "rc": rc,
+        "failed": bool(failure), "failure": failure, "logTail": tail,
         "iterations": len(rows),
         "finalR": rows[-1]["R"] if rows else None,
         "fpeTrap": logs.fpe_trapped(log),
