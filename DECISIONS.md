@@ -999,3 +999,18 @@ tests/cflib/case.py set_entry rewrote fvSolution without
 unrelaxed) in every pytest case whose fvSolution it edited (T4/T5 budget
 sets); now fixed for fvSolution. T4 coupledFoam results before this
 commit are invalid.
+
+### D-042 addendum 2 - coupledFoam budget 800 on the wake cases (user, 2026-09-22)
+
+User: 2000 coupled iterations are far too many; 400-800 were the
+expectation. Evidence (read-only on run/T4a_np10, window W, drift rule
+of addendum 1): coupledFoam is stationary from iteration ~400-600 (drift
+<= 0.1 %), window means at 600/800/1000/1500 all within Cd
+0.4029-0.4035 - much calmer than simpleFoam, whose slow wake swing needs
+1000+ iteration windows. coupledFoam takes far larger pseudo-time steps
+(CFL 500), so its window in iterations can be much shorter.
+Change: coupledFoam budget 800 on T4a/T4b/T5 (was 1500/2000/2500);
+window minimum 1000 -> 300, i.e. W = max(300, n/2): coupledFoam W = 400
+(fieldAverage from iteration 401); the simpleFoam reference windows are
+unchanged (n/2 = 1500/2000/2500 >= 1000 anyway). T4a result so far
+(1500-iteration budget) remains valid evidence; it is rerun with 800.

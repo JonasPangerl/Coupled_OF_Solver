@@ -108,14 +108,14 @@ CASES = {
                 "iters": {"simpleFoam": 6000, "coupledFoam": 2000}, "np": 1},
     "T4a": {"template": "T4_motorBike", "args": ["-mesh", "a"],
             "monitor": "forces",
-            "iters": {"simpleFoam": 3000, "coupledFoam": 1500}, "np": HEAVY_NP,
+            "iters": {"simpleFoam": 3000, "coupledFoam": 800}, "np": HEAVY_NP,
             "oscillatory": True},
     "T4b": {"template": "T4_motorBike", "args": ["-mesh", "b"],
             "monitor": "forces",
-            "iters": {"simpleFoam": 4000, "coupledFoam": 2000}, "np": HEAVY_NP,
+            "iters": {"simpleFoam": 4000, "coupledFoam": 800}, "np": HEAVY_NP,
             "oscillatory": True},
     "T5": {"template": "T5_ahmed", "args": [], "monitor": "forces",
-           "iters": {"simpleFoam": 5000, "coupledFoam": 2500}, "np": HEAVY_NP,
+           "iters": {"simpleFoam": 5000, "coupledFoam": 800}, "np": HEAVY_NP,
            "oscillatory": True},
 }
 
@@ -155,7 +155,7 @@ TOL = 0.002
 # addendum of 2026-09-22): criterion 12.3(ii) is unsatisfiable there,
 # convergence := stationary window mean
 STAT_CRITERION = "stationaryMean (D-042 addendum)"
-STAT_WINDOW_MIN = 1000      # W = max(1000, n // STAT_WINDOW_DIV), capped at n
+STAT_WINDOW_MIN = 300       # W = max(300, n // STAT_WINDOW_DIV), capped at n (D-042 add. 2)
 STAT_WINDOW_DIV = 2
 STAT_REL = 0.01             # half-window means differ <= max(1 % |m|,
 STAT_ABS = 0.005            #                                  0.005)
@@ -320,8 +320,9 @@ def is_oscillatory(name: str) -> bool:
 
 
 def stat_window(n: int) -> int:
-    """Averaging window of a run of n iterations: max(1000, n//2), capped at
-    n (D-042 addendum; was max(500, n//4) <= n//2)."""
+    """Averaging window of a run of n iterations: max(300, n//2), capped at
+    n (D-042 addenda; the minimum was 1000, which only ever bound the short
+    coupledFoam runs - the simpleFoam references have n//2 >= 1500)."""
     return max(0, min(max(STAT_WINDOW_MIN, n // STAT_WINDOW_DIV), n))
 
 
