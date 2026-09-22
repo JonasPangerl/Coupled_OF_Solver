@@ -25,14 +25,14 @@
 \label{sec:compare}
 % =============================================================================
 
-If you have worked with Simcenter STAR-CCM+ or Ansys Fluent, you have met
-coupled solvers before: both products offer one, and so does ENGYS HELYX,
+Users of Simcenter STAR-CCM+ or Ansys Fluent have met coupled solvers
+before: both products offer one, and so does ENGYS HELYX,
 which many motorsport teams use on top of an OpenFOAM-derived code base.
 This section puts coupledFoam next to them. For every aspect it says what
 coupledFoam does the same, what it does differently, \emph{why}, and when
 that should make it better or worse.
 
-\begin{pitfall}{what we can and cannot know about commercial solvers}
+\begin{pitfall}{what can and cannot be known about commercial solvers}
   The commercial codes are closed. Their user guides and theory guides
   describe the \emph{method} and the \emph{user settings} (for example the
   default Courant number), but rarely the internals (which smoother runs on
@@ -43,12 +43,12 @@ that should make it better or worse.
   the table says \cmpnpd{} (``not publicly documented''), and the text says
   what typical practice suggests; nothing is filled in by guessing. Vendor
   speed-up claims are the vendors' own measurements, on their own cases,
-  against their own baselines. They are quoted as claims, not as facts
-  we verified.
+  against their own baselines. They are quoted as claims, not as verified
+  facts.
 \end{pitfall}
 
 % -----------------------------------------------------------------------------
-\subsection{Four pairs of words you need first}\label{sec:cmp-words}
+\subsection{Four pairs of terms}\label{sec:cmp-words}
 
 \paragraph{Segregated versus coupled.} A \emph{segregated} solver solves
 one equation at a time: first momentum with the old pressure, then a
@@ -162,7 +162,7 @@ which is the same lesson coupledFoam learnt the hard way
   Buchmayr and Darwish~\cite{Mangani2014a,Mangani2014b} is the other
   well-documented line of work.
 \item[OpenFOAM \code{simpleFoam}.] The segregated SIMPLE/SIMPLEC baseline
-  you use today~\cite{Patankar1972,VanDoormaal1984,OpenFOAMv2606}, and the
+  in current use for the F1 cases~\cite{Patankar1972,VanDoormaal1984,OpenFOAMv2606}, and the
   reference every coupledFoam test is measured against.
 \end{description}
 
@@ -410,12 +410,12 @@ transparency
 }
 
 % -----------------------------------------------------------------------------
-\subsection{Group by group: what we do the same, what differently, and why}
+\subsection{Group by group: what is the same, what is different, and why}
 \label{sec:cmp-why}
 
 \subsubsection*{A1. Coupling family: pressure-based, like Fluent and HELYX}
 
-\paragraph{Why we do it this way.} For incompressible flow the density is
+\paragraph{Why this choice.} For incompressible flow the density is
 constant, so the density-based route needs an artificial device (low-Mach
 preconditioning or artificial compressibility~\cite{cmp-WeissSmith1995,
 cmp-Economon2020}) to make pressure appear in the time-marching. The
@@ -436,20 +436,20 @@ racing speed (Mach well below 0.3) that does not matter. One practical
 difference: STAR-CCM+'s coupled solver stabilises pressure through the
 preconditioned Roe dissipation, coupledFoam through the Rhie--Chow term. Both
 add a small, mesh-dependent smoothing of the pressure; with the same mesh,
-differences should be small but not exactly zero. Compare forces, not
-residuals, if you ever run the same case in both.
+differences should be small but not exactly zero. When the same case is
+run in both, forces, not residuals, are the quantities to compare.
 
 \subsubsection*{A2. Pressure--velocity link: Rhie--Chow, like Fluent and
 simpleFoam}
 
-\paragraph{Why we do it this way.} Rhie--Chow~\cite{RhieChow1983} is the
+\paragraph{Why this choice.} Rhie--Chow~\cite{RhieChow1983} is the
 standard for cell-centred pressure-based codes. Fluent documents it
 explicitly (``Rhie--Chow pressure dissipation'', implicit in the face mass
 flux~\cite{cmp-Fluent12TG}), and simpleFoam's momentum interpolation is the
 segregated form of the same idea. coupledFoam puts the direct pressure
 difference implicitly into the matrix (Section~\ref{sec:rc}) and uses
 \emph{exactly} the same face formula to compute the fluxes after the solve,
-so the mass imbalance you see is the continuity residual itself.
+so the reported mass imbalance is the continuity residual itself.
 
 \paragraph{Better or worse, and when.} Same idea as the commercial
 pressure-based solvers; no advantage either way is expected. A known
@@ -496,7 +496,7 @@ tuning, more automatic step control.
 
 \paragraph{Better or worse, and when.} On clean meshes and well-behaved
 flows the automatic step control should give fewer outer iterations than a
-conservative fixed setting, with no tuning by you. Where the flow has a
+conservative fixed setting, without tuning by the user. Where the flow has a
 physical tendency to oscillate (bluff-body wakes, massive separation), a
 very large pseudo-time step removes the damping that a relaxed solver has,
 and the iteration can fall into a \emph{limit cycle}. coupledFoam shows
@@ -538,7 +538,7 @@ Gauss--Seidel failed, block ILU(0) worked (Section~\ref{sec:smoothers}).
 \item coupledFoam wraps the AMG in a Krylov method (FGMRES with restart 30)
   and chooses the inner tolerance adaptively
   (Eisenstat--Walker~\cite{EisenstatWalker1996},
-  Section~\ref{sec:ew}). Fluent and STAR-CCM+ let you set a fixed AMG
+  Section~\ref{sec:ew}). Fluent and STAR-CCM+ let the user set a fixed AMG
   termination criterion; whether a Krylov accelerator runs by default in
   their coupled solvers is \cmpnpd.
 \item coupledFoam's default cycle is V with a \emph{damped} ILU(0)
@@ -559,8 +559,8 @@ coupledFoam's block AMG has been tuned on a handful of test meshes. On the
 graded, high-aspect-ratio meshes of T1--T4 its settings had to be
 re-tuned several times (D-038, D-039, D-043), and on the finer snappy mesh
 T4b the solve still degrades at moderate CFL (Section~\ref{sec:limits}).
-Expect the linear solver to be the component where a commercial code is
-most clearly ahead in robustness today. Where coupledFoam can be ahead is
+The linear solver is expected to be the component where a commercial code
+is most clearly ahead in robustness today. Where coupledFoam can be ahead is
 cost per linear iteration: hand-written, bandwidth-bound block kernels in
 single precision (next item).
 
@@ -583,8 +583,8 @@ parts of the commercial codes' single-precision modes are single is
 \cmpnpd.
 
 \paragraph{Better or worse, and when.} Pure single precision can stall the
-residual at a level set by round-off, which matters when you want deep
-convergence or small force differences between two design variants. The
+residual at a level set by round-off, which matters when deep convergence
+or small force differences between two design variants are required. The
 double-residual design avoids that floor at little cost. Against a
 commercial double-precision run, coupledFoam should need less memory
 bandwidth per linear iteration; against a commercial single-precision run,
@@ -608,7 +608,7 @@ exactly like coupledFoam, which uses the unmodified OpenFOAM models
 \paragraph{Why.} Coupling $k$ and $\omega$ into the block would make it
 $6\times6$, more than double the matrix memory, and tie the solver to one
 turbulence model. Keeping them segregated lets any OpenFOAM RANS model run
-unchanged, including your SST settings.
+unchanged, including the SST settings of an existing case.
 
 \paragraph{Better or worse, and when.} The price is a lag: the flow step
 sees the eddy viscosity of the previous iteration. On attached flows this
@@ -637,14 +637,14 @@ a few bad cells. A global brake (lower relaxation or CFL everywhere) would
 slow the whole run for the sake of a few hundred cells; local treatment
 keeps full speed elsewhere. The rollback turns ``the run blew up at
 3~a.m.'' into ``the run stepped back, slowed down, and continued'', or at
-worst into a stop with a field that shows you where the trouble started.
+worst into a stop with a field that shows where the trouble started.
 
 \paragraph{Better or worse, and when.} The remediation sets are an
 accuracy trade: first-order convection in a marked cell is less accurate.
 The thresholds were therefore chosen with care (D-044: the dynamic set must
 not catch the physically correct suction peaks under a wing; D-047: the
-static set is kept near 1\,\% of the cells on snappy meshes). Check the set
-sizes in the log. A commercial code that simply runs the whole mesh with a
+static set is kept near 1\,\% of the cells on snappy meshes). The set
+sizes are reported in the log. A commercial code that simply runs the whole mesh with a
 lower relaxation may be less efficient but has no such local accuracy loss.
 
 \subsubsection*{D3. Convergence monitoring}
@@ -658,11 +658,14 @@ optional stop rule on a stationary mean. The commercial codes offer
 flexible residual and report monitors and stopping criteria in their GUI;
 they expose far less of the solver's internal state.
 
-\paragraph{Why it matters for you.} For wake-dominated cars the residuals
-of \emph{no} steady solver fall to machine zero, and the forces keep
-swinging slightly. The project therefore judges such cases by averaged
-forces over a window (D-042), which is also what careful commercial users
-do. The built-in window statistics save you a post-processing step.
+\paragraph{Why it matters.} For wake-dominated cars the residuals of
+\emph{no} steady solver fall to machine zero, and the forces keep swinging
+slightly. The project therefore judges such cases by averaged forces over a
+window (D-042), which is also what careful commercial users do. The
+built-in window statistics remove a post-processing step. The window must
+be the same for the two solvers being compared (D-068): a window that
+scales with the length of each run favours the solver that is run for
+fewer iterations.
 
 \subsubsection*{E1. Rotating wheels (MRF) and sliding interfaces}
 
@@ -678,17 +681,17 @@ where \code{simpleFoam} couples AMI implicitly inside its linear solvers.
 \paragraph{Better or worse, and when.} Implicit MRF should help
 convergence around fast-spinning wheels; this is only checked by an
 informational test so far. Explicit AMI coupling slows convergence across
-such interfaces; for your current F1 setup (MRF wheels, no AMI) that does
-not apply. If you ever use rotating meshes with AMI in a steady run,
-\code{simpleFoam} or a commercial code is the safer choice until implicit
-AMI coupling (Phase~2) exists.
+such interfaces; the current F1 setup (MRF wheels, no AMI) is not affected.
+For steady runs with rotating meshes and AMI, \code{simpleFoam} or a
+commercial code remains the safer choice until implicit AMI coupling
+(Phase~2) exists.
 
 \subsubsection*{E2. Scope: steady, incompressible, RANS only}
 
 \paragraph{The honest difference.} The commercial solvers and HELYX-Coupled
 cover transient, compressible, heat transfer, multiphase and scale-resolving
 (DES/LES) flows in the same solver family. coupledFoam does exactly one
-thing: steady incompressible RANS. For a transient or DES run you stay with
+thing: steady incompressible RANS. Transient or DES runs remain with
 \code{pimpleFoam} (or a commercial code). This narrow scope is deliberate:
 it keeps the code small enough to be understood, tested and changed in a
 short time.
@@ -697,15 +700,21 @@ short time.
 
 \paragraph{Speed: what has been measured.} Only against \code{simpleFoam},
 on the project's test cases, on a shared machine
-(Section~\ref{sec:speedtests}). Wall-clock speed-ups so far: about
-\cfnum{SpeedWallTZeroReOneZeroZero}$\times$ on the cavity at $Re=100$,
-\cfnum{SpeedWallTOne}$\times$ on T1, \cfnum{SpeedWallTTwo}$\times$ on T2
-(a lower bound, because \code{simpleFoam} did not converge there), and on the
-coarse motorbike T4a \cfnum{SpeedWallCfTFoura}\,s instead of
-\cfnum{SpeedWallSfTFoura}\,s (\cfnum{SpeedCpuhCfTFoura} instead of
-\cfnum{SpeedCpuhSfTFoura} CPU-hours). On T3 coupledFoam does not converge
-(limit cycle) and is slower. The finer T4b and the Ahmed body T5 are the
-cases closest to your car, and their results are the ones to watch.
+(Section~\ref{sec:speedtests}). Wall-clock speed-ups of the test runs so
+far: about \cfnum{SpeedWallTZeroReOneZeroZero}$\times$ on the cavity at
+$Re=100$, \cfnum{SpeedWallTOne}$\times$ on T1 and
+\cfnum{SpeedWallTTwo}$\times$ on T2 (a lower bound, because
+\code{simpleFoam} did not converge there). On the coarse motorbike T4a the
+speed-up against the stored reference is
+\cfnum{WakeSpeedupWallTFoura}$\times$ in wall-clock time
+(Table~\ref{tab:wakespeed}); it depends on the averaging window, which is
+now the same for both solvers (D-068), and the conditions of the stored
+reference run are listed next to it. On T3 with SST coupledFoam can fall
+into a limit cycle. The finer motorbike T4b is the case closest to a car
+in the present campaign (the Ahmed body T5 is deferred, D-063), and its
+result is the one to watch. The standard numbers of vendor reports (cost
+and memory per million cells, residual reduction, parallel efficiency) are
+given in Section~\ref{sec:metrics}.
 
 \paragraph{Speed: what the vendors say.} HELYX: 2--10$\times$ faster than
 segregated~\cite{cmp-HelyxCoupled}; STAR-CCM+: automatic CFL 2.4$\times$ faster
@@ -714,10 +723,11 @@ to about 40\,\% faster than SIMPLE in its segregated
 solver~\cite{cmp-StarEffortless2020,cmp-StarSIMPLEC2023}; Fluent: coupled
 convergence ``significantly improves'' over segregated at 1.5--2 times the
 memory~\cite{cmp-Fluent12TG}. These numbers cannot be compared with each
-other or with ours: different cases, baselines, hardware and stopping
-criteria. What they do show is that the industry consensus agrees with
-the premise of this project: for steady RANS, a well-built coupled solver
-beats a segregated one in wall-clock time, at a memory price.
+other or with those of this project: different cases, baselines, hardware
+and stopping criteria. What they do show is that the industry consensus
+agrees with the premise of this project: for steady RANS, a well-built
+coupled solver beats a segregated one in wall-clock time, at a memory
+price.
 
 \paragraph{Maturity.} This is the biggest difference and it favours the
 commercial codes by far. STAR-CCM+ and Fluent have been validated for
@@ -729,20 +739,20 @@ run-to-run differences on several ranks).
 
 \paragraph{Cost and transparency.} Here coupledFoam and \code{simpleFoam}
 win: no licence cost, the full source, and, for coupledFoam, a written
-record of every design decision with its evidence. When coupledFoam does
-something odd, you can find out why; with a closed code you depend on
-vendor support.
+record of every design decision with its evidence. When coupledFoam
+behaves unexpectedly, the reason can be traced in the source and the
+decision log; with a closed code the user depends on vendor support.
 
 \begin{pitfall}{do not mix solvers in one comparison}
-  If you compare an F1 variant run in coupledFoam with a baseline run in
+  When an F1 variant run in coupledFoam is compared with a baseline run in
   another code (or even in \code{simpleFoam} with different schemes), part
   of the difference comes from the solver's discretisation and
-  stabilisation terms, not from the geometry change. Run both variants
-  in the same solver with the same settings, and compare averaged forces.
+  stabilisation terms, not from the geometry change. Both variants belong
+  in the same solver with the same settings, compared by averaged forces.
 \end{pitfall}
 
 % -----------------------------------------------------------------------------
-\subsection{Other solvers you may meet}\label{sec:cmp-others}
+\subsection{Other solvers}\label{sec:cmp-others}
 
 \begin{description}
 \item[SU2] (open source) solves incompressible flow with a
@@ -758,37 +768,38 @@ vendor support.
   textbook of Moukalled, Mangani and Darwish~\cite{cmp-Moukalled2016}.
 \end{description}
 Cadence (Numeca) Omnis, Code\_Saturne and others are not compared here,
-because we could not collect solid public information on their coupled
-steady-state solvers within this work.
+because no solid public information on their coupled steady-state solvers
+could be collected within this work.
 
 % -----------------------------------------------------------------------------
-\begin{cmpf1box}{What this means for your F1 cases}
+\begin{cmpf1box}{What this means for the F1 cases}
 \begin{itemize}
 \item \textbf{Same family as the tools the teams use.} coupledFoam is a
   pressure-based, block-coupled, pseudo-transient solver, the same
   design family as Fluent's pressure-based coupled solver (which also uses
   a coupled AMG with an ILU smoother) and, as far as its public
   description goes (pressure-based, block-coupled, local pseudo-time
-  step), HELYX-Coupled. You are not using an exotic method, but a young
+  step), HELYX-Coupled. It is not an exotic method, but a young
   implementation of a standard one.
-\item \textbf{What should be better than simpleFoam.} Fewer
-  outer iterations, no relaxation factors to tune, and so far shorter
-  wall-clock times on the test cases that converge (T0, T1, T2, T4a).
-  The averaged forces of T4a settle within far fewer iterations than
-  \code{simpleFoam} needs (D-042).
+\item \textbf{What should be better than simpleFoam.} Fewer outer
+  iterations and no relaxation factors to tune; shorter wall-clock times
+  on the 2D test cases that converge (T0, T1, T2). On the motorbike the
+  result depends on the averaging window and is reported with its
+  conditions (Table~\ref{tab:wakespeed}); it is not yet an established
+  advantage.
 \item \textbf{What is not yet as good as a commercial code.} Robustness of
   the linear solver on large, stretched snappy meshes; strongly separated
   flows can limit-cycle (T3); memory is higher than \code{simpleFoam}'s;
   validation is limited to the project's test cases.
-\item \textbf{What you gain over a commercial code.} Your existing
-  OpenFOAM case, mesh, boundary conditions, SST model and function
-  objects run unchanged; the code is free and fully transparent; every
-  run tells you in the log what the solver is doing.
-\item \textbf{Practical advice.} Use coupledFoam on your steady MRF
-  half-car runs next to \code{simpleFoam}, judge by averaged forces over
-  a window, watch the CFL, the line-search factor and the remediation
-  set sizes in the \code{CF|} line (Section~\ref{sec:f1}), and keep
-  \code{simpleFoam} (or your commercial tool) as the reference until T4b
-  and T5 have passed.
+\item \textbf{What is gained over a commercial code.} An existing OpenFOAM
+  case, with its mesh, boundary conditions, SST model and function
+  objects, runs unchanged; the code is free and fully transparent; every
+  run reports in its log what the solver is doing.
+\item \textbf{Practical recommendation.} coupledFoam is suited to be run on
+  the steady MRF half-car cases next to \code{simpleFoam}, with judgement
+  by averaged forces over a common window and with the CFL number, the
+  line-search factor and the remediation set sizes of the \code{CF|} line
+  under observation (Section~\ref{sec:f1}). \code{simpleFoam} (or the
+  commercial tool in use) remains the reference until T4b has passed.
 \end{itemize}
 \end{cmpf1box}
