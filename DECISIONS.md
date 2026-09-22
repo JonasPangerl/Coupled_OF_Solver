@@ -1289,3 +1289,12 @@ Also recorded: amendment C1 proposes lowering nonOrthThreshold from 70 to
 65. The user set 85 on the same day (D-047), and that later, explicit
 user decision stands. 65 and 60 are benchmark variants (C7) only, until
 the user decides otherwise.
+
+### D-042 addendum 3 - T5 simpleFoam reference budget 2000 (user, 2026-09-22)
+
+The user considers 5000 simpleFoam iterations unrealistic for practice
+("nobody runs that many"). The T5 Ahmed reference (coarse mesh,
+1.04 M cells) therefore gets a budget of 2000 for now, with window
+W = 1000. The budget is extended on the user's request if the reference
+does not become stationary. coupledFoam stays at 800. The T4a and T4b
+references keep their completed runs (3000 and 4000 iterations).

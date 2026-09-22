@@ -5,6 +5,7 @@
 
 #include "blockILU0.H"
 #include "block4Ops.H"
+#include "coupledDefaults.H"
 #include "addToRunTimeSelectionTable.H"
 
 // * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * //
@@ -25,10 +26,27 @@ Foam::blockILU0::blockILU0
 )
 :
     blockSmoother(matrix, dict),
+    pivotGrowthLimit_
+    (
+        dict.getOrDefault<doubleScalar>
+        (
+            "pivotGrowthLimit",
+            coupledDefaults::iluPivotGrowthLimit
+        )
+    ),
+    nPivotFallback_(0),
     rD_(),
     r_(),
     w_()
-{}
+{
+    // Negated comparison also rejects non-finite input
+    if (!(pivotGrowthLimit_ >= 0) || !std::isfinite(pivotGrowthLimit_))
+    {
+        FatalIOErrorInFunction(dict)
+            << "pivotGrowthLimit must be a finite value >= 0 (0: off), got "
+            << pivotGrowthLimit_ << exit(FatalIOError);
+    }
+}
 
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
@@ -51,8 +69,12 @@ void Foam::blockILU0::update()
     r_.resize_nocopy(blockDim*nCells);
     w_.resize_nocopy(blockDim*nCells);
     nSingular_ = 0;
+    nPivotFallback_ = 0;
 
     blockScalar LDinv[blockSize];
+    blockScalar Dinv[blockSize];
+    const bool safeguard = (pivotGrowthLimit_ > 0);
+    const blockScalar* const __restrict__ diagPtr = matrix_.diag().cdata();
 
     // Faces are ordered by owner; when cell c is reached all faces with
     // neighbour c (owners < c) have already been processed, so D*_c is final.
@@ -64,6 +86,25 @@ void Foam::blockILU0::update()
             rD_.data() + celli*blockSize,
             pivotGuard_
         );
+
+        // Pivot-growth safeguard (D-049): fall back to the unmodified
+        // block if the modified pivot lost its dominance. The fallback
+        // pivot enters the modification of the later cells as well, i.e.
+        // the factorisation stays consistent.
+        if (safeguard)
+        {
+            const blockScalar* Dc = diagPtr + celli*blockSize;
+            block4Ops::invert(Dc, Dinv, pivotGuard_);
+            const reduceScalar nStar =
+                block4Ops::maxAbs(rD_.cdata() + celli*blockSize);
+            const reduceScalar nOrig = block4Ops::maxAbs(Dinv);
+            // Negated comparison also catches non-finite values
+            if (!(nStar <= pivotGrowthLimit_*nOrig))
+            {
+                block4Ops::copy(Dinv, rD_.data() + celli*blockSize);
+                ++nPivotFallback_;
+            }
+        }
 
         const label fStart = ownStart[celli];
         const label fEnd = ownStart[celli + 1];

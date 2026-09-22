@@ -12,6 +12,7 @@
 #include "cellSet.H"
 #include "PstreamReduceOps.H"
 #include "wordRes.H"
+#include "sentinel.H"
 #include <cmath>
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
@@ -70,6 +71,8 @@ Foam::remediation::remediation
         s.getOrDefault<scalar>("aspectThreshold", aspectThreshold_);
     staticBeta_ = s.getOrDefault<scalar>("beta", staticBeta_);
     staticCflFactor_ = s.getOrDefault<scalar>("cflFactor", staticCflFactor_);
+    criteria_ = staticCriteria::settings(s);                     // C1
+    criteriaBits_.resize(mesh_.nCells(), 0);
 
     const dictionary& d = r.subOrEmptyDict("dynamic");
     dynamicEnabled_ = d.getOrDefault<bool>("enabled", dynamicEnabled_);
@@ -312,6 +315,35 @@ void Foam::remediation::buildZonal(const dictionary& zonalDict)
         scalar beta = coupledDefaults::zonalBeta;
         readZonalFactors(e, zonalDict, cflFactor, beta);
 
+        // Amendment C5: built-in named sets (zonalSets.H)
+        if (zonalSets::isBuiltin(zoneName))
+        {
+            if (zonalSets::needsStaticSet(zoneName))
+            {
+                zonalDeferred_.append({zoneName, cflFactor, beta});
+                Info<< "remediation: zonal built-in " << zoneName
+                    << ": applied once the static set is built" << endl;
+            }
+            else
+            {
+                const label nAffected = applyZonal
+                (
+                    zonalSets::mark(mesh_, zoneName, criteria_),
+                    cflFactor,
+                    beta
+                );
+                Info<< "remediation: zonal built-in " << zoneName << ": "
+                    << nAffected << " cells ("
+                    << percentPerCell*scalar(nAffected) << " %), cflFactor "
+                    << cflFactor << ", beta " << beta << endl;
+            }
+            dictionary& s = zoneSettings[entryi];
+            s.add("cellZone", zoneName);
+            s.add("cflFactor", cflFactor);
+            s.add("beta", beta);
+            continue;
+        }
+
         const labelList zoneIDs(czm.indices(zoneName, true));
 
         if (!returnReduce(!zoneIDs.empty(), orOp<bool>()))
@@ -443,16 +475,43 @@ void Foam::remediation::buildZonal(const dictionary& zonalDict)
 }
 
 
+void Foam::remediation::applyDeferredZonal()
+{
+    if (!zonalEnabled_)
+    {
+        return;
+    }
+
+    const label nTotal = returnReduce(mesh_.nCells(), sumOp<label>());
+    // GUARD: nTotal >= 1
+    const scalar percentPerCell = 100.0/max(scalar(nTotal), scalar(1));
+
+    for (const zonalSets::deferredEntry& e : zonalDeferred_)
+    {
+        const label nAffected = applyZonal(isStatic_, e.cflFactor, e.beta);
+        Info<< "remediation: zonal built-in " << e.name << ": " << nAffected
+            << " cells (" << percentPerCell*scalar(nAffected)
+            << " %), cflFactor " << e.cflFactor << ", beta " << e.beta
+            << endl;
+    }
+
+    // Applied once (the mesh is static)
+    zonalDeferred_.clear();
+}
+
+
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
 void Foam::remediation::buildStatic()
 {
     isStatic_ = false;
     nStatic_ = 0;
+    criteriaBits_ = 0;
 
     if (!staticEnabled_)
     {
         Info<< "remediation: static set disabled" << endl;
+        applyDeferredZonal();                                    // C5
         return;
     }
 
@@ -529,6 +588,10 @@ void Foam::remediation::buildStatic()
         }
     }
 
+    // Amendment C1: topological criteria (staticCriteria.H), OR-ed
+    const staticCriteria::counts nC1 =
+        staticCriteria::apply(mesh_, criteria_, criteriaBits_, isStatic_);
+
     forAll(isStatic_, celli)
     {
         nStatic_ += isStatic_[celli];
@@ -547,6 +610,14 @@ void Foam::remediation::buildStatic()
         << ", skew>" << skewThreshold_ << ": " << nSkew
         << ", volRatio>" << volRatioThreshold_ << ": " << nVol
         << "; cells aspect>" << aspectThreshold_ << ": " << nAspect << endl;
+    staticCriteria::report
+    (
+        criteria_,
+        nC1,
+        returnReduce(mesh_.nCells(), sumOp<label>())
+    );
+
+    applyDeferredZonal();                                        // C5
 }
 
 
@@ -852,20 +923,28 @@ void Foam::remediation::write(const word& instance) const
     {
         const bool s = isStatic_[celli];
         const bool d = age_[celli] >= 0;
-        flag[celli] = (s ? 1 : 0) + (d ? 2 : 0);
+        // Bits OR-ed (C1): 1 static, 2 dynamic, 4/8/16 static criteria
+        flag[celli] = scalar
+        (
+            (s ? label(staticCriteria::bitStatic) : 0)
+          | (d ? label(staticCriteria::bitDynamic) : 0)
+          | criteriaBits_[celli]
+        );
         if (s) stat.insert(celli);
         if (d) dyn.insert(celli);
     }
+    // Written through the file handler: regIOobject::writeObject would
+    // redirect a non-time instance (<n>_lastValid) to the current time
     flag.correctBoundaryConditions();
-    flag.write();
+    sentinel::writeInstance(flag);
 
     cellSet cs(mesh_, "remediationStatic", stat);
     cs.instance() = instance;
-    cs.write();
+    sentinel::writeInstance(cs);
 
     cellSet cd(mesh_, "remediationDynamic", dyn);
     cd.instance() = instance;
-    cd.write();
+    sentinel::writeInstance(cd);
 
     if (zonalEnabled_)
     {
@@ -886,7 +965,7 @@ void Foam::remediation::write(const word& instance) const
         );
         zf.primitiveFieldRef() = zonalCfl_;
         zf.correctBoundaryConditions();
-        zf.write();
+        sentinel::writeInstance(zf);
     }
 }
 
@@ -1044,6 +1123,7 @@ void Foam::remediation::writeSettings(dictionary& dict) const
     s.add("aspectThreshold", aspectThreshold_);
     s.add("beta", staticBeta_);
     s.add("cflFactor", staticCflFactor_);
+    criteria_.write(s);                                          // C1
 
     dictionary d;
     d.add("enabled", dynamicEnabled_);

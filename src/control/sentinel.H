@@ -25,7 +25,10 @@ Description
     FatalError. A time directory with non-finite values is never written.
     <n> is the outer iteration whose fields are written, i.e. the last
     accepted one (iter - 1 when iteration iter is aborted), see
-    lastValidName().
+    lastValidName(). The objects are written through the file handler
+    directly (writeInstance): regIOobject::writeObject resets an instance
+    that is not the current time name to time().timeName() (v2606), which
+    put the fields of iteration n into the directory of iteration n + 1.
 
     Dictionary: coupled.sentinel { maxRollbacks UFactor pFactor cflFactor
     maxReport }.
@@ -159,6 +162,10 @@ public:
         {
             return word(Foam::name(validIter) + "_lastValid");
         }
+
+        //- Write a registered object into its own instance directory,
+        //  bypassing the time-name redirection of regIOobject::writeObject
+        static bool writeInstance(const regIOobject& io);
 
         //- Write the last valid fields (those of iteration validIter) to
         //  lastValidName(validIter), sentinelFlag, report (9.3)

@@ -115,7 +115,7 @@ CASES = {
             "iters": {"simpleFoam": 4000, "coupledFoam": 800}, "np": HEAVY_NP,
             "oscillatory": True},
     "T5": {"template": "T5_ahmed", "args": [], "monitor": "forces",
-           "iters": {"simpleFoam": 5000, "coupledFoam": 800}, "np": HEAVY_NP,
+           "iters": {"simpleFoam": 2000, "coupledFoam": 800}, "np": HEAVY_NP,  # user: 2000 for now (D-042 add. 3)
            "oscillatory": True},
 }
 

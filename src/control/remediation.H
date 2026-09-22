@@ -58,8 +58,13 @@ Description
     multiply. The multipliers apply on top of the static/dynamic rules
     (dynamic cells keep beta = 0). Unknown names are a FatalIOError.
 
+    Amendment C1: topological static criteria wallStarved, procAMI and
+    volumeJump (staticCriteria.H) join the static set; C5: built-in named
+    sets _wallCells ... _remediationStatic in zonal.zones (zonalSets.H).
+
     Output: cellSets remediationStatic, remediationDynamic and the
-    volScalarField remediationFlag (0 none, 1 static, 2 dynamic, 3 both);
+    volScalarField remediationFlag (bits OR-ed: 1 static, 2 dynamic,
+    4 wallStarved, 8 procAMI, 16 volumeJump; C1);
     with zonal factors enabled additionally the volScalarField
     zonalCflFactor.
 
@@ -74,6 +79,8 @@ SourceFiles
 #include "fvMesh.H"
 #include "volFields.H"
 #include "blockScalar.H"
+#include "staticCriteria.H"
+#include "zonalSets.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -94,6 +101,12 @@ class remediation
         scalar aspectThreshold_;
         scalar staticBeta_;
         scalar staticCflFactor_;
+
+        //- Topological criteria (amendment C1)
+        staticCriteria::settings criteria_;
+
+        //- Per-cell C1 bits (4 wallStarved, 8 procAMI, 16 volumeJump)
+        labelList criteriaBits_;
 
         // Dynamic controls
         bool dynamicEnabled_;
@@ -158,6 +171,10 @@ class remediation
             //- Effective zonal settings (defaults filled in)
             dictionary zonalSettings_;
 
+            //- Built-in entries applied after the static set is built
+            //  (_remediationStatic, amendment C5)
+            DynamicList<zonalSets::deferredEntry> zonalDeferred_;
+
 
     // Private Member Functions
 
@@ -173,6 +190,9 @@ class remediation
             const scalar cflFactor,
             const scalar beta
         );
+
+        //- Apply the deferred built-in zonal entries (C5); collective
+        void applyDeferredZonal();
 
         //- Read and check the cflFactor and beta of one zonal entry
         void readZonalFactors

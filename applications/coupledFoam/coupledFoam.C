@@ -48,6 +48,7 @@ Description
 #include "ptcControl.H"
 #include "lineSearch.H"
 #include "remediation.H"
+#include "diagnosticFields.H"
 #include "sentinel.H"
 #include "convergenceMonitor.H"
 #include "coupledState.H"
@@ -57,6 +58,7 @@ Description
 #include "anderson.H"
 #include "sfdControl.H"
 #include "adaptiveTolerance.H"
+#include "startupControl.H"
 #include "diagnostics.H"
 #include "mixedFvPatchFields.H"
 #include "SolverPerformance.H"
@@ -94,18 +96,6 @@ int main(int argc, char *argv[])
             "potentialInit",
             coupledDefaults::potentialInit
         );
-    const label startupUpwindIters =
-        coupledDict.getOrDefault<label>
-        (
-            "startupUpwindIters",
-            coupledDefaults::startupUpwindIters
-        );
-    const scalar startupSwitchR =
-        coupledDict.getOrDefault<scalar>
-        (
-            "startupSwitchR",
-            coupledDefaults::startupSwitchR
-        );
     const bool ftz =
         coupledDict.getOrDefault<bool>("ftz", coupledDefaults::ftz);
 
@@ -141,6 +131,7 @@ int main(int argc, char *argv[])
     sentinel sen(mesh, coupledDict);
     anderson aa(mesh, coupledDict);
     adaptiveTolerance ew(linearDict);
+    startupControl startup(coupledDict);
     sfdControl sfd(mesh, coupledDict, ptc.nHold());
 
     // Linear-system dump for offline preconditioner studies
@@ -155,6 +146,37 @@ int main(int argc, char *argv[])
             "maxLinFails",
             coupledDefaults::maxLinFails
         );
+    // B4 failure definition (linFailPolicy): strict = not converged to eta within
+    // maxIter; reduction = a capped solve is accepted if it is finite and
+    // reduced the true residual to at most linAcceptReduction times the
+    // initial one
+    const word linFailPolicy =
+        coupledDict.subOrEmptyDict("ptc").getOrDefault<word>
+        (
+            "linFailPolicy",
+            word(coupledDefaults::linFailPolicy)
+        );
+    const scalar linAcceptReduction =
+        coupledDict.subOrEmptyDict("ptc").getOrDefault<scalar>
+        (
+            "linAcceptReduction",
+            coupledDefaults::linAcceptReduction
+        );
+    if (linFailPolicy != "strict" && linFailPolicy != "reduction")
+    {
+        FatalIOErrorInFunction(coupledDict)
+            << "ptc.linFailPolicy must be strict or reduction, got "
+            << linFailPolicy << exit(FatalIOError);
+    }
+    if (!(linAcceptReduction > 0) || !(linAcceptReduction < 1))
+    {
+        FatalIOErrorInFunction(coupledDict)
+            << "ptc.linAcceptReduction must be in (0, 1), got "
+            << linAcceptReduction << exit(FatalIOError);
+    }
+    const bool linFailReduction = (linFailPolicy == "reduction");
+    label nLinAccepted = 0;
+
     if (maxLinFails < 1)
     {
         FatalIOErrorInFunction(coupledDict)
@@ -186,6 +208,8 @@ int main(int argc, char *argv[])
     // guarded with diag.active(n); at level 0 the solver and the assembler
     // get no diagnostics object and take no clock readings.
     diagnostics diag(coupledDict);
+    // Write-time diagnostic fields (amendment C6)
+    diagnosticFields dfields(mesh, coupledDict);
     if (diag.active(1))
     {
         linSolver->setDiagnostics(&diag);
@@ -202,8 +226,7 @@ int main(int argc, char *argv[])
         dictionary eff;
         eff.add("maxIter", maxIter);
         eff.add("potentialInit", potentialInit);
-        eff.add("startupUpwindIters", startupUpwindIters);
-        eff.add("startupSwitchR", startupSwitchR);
+        startup.writeSettings(eff);
         eff.add("nonOrthLimiter", assembler.noc().limiter());
         ptc.writeSettings(eff);
         ls.writeSettings(eff);
@@ -240,6 +263,8 @@ int main(int argc, char *argv[])
         }
         sfd.writeSettings(eff);
         eff.subDict("ptc").add("maxLinFails", maxLinFails);
+        eff.subDict("ptc").add("linFailPolicy", linFailPolicy);
+        eff.subDict("ptc").add("linAcceptReduction", linAcceptReduction);
         if (tuner)
         {
             eff.add("autoTune", tuner->settings());
@@ -250,6 +275,7 @@ int main(int argc, char *argv[])
             dg.add("echo", diag.echo());
             eff.add("diagnostics", dg);
         }
+        dfields.writeSettings(eff);
 
         Info<< nl << "coupledFoam: effective settings" << nl
             << eff << endl;
@@ -280,7 +306,6 @@ int main(int argc, char *argv[])
     // * * * * * * * * * * * * * * * Restart (10) * * * * * * * * * * * * * //
 
     label iter = 0;
-    bool startupDone = false;
     scalar R1 = -1;
     scalar phiConsistency = -1;
     bool restarted = false;
@@ -291,7 +316,7 @@ int main(int argc, char *argv[])
         {
             restarted = true;
             iter = st.get<label>("iter");
-            startupDone = st.get<bool>("startupDone");
+            startup.readState(st, iter);
             R1 = st.get<scalar>("R1");
             ls.setReference(st.get<scalar>("Uref"), st.get<scalar>("pref"));
             ptc.readState(st);
@@ -307,7 +332,10 @@ int main(int argc, char *argv[])
 
             Info<< "coupledFoam: restart from " << runTime.timeName()
                 << " at iteration " << iter << ", CFL " << ptc.CFL()
-                << ", startupDone " << startupDone << endl;
+                << ", start-up beta " << startup.beta(iter + 1)
+                << " (trigger "
+                << (startup.trigger().empty() ? word("pending") : startup.trigger())
+                << ")" << endl;
 
             // phi consistency with the stored D (spec 10)
             tmp<volScalarField> tD = state.readD();
@@ -462,7 +490,8 @@ int main(int argc, char *argv[])
         );
         dictionary st;
         st.set("iter", iter);
-        st.set("startupDone", startupDone);
+        st.set("startupDone", startup.done(iter + 1));
+        startup.writeState(st);
         st.set("R1", R1);
         st.set("Uref", ls.Uref());
         st.set("pref", ls.pref());
@@ -485,6 +514,8 @@ int main(int argc, char *argv[])
     auto writeOutputs = [&]()
     {
         rem.write();
+        // C6 (C3 hook: dfields.setSFD(&Ubar) while SFD is active -> USFD)
+        dfields.write(phi);
         state.writeD(assembler.rc().D());
         state.writeQ(assembler.rc().q());
         sfd.write();
@@ -543,6 +574,7 @@ int main(int argc, char *argv[])
     List<DynamicList<doubleScalar>> forceHistDrift(3);
 
     label nCflCutsTotal = 0;
+    label nPivotFallbackTotal = 0;
     label linFails = 0;
     bool converged = false;
     clockTime runTimer;
@@ -583,23 +615,54 @@ int main(int argc, char *argv[])
         if (!ls.referenceSet())
         {
             ls.setReference(U);
-            Info<< "coupledFoam: Uref " << ls.Uref() << ", pref "
-                << ls.pref() << endl;
+            Info<< "coupledFoam: Uref " << ls.Uref() << " (" << ls.UrefSource()
+                << ", mode " << ls.UrefMode() << "), pref " << ls.pref()
+                << endl;
         }
         if (sfd.enabled() && sfd.DeltaStar() == 0)
         {
             sfd.setReference(ls.Uref());
         }
-        sfd.begin(U, startupDone);
+        // SFD (7.6): activation after the start-up phase; C6 writes USFD
+        // while it is active
+        sfd.begin(U, startup.done(iter));
         assembler.setSFD
         (
             sfd.chiStar(),
             (sfd.active() ? &sfd.Ubar().primitiveField() : nullptr)
         );
+        dfields.setSFD(sfd.active() ? &sfd.Ubar() : nullptr);
 
         const volScalarField nuEff("nuEff", turbulence->nuEff());
-        const scalar betaGlobal = (startupDone ? 1.0 : 0.0);
-        const scalarField beta(rem.beta(betaGlobal));
+        // Start-up (D-048): developed-start probe on iteration 1 of a
+        // fresh start without potentialInit and with a non-uniform U
+        if (iter == 1 && !restarted)
+        {
+            const vectorField& Ui = U.primitiveField();
+            const vector U0 = (Ui.size() ? Ui[0] : vector::zero);
+            scalar dev = 0;
+            forAll(Ui, celli)
+            {
+                dev = max(dev, mag(Ui[celli] - U0));
+            }
+            reduce(dev, maxOp<scalar>());
+            // Uniform on every rank, but different values across ranks
+            vector Umin = (Ui.size() ? U0 : vector::uniform(GREAT));
+            vector Umax = (Ui.size() ? U0 : vector::uniform(-GREAT));
+            reduce(Umin, minOp<vector>());
+            reduce(Umax, maxOp<vector>());
+            const bool nonUniform = dev > 0 || mag(Umax - Umin) > 0;
+            startup.startProbe(!potentialInit && nonUniform);
+        }
+        scalar betaGlobal = startup.beta(iter);
+        const bool startupDone = startup.done(iter);
+        if (iter > 1 && betaGlobal != startup.beta(iter - 1))
+        {
+            // The discretisation changes along the ramp: the Anderson
+            // history refers to another operator
+            flushHistory("startupRamp");
+        }
+        scalarField beta(rem.beta(betaGlobal));
         const scalarField cflF(rem.cflFactor());
 
         blockScalarList dx(blockDim*mesh.nCells(), Zero);
@@ -638,6 +701,7 @@ int main(int argc, char *argv[])
                 ls.Uref(),
                 (diag.active(3) ? &locRatio : nullptr)
             );
+            dfields.record(rDTV, cflF, beta);                   // C6
             assembler.assembleContinuity(rDTV);
             tAsm += ta.elapsedTime();
             if (sfd.active())
@@ -671,6 +735,27 @@ int main(int argc, char *argv[])
             }
 
             Rraw = assembler.residualL2();
+
+            if (startup.probing())
+            {
+                const scalar rU1 = assembler.rU();
+                const scalar rp1 = assembler.rp();
+                if (startup.decideDeveloped(rU1, rp1))
+                {
+                    Info<< "coupledFoam: developed start (rU " << rU1
+                        << ", rp " << rp1 << "): start-up skipped, beta 1"
+                        << " from iteration 1" << endl;
+                }
+                else
+                {
+                    Info<< "coupledFoam: start not developed (rU " << rU1
+                        << ", rp " << rp1 << "): iteration 1 re-assembled"
+                        << " with the start-up beta" << endl;
+                    betaGlobal = startup.beta(iter);
+                    beta = rem.beta(betaGlobal);
+                    continue;
+                }
+            }
 
             // Eisenstat-Walker inner tolerance (amendment B2)
             {
@@ -719,9 +804,17 @@ int main(int argc, char *argv[])
             // eta*||r0|| (or the absolute floor) within maxIter, or
             // non-finite values. CFL cut and repeat; maxLinFails
             // consecutive failures abort through the 9.3 path.
+            const bool finiteDx = std::isfinite(doubleReduce::sumSqr(dx));
+            const bool reduced =
+                perf.finalResidual
+             <= linAcceptReduction*perf.initialResidual;
             const bool solveFailed =
-                !perf.converged
-             || !std::isfinite(doubleReduce::sumSqr(dx));
+                !finiteDx
+             || (linFailReduction ? !(perf.converged || reduced) : !perf.converged);
+            if (!solveFailed && !perf.converged)
+            {
+                ++nLinAccepted;
+            }
 
             if (solveFailed)
             {
@@ -741,6 +834,7 @@ int main(int argc, char *argv[])
                         validIter
                     );
                     rem.write(sentinel::lastValidName(validIter));
+                    dfields.write(phi, sentinel::lastValidName(validIter));
                     FatalErrorInFunction
                         << linFails << " consecutive linear-solve failures"
                         << " (maxLinFails " << maxLinFails << ") at iteration "
@@ -959,6 +1053,7 @@ int main(int argc, char *argv[])
                     validIter
                 );
                 rem.write(sentinel::lastValidName(validIter));
+                dfields.write(phi, sentinel::lastValidName(validIter));
                 FatalErrorInFunction
                     << sen.consecutive() << " consecutive rollbacks (limit "
                     << sen.maxRollbacks() << ") at iteration " << iter
@@ -1051,18 +1146,15 @@ int main(int argc, char *argv[])
                 }
             }
 
-            if
-            (
-                !startupDone
-             && (iter >= startupUpwindIters || R < startupSwitchR)
-            )
+            if (startup.update(iter, R))
             {
-                startupDone = true;
-                // beta 0 -> 1 changes the discretisation: the Anderson
+                // beta changes from the next iteration on: the Anderson
                 // history refers to the upwind operator
                 flushHistory("startupEnd");
-                Info<< "coupledFoam: start-up phase done at iteration "
-                    << iter << " (R " << R << ")" << endl;
+                Info<< "coupledFoam: start-up ramp starts at iteration "
+                    << iter << " (trigger " << startup.trigger() << ", R "
+                    << R << "), beta 1 from iteration "
+                    << startup.rampEndIter() << endl;
             }
         }
 
@@ -1111,6 +1203,24 @@ int main(int argc, char *argv[])
         if (nNutCapped)
         {
             Info<< " nNutCapped=" << nNutCapped;
+        }
+        {
+            // Smoother pivot fallbacks of the last solve (D-049)
+            const blockGAMGPrecon* gpf =
+                dynamic_cast<const blockGAMGPrecon*>
+                (
+                    linSolver->preconditioner()
+                );
+            if (gpf)
+            {
+                const label nFb =
+                    returnReduce(gpf->gamg().nPivotFallback(), sumOp<label>());
+                nPivotFallbackTotal += nFb;
+                if (nFb)
+                {
+                    Info<< " nPivFb=" << nFb;
+                }
+            }
         }
         if (conv.haveForces())
         {
@@ -1606,12 +1716,19 @@ int main(int argc, char *argv[])
         j.add("solver", "coupledFoam");
         j.add("nProcs", UPstream::nProcs());
         j.add("nCells", returnReduce(mesh.nCells(), sumOp<label>()));
+        j.add("Uref", ls.Uref());
+        j.add("pref", ls.pref());
+        j.add("UrefMode", ls.UrefMode());
+        j.add("UrefSource", ls.UrefSource());
         j.add("iterations", iter);
         j.add("converged", converged);
         j.add("finalR", lastR);
         j.add("finalCFL", ptc.CFL());
         j.add("lastLinearIterations", lastLinIters);
         j.add("cflCuts", nCflCutsTotal);
+        j.add("linFailPolicy", linFailPolicy);
+        j.add("linAcceptedUnconverged", nLinAccepted);
+        j.add("pivotFallbacks", nPivotFallbackTotal);
         j.add("rollbacks", sen.nRollbacks());
         j.add("staticCells", rem.nStatic());
         j.add("dynamicCells", rem.nDynamic());
@@ -1624,6 +1741,14 @@ int main(int argc, char *argv[])
         j.add("peakRSS_MB_maxRank", rssMax/1024.0);
         j.add("peakRSS_MB_sum", rssSum/1024.0);
         j.add("restarted", restarted);
+        j.add("startupMode", startup.modeName());
+        j.add
+        (
+            "startupTrigger",
+            startup.trigger().empty() ? word("pending") : startup.trigger()
+        );
+        j.add("rampStartIter", startup.rampStartIter());
+        j.add("rampEndIter", startup.rampEndIter());
         j.add("phiConsistency", phiConsistency);
         j.add("ftz", ftzApplied);
         j.add("fpeTraps", runInfo::fpeActive());

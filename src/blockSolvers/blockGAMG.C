@@ -2105,6 +2105,20 @@ void Foam::blockGAMG::kstep
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
+Foam::label Foam::blockGAMG::nPivotFallback() const
+{
+    label n = 0;
+    forAll(smoothers_, l)
+    {
+        if (smoothers_.set(l))
+        {
+            n += smoothers_[l].nPivotFallback();
+        }
+    }
+    return n;
+}
+
+
 Foam::label Foam::blockGAMG::nSingularDiag() const
 {
     label n = 0;
