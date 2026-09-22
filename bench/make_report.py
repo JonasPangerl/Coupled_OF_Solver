@@ -2112,7 +2112,18 @@ def _cells_of(d: dict, run_dir: Path | None) -> int | None:
             return None
         m = re.search(r"nCells:\s*(\d+)", head)
         if not m:
-            return None
+            # older mesh files carry no note: the size of the ASCII
+            # cellList in polyMesh/cells[.gz] is the cell count
+            cf = f.parent / ("cells.gz" if f.suffix == ".gz" else "cells")
+            try:
+                with (gzip.open if cf.suffix == ".gz" else open)(cf, "rb") as fh:
+                    hc = fh.read(4096).decode("latin-1")
+            except OSError:
+                return None
+            body = hc.split("// * *", 1)[-1]
+            m = re.search(r"^\s*(\d+)\s*\n\s*\(", body.split("\n", 1)[-1], re.M)
+            if not m:
+                return None
         tot += int(m.group(1))
     return tot or None
 
@@ -2171,7 +2182,7 @@ def metrics_section(tests: dict) -> None:
                 hit = np.nonzero(np.asarray(R) <= R[0] * 10.0 ** (-k))[0]
                 cells_.append(f"{hit[0] + 1} / {t[hit[0]]:.3g}" if len(hit)
                               else "not reached")
-            rres.append([lab, solver, f"{R[0]:.2e}"] + cells_)
+            rres.append([lab, solver] + cells_)
     if rows:
         write_table(
             "metrics_cost",
@@ -2189,13 +2200,14 @@ def metrics_section(tests: dict) -> None:
     if rres:
         write_table(
             "metrics_residual",
-            ["case", "residual", "first value", "to 1e-2 x first",
+            ["case", "residual", "to 1e-2 x first",
              "to 1e-3 x first", "to 1e-4 x first"], rres,
             "Residual reduction: iteration / wall-clock time [s] at which the "
             "residual first falls two, three and four orders of magnitude "
             "below its first value (coupledFoam combined residual $R$, "
             "simpleFoam initial residual of $p$). The two residuals are "
-            "normalised differently (Section on residual norms), so only the "
+            "normalised differently (see the definition of the residual "
+            "norms), so only the "
             "reductions of each solver, not the levels, are comparable.",
             "tab:metres", resize=True)
     # ---- scaling table (T-scaling record)
@@ -2293,6 +2305,7 @@ def table_wake_speedup(tests: dict) -> None:
     referenceTimingConditionsUnknown)."""
     rows = []
     wake_notes: list[str] = []
+    flags: list[str] = []
     for name in sorted(tests):
         if not name.startswith(("T4a_np", "T4b_np")) or name.endswith(SP_SUFFIX):
             continue
@@ -2329,14 +2342,19 @@ def table_wake_speedup(tests: dict) -> None:
                 common = True
         rule = (f"common W = {W}" if common else
                 f"per-run W = {W} / {Wr} (earlier rule)")
-        sens_txt = (f"{sw:.2f} / {sc:.2f}" if sw and sc
-                    else ("= left" if not common else "n/a"))
-        rows.append([name, fmt(itc, "{}"), fmt(its, "{}"), fmt(wc), fmt(ws),
-                     fmt(cc, "{:.3g}"), fmt(cs, "{:.3g}"),
-                     fmt(spw, "{:.2f}"), fmt(spc, "{:.2f}"), rule, sens_txt,
-                     _flag(d, "referenceSingleConfig"),
-                     _flag(d, "referenceNoPotentialStart"),
-                     _flag(d, "referenceTimingConditionsUnknown")])
+        lab = f"{name} ({rule})"
+        rows.append([lab, "iterations to convergence", fmt(itc, "{}"),
+                     fmt(its, "{}"), "", ""])
+        rows.append(["", "wall-clock time [s]", fmt(wc), fmt(ws),
+                     fmt(spw, "{:.2f}"), fmt(sw, "{:.2f}")])
+        rows.append(["", "CPU-hours", fmt(cc, "{:.3g}"), fmt(cs, "{:.3g}"),
+                     fmt(spc, "{:.2f}"), fmt(sc, "{:.2f}")])
+        flags.append(
+            f"{name}: reference = single native configuration: "
+            f"{_flag(d, 'referenceSingleConfig')}; started without the "
+            f"tutorial's potentialFoam initialisation: "
+            f"{_flag(d, 'referenceNoPotentialStart')}; timing conditions "
+            f"unknown: {_flag(d, 'referenceTimingConditionsUnknown')}")
         k = name.split("_")[0]
         num(f"wake speedup wall {k}", spw, "{:.2f}")
         num(f"wake speedup cpu {k}", spc, "{:.2f}")
@@ -2361,21 +2379,19 @@ def table_wake_speedup(tests: dict) -> None:
     num("wake speed note", tex_escape("; ".join(wake_notes) + "."))
     write_table(
         "wake_speedup",
-        ["run", "it. cF", "it. sF", "wall cF [s]", "wall sF [s]",
-         "CPU-h cF", "CPU-h sF", "speed-up wall", "speed-up CPU",
-         "window", "per-run-window speed-up (wall / CPU)",
-         "ref. single native config.", "ref. without potentialFoam start",
-         "ref. timing conditions unknown"],
+        ["run (window)", "quantity", "coupledFoam", "simpleFoam",
+         "sF/cF", "sF/cF per-run window"],
         rows,
-        "Motorbike: coupledFoam (cF) test run against the cached simpleFoam "
-        "(sF) reference, iterations, wall-clock time and CPU-hours to the "
-        "stationary window mean (D-042, common window D-068), and the "
-        "speed-up sF/cF. The window of the earlier rule was derived from each "
-        "run's own budget and fixed the earliest possible convergence "
-        "of the longer reference run; its speed-up is a sensitivity value. "
-        "The last three columns disclose the conditions of the reference "
-        "run (harness-fix, D-068).",
-        "tab:wakespeed", resize=True)
+        "Motorbike: coupledFoam test run against the cached simpleFoam "
+        "reference, iterations, wall-clock time and CPU-hours to the first "
+        "stationary window mean (D-042) with one window for both solvers "
+        "(D-068); sF/cF: speed-up of coupledFoam (below one: coupledFoam "
+        "slower). The last column uses each run's own window (the earlier "
+        "rule, which derived the window from the run's budget and thereby "
+        "delayed the earliest possible convergence of the longer reference "
+        "run); it is a sensitivity value, not a result.",
+        "tab:wakespeed", resize=True, note="Conditions of the reference runs: "
+        + "; ".join(flags) + ".")
 
 
 # --------------------------------------------------------------------------- #

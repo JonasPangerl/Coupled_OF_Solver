@@ -2813,7 +2813,10 @@ axis.}}
   \ifdim\pagegoal=\maxdimen
     \setlength\cf@hh{0.8\textheight}%
   \else
-    \setlength\cf@hh{\dimexpr\pagegoal-\pagetotal-7\baselineskip\relax}%
+    % reserve the typeset caption plus the float and caption skips
+    \setbox\@tempboxa\vbox{\hsize=\linewidth\normalsize Figure 999: #2}%
+    \setlength\cf@hh{\dimexpr\pagegoal-\pagetotal-\ht\@tempboxa
+      -\dp\@tempboxa-4\baselineskip\relax}%
     \ifdim\cf@hh>0.8\textheight\setlength\cf@hh{0.8\textheight}\fi
     \ifdim\cf@hh<0.4\textheight\setlength\cf@hh{0.8\textheight}\fi
   \fi
