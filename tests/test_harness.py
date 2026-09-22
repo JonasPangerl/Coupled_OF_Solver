@@ -382,3 +382,24 @@ def test_t3_converged_run(tmp_path):
     r2 = t3.converged_coeffs(_force_case(tmp_path / "s", cd[:120], cl[:120]),
                              solver_stop=True)
     assert r2["converged"] and r2["itersToConv"] == 120
+
+
+# --------------------------------------------------------------------------- #
+# M7: a continued reference is read up to its original budget only
+# --------------------------------------------------------------------------- #
+
+def test_reference_continuation_excluded(tmp_path):
+    import user_convergence as ucv  # noqa: PLC0415
+    n, n0 = 450, 300
+    case = _force_case(tmp_path / "ref_T4a_np10", [0.4] * n, [0.07] * n)
+    (case / "reference.json").write_text(json.dumps(
+        {"continuation": {"startTime": float(n0), "ok": True}}))
+    assert run_bench.reference_t_max(case) == n0
+    assert len(run_bench.force_history(case)["Cd"]) == n0
+    assert len(run_bench.force_history(case, original_only=False)["Cd"]) == n
+    assert len(ucv.force_hist(case)["Cd"]) == n0
+    ev = ucv.evaluate(case, "simpleFoam", 400, {})
+    assert "ignored" in ev and "original reference budget" in ev["ignored"]
+    # a run without continuation is not cut
+    other = _force_case(tmp_path / "T4a_np10", [0.4] * n, [0.07] * n)
+    assert len(run_bench.force_history(other)["Cd"]) == n

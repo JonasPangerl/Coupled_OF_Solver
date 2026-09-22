@@ -19,9 +19,13 @@ File: report/user_convergence.json (tracked; edited by hand)
 
 Case keys: T3-SST, T3-GEKO, T4a, T4b, T5. Within a case:
   "coupledFoam" / "simpleFoam"  the test run and its simpleFoam reference
-  "A" ... "H", "E-..."          one benchmark configuration (all repeats)
+  "A" ... "H", "H-tune", "E-..." one benchmark configuration (all repeats)
 A missing or null entry keeps the automatic value. Keys starting with "_"
 are comments.
+
+A cached reference that was continued with averaging (ref_T4a, ref_T4b)
+is read up to the end of its original budget only (M7): a user iteration
+beyond it is ignored and flagged like one beyond the end of a run.
 
 With a user iteration N of a run with n iterations:
   iterations to convergence  = N
@@ -74,12 +78,15 @@ def lookup(table: dict, case: str | None, key: str) -> int | None:
 
 
 def force_hist(case: Path) -> dict[str, np.ndarray]:
-    from cflib import post  # noqa: PLC0415
-    try:
-        fc = post.force_coeffs(case)
-    except (FileNotFoundError, KeyError, OSError):
+    """Cd / Cl history of a run. A continued simpleFoam reference (ref_*
+    with reference.json "continuation") is cut at the end of its ORIGINAL
+    budget (M7): the continuation samples are not part of the reference run,
+    as in the test's own evaluation (t_max)."""
+    import run_bench  # noqa: PLC0415
+    h = run_bench.force_history(case)
+    if not h:
         return {}
-    return {"Cd": np.asarray(fc["Cd"], float), "Cl": np.asarray(fc["Cl"], float)}
+    return {"Cd": np.asarray(h["Cd"], float), "Cl": np.asarray(h["Cl"], float)}
 
 
 def _rt(rec: dict) -> dict:
@@ -104,7 +111,11 @@ def evaluate(case: Path, solver: str, it: int, rec: dict) -> dict:
         n = min(len(h["Cd"]), len(h["Cl"]))
         out["iterationsRun"] = n
         if it > n:
-            out["ignored"] = f"iteration {it} > {n} iterations run"
+            cont = run_bench.reference_t_max(case) is not None
+            out["ignored"] = (f"iteration {it} > {n} iterations run"
+                              + (" (the original reference budget; the "
+                                 "continuation is not part of the "
+                                 "reference, D-060)" if cont else ""))
             return out
         k = min(max(it, 1), n) - 1
         for q in ("Cd", "Cl"):

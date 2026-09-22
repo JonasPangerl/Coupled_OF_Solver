@@ -1977,3 +1977,17 @@ old runs (before D-058, read-only): ref_T3_kOmegaSST and ref_T3_GEKO are
 converged (final window range 0.01 % / 0.03 % of Cd); the old coupledFoam
 runs T3_kOmegaSST_np1 (Cd range 300 % of the mean) and T3_GEKO_np1 (10 %)
 would now fail on convergence.
+
+### 7. The reference continuation is not part of the reference (review M7)
+
+ref_T4a has 4500 force samples (3000 original + 1500 continuation). The
+test evaluated t <= 3000, but user_convergence and the plots used all of
+them (W from 4500, user iterations up to 4500 accepted, means including
+the continuation). Now run_bench.reference_t_max(case) (reference.json
+continuation.startTime) and run_bench.force_history(case) (cut there by
+default) are the one way to read a run's force history for evaluation;
+user_convergence.force_hist uses it, so a user iteration beyond the
+original budget is ignored and flagged (D-060) and the N..end means stop
+at the original end. make_report._speed_record reads through it.
+plot_histories (owned by the figures agent) still reads all samples; the
+change it needs is given to the lead.
