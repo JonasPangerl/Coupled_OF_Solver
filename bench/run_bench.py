@@ -574,19 +574,27 @@ def mean_comparison(rec: dict, ref: dict) -> dict:
 def _parse_time_reports(reps: list[Path]) -> dict:
     """wall (max over ranks), CPU (user + sys summed) and peak RSS of a set
     of /usr/bin/time -v reports of one application."""
-    wall, cpu, rss = [], [], []
+    wall, cpu, rss, incomplete = [], [], [], []
     for r in reps:
-        t = r.read_text()
-        u = float(re.search(r"User time \(seconds\): ([\d.]+)", t).group(1))
-        s = float(re.search(r"System time \(seconds\): ([\d.]+)", t).group(1))
-        m = int(re.search(r"Maximum resident set size \(kbytes\): (\d+)", t).group(1))
-        e = re.search(r"Elapsed \(wall clock\) time .*: ([\d:.]+)", t).group(1)
-        parts = [float(p) for p in e.split(":")]
+        t = r.read_text(errors="replace")
+        mu = re.search(r"User time \(seconds\): ([\d.]+)", t)
+        ms = re.search(r"System time \(seconds\): ([\d.]+)", t)
+        mm = re.search(r"Maximum resident set size \(kbytes\): (\d+)", t)
+        me = re.search(r"Elapsed \(wall clock\) time .*: ([\d:.]+)", t)
+        if not (mu and ms and mm and me):
+            # a rank killed by MPI_Abort (e.g. a B4 abort) may leave an
+            # incomplete report: skip it, record it, never crash the caller
+            incomplete.append(r.name)
+            continue
+        parts = [float(p) for p in me.group(1).split(":")]
         w = sum(p * 60 ** i for i, p in enumerate(reversed(parts)))
         wall.append(w)
-        cpu.append(u + s)
-        rss.append(m)
+        cpu.append(float(mu.group(1)) + float(ms.group(1)))
+        rss.append(int(mm.group(1)))
+    if not wall:
+        return {"ranks": len(reps), "incompleteReports": incomplete}
     return {
+        "incompleteReports": incomplete,
         "ranks": len(reps),
         "wallSeconds": max(wall),
         "cpuSeconds": sum(cpu),
