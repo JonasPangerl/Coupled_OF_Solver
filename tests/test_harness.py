@@ -293,3 +293,39 @@ def test_failed_record_is_rerun(bench_results, monkeypatch):
         run_bench.run_one("T1", "C", 2, 1, force=False)
     # the failed record was moved aside, not kept as a result
     assert not (bench_results / "T1_C_2.json").exists()
+
+
+# --------------------------------------------------------------------------- #
+# M1: the speed-up times both solvers to the same criterion
+# --------------------------------------------------------------------------- #
+
+def _make_report():
+    pytest.importorskip("matplotlib")
+    import make_report  # noqa: PLC0415
+    return make_report
+
+
+def test_speed_criterion_per_case():
+    mr = _make_report()
+    assert mr.speed_criterion("T0_Re100_np1", {"Rtarget": 1e-8}) == ("residual", 1e-8)
+    assert mr.speed_criterion("T1_np1", {"Rtarget": 1e-5}) == ("residual", 1e-5)
+    assert mr.speed_criterion("T2_np1", {}) == ("residual", 1e-5)
+    assert mr.speed_criterion("T3_GEKO_np1", {})[0] == "forceWindow"
+    assert mr.speed_criterion("T4a_np10", {})[0] == "stationary"
+    assert mr.speed_criterion("T5_coarse_np10", {})[0] == "stationary"
+
+
+def test_simplefoam_residual_iteration_all_fields():
+    """simpleFoam converges when EVERY initial residual is below R (not at
+    its residualControl stop)."""
+    import numpy as np  # noqa: PLC0415
+    mr = _make_report()
+    n = 100
+    sft = {"t": np.arange(1, n + 1, dtype=float), "n": n,
+           "res": {"p": np.logspace(-2, -9, n), "Ux": np.logspace(-3, -9, n),
+                   "k": np.logspace(-1, -6, n)}}
+    it = mr._sf_residual_iteration(sft, 1e-5)
+    k = sft["res"]["k"]
+    assert it == int(np.nonzero(k < 1e-5)[0][0]) + 1
+    assert mr._sf_residual_iteration(sft, 1e-12) is None
+    assert mr._frac(sft, it, n) == pytest.approx(it / n)

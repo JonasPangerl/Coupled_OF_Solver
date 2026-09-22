@@ -443,7 +443,10 @@ def monitor_history(case: Path, kind: str) -> dict[str, list[float]]:
 
 def iters_to_conv(hist: dict[str, list[float]]) -> int | None:
     """First iteration at which every monitored quantity satisfies the
-    window criterion (spec 12.3 ii) at the same time."""
+    window criterion (spec 12.3 ii) at the same time. None for an empty
+    history."""
+    if not hist:
+        return None
     n = min(len(h) for h in hist.values())
     for i in range(WINDOW, n + 1):
         if all(_window_ok(h[:i]) for h in hist.values()):
@@ -768,6 +771,96 @@ def stationary_eval(hist: dict[str, list[float]],
     out["iters_to_stationary_perRun"] = iters_to_stationary(hist, quantities,
                                                             w=w_run)
     return out
+
+
+def reference_t_max(case: Path) -> float | None:
+    """Last iteration of the ORIGINAL run of a cached simpleFoam reference
+    that was continued with averaging (reference.json
+    continuation.startTime; tests/test_T4_motorBike.py
+    continue_reference_with_average), None for every other directory. Every
+    evaluation of the reference must stop there (M7, D-060): the
+    continuation samples are not part of the reference run."""
+    meta = Path(case) / "reference.json"
+    try:
+        rec = json.loads(meta.read_text())
+    except (OSError, ValueError):
+        return None
+    t = (rec.get("continuation") or {}).get("startTime")
+    return float(t) if t is not None else None
+
+
+def force_history(case: Path, t_min: float | None = None,
+                  t_max: float | None = None,
+                  original_only: bool = True) -> dict[str, list[float]]:
+    """Cd / Cl history of a run (restarts merged), only samples with
+    t_min < Time <= t_max. original_only (default): t_max defaults to
+    reference_t_max(case), i.e. a continued reference is cut at the end of
+    its original budget. {} if the case has no force coefficients."""
+    try:
+        fc = post.force_coeffs(case)
+    except (FileNotFoundError, KeyError, OSError, ValueError, IndexError):
+        return {}
+    if "Cd" not in fc or "Cl" not in fc:
+        return {}
+    if original_only and t_max is None:
+        t_max = reference_t_max(case)
+    cd, cl = fc["Cd"], fc["Cl"]
+    if "Time" in fc and (t_min is not None or t_max is not None):
+        t = fc["Time"]
+        keep = [(t_min is None or x > t_min) and (t_max is None or x <= t_max)
+                for x in t]
+        cd = [v for v, k in zip(cd, keep) if k]
+        cl = [v for v, k in zip(cl, keep) if k]
+    return {"Cd": [float(v) for v in cd], "Cl": [float(v) for v in cl]}
+
+
+def stationary_point(case_dir: Path, solver: str, case: str | None) -> dict:
+    """D-042 convergence point of a wake-case run directory, read-only:
+    iterations, wall seconds and CPU-hours to the first stationary window
+    under the case's common window (D-068) and, for information, under the
+    per-run window (keys *_perRun). A continued reference is evaluated over
+    its original budget only. {} if the run has no force history."""
+    hist = force_history(case_dir)
+    if not hist or not hist["Cd"]:
+        return {}
+    st = stationary_eval(hist, case=case)
+    rt = rank_times(Path(case_dir), solver)
+    out = {"n": st.get("iterations_run"), "W": st.get("W"),
+           "W_perRun": st.get("W_perRun"),
+           "stationary": st.get("stationary"),
+           "Cd_mean": st.get("Cd_mean"), "Cl_mean": st.get("Cl_mean"),
+           "wallTotal": rt.get("wallSeconds"), "cpuhTotal": rt.get("cpuHours")}
+    for sfx, it in (("", st.get("iters_to_stationary")),
+                    ("_perRun", st.get("iters_to_stationary_perRun"))):
+        tc = (to_convergence(rt, progress_fraction(Path(case_dir), solver, it))
+              if it else {})
+        out[f"iters{sfx}"] = it
+        out[f"wall{sfx}"] = tc.get("wall_to_conv_s")
+        out[f"cpuh{sfx}"] = tc.get("cpu_to_conv_h")
+    return out
+
+
+def reference_timing_flags(ref_dir: Path | None, ref: dict) -> dict:
+    """Fairness flags of a speed-up against a cached simpleFoam reference
+    (review M2; the report must state them):
+    referenceNoPotentialStart   the reference ran without the tutorial's
+                                potentialFoam start (the harness never set
+                                CF_NATIVE_POTENTIAL for the test references)
+    referenceTimingConditionsUnknown  the reference record carries no
+                                machine state (load, other jobs) of its run
+    referenceSingleConfig       one native configuration (the tutorial
+                                relaxation with SIMPLEC), not the best of the
+                                benchmark configurations A/B"""
+    ranks = ref.get("ranks") or {}
+    pot = bool(ref_dir is not None
+               and (Path(ref_dir) / "log.potentialFoam").exists()) \
+        or "potentialFoam" in (ranks.get("preApps") or [])
+    return {
+        "referenceNoPotentialStart": not pot,
+        "referenceTimingConditionsUnknown":
+            not (ref.get("machineBefore") or ref.get("machine")),
+        "referenceSingleConfig": True,
+    }
 
 
 def mean_comparison(rec: dict, ref: dict) -> dict:

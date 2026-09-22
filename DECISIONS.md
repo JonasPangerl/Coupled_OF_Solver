@@ -1919,3 +1919,28 @@ CONFIG_SCOPE):
   other failure is flagged in the record (failed, failure, logTail); the
   T4/T5 tests write the record with pass false and fail loudly
   (fail_if_failed); the T0-T2 and scaling asserts show the log tail.
+
+### 4. Speed-up figure: both solvers timed to the same criterion (review M1)
+
+make_report._speed_record (numbers SpeedWall*/SpeedCpu*, figure
+speed_time_to_conv) took coupledFoam at its residual target and
+simpleFoam at its residualControl stop (1e-8) or its whole run, and T3/T4
+always as "not conv.". Now (speed_criterion):
+- T0-T2: the test's R target (T0 1e-8, T1 1e-5, T2 1e-5). coupledFoam:
+  first R < target. simpleFoam: first iteration at which EVERY initial
+  residual in its log (p, Ux, Uy, k, omega, ...) is below the target (the
+  D-024 definition already used by T2). The two residuals are normalised
+  differently (paper Section 3.2); this is the closest common definition.
+  Times: solver only, wall-clock fraction of the run up to the iteration.
+- T3: spec 12.3(ii) (100-iteration Cd/Cl window, 0.2 %) on both force
+  histories; a D-060 user point takes precedence; coupledFoam's own stop
+  counts if the window is not met.
+- T4/T5: the D-042 point under the common window (item 1), from the test
+  record (rank timing incl. potentialFoam) or recomputed from the run
+  directories for older records; per-run values as *_perRun.
+The records carry it_cf_conv / it_sf_conv (convergence iterations of both)
+and n_cf / n_sf. Read-only check on main's records and runs: T1 1.04x
+(was about 1.4x), T0 Re100 18x, Re1000 5x, T2 >= 12.9x (simpleFoam never
+reaches 1e-5), T3 from the old 3000-iteration runs 0.07x / 0.02x
+(coupledFoam never met 12.3(ii) there; rerun pending), T4a 0.42x (per-run
+window 1.40x).
