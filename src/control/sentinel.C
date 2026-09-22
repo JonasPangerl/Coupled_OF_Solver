@@ -99,6 +99,17 @@ void Foam::sentinel::store
     {
         phi0Boundary_[patchi] = phi.boundaryField()[patchi];
     }
+    // U and p boundary values, restored verbatim (D-069 F6)
+    U0Boundary_.resize(U.boundaryField().size());
+    forAll(U.boundaryField(), patchi)
+    {
+        U0Boundary_[patchi] = U.boundaryField()[patchi];
+    }
+    p0Boundary_.resize(p.boundaryField().size());
+    forAll(p.boundaryField(), patchi)
+    {
+        p0Boundary_[patchi] = p.boundaryField()[patchi];
+    }
     // All turbulence fields (k, omega, nut among them), D-069 F3
     turb0_.resize(turbNames_.size());
     turb0Boundary_.resize(turbNames_.size());
@@ -291,8 +302,21 @@ void Foam::sentinel::restore
     {
         phi.boundaryFieldRef()[patchi] == phi0Boundary_[patchi];
     }
-    U.correctBoundaryConditions();
-    p.correctBoundaryConditions();
+    // U and p boundary values verbatim as well (D-069 F6):
+    // correctBoundaryConditions() would re-evaluate freestreamVelocity from
+    // its own (rejected-step) patch values and inletOutlet with the restored
+    // phi, i.e. give a state that is neither iteration n-1 nor the rejected
+    // one. Processor patches hold the neighbour cell values of the stored
+    // state (all ranks roll back together). The mixed-type coefficients are
+    // refreshed by updateCoeffs() before the next assembly (F1).
+    forAll(U.boundaryField(), patchi)
+    {
+        U.boundaryFieldRef()[patchi] == U0Boundary_[patchi];
+    }
+    forAll(p.boundaryField(), patchi)
+    {
+        p.boundaryFieldRef()[patchi] == p0Boundary_[patchi];
+    }
 
     // All turbulence fields: verbatim, without boundary evaluation (D-056,
     // D-069 F3)

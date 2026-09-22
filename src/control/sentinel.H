@@ -24,7 +24,8 @@ Description
     is a FatalError ("failed lookup of kOmegaSST:G"). The stored boundary
     values are those evaluated by the model itself at the end of the
     previous accepted iteration, so the restored state is exactly that
-    state (processor patches included, all ranks restore together).
+    state (processor patches included, all ranks restore together). U and
+    p are restored the same way, internal and boundary values (D-069 F6).
 
     On failure the caller restores the copies (restore()), cuts
     CFL <- max(CFLmin, cflFactor*CFL), marks the offending cells into the
@@ -111,6 +112,9 @@ private:
         scalarField p0_;
         scalarField phi0_;
         List<scalarField> phi0Boundary_;
+        //- U and p boundary values (restored verbatim, D-069 F6)
+        List<vectorField> U0Boundary_;
+        List<scalarField> p0Boundary_;
         //- Turbulence fields (turbNames_ order), internal and boundary
         //  values (restored verbatim, D-056)
         List<scalarField> turb0_;
