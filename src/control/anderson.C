@@ -28,6 +28,8 @@ Foam::anderson::anderson(const fvMesh& mesh, const dictionary& coupledDict)
     m_(coupledDefaults::andersonM),
     beta_(coupledDefaults::andersonBeta),
     maxAlpha_(coupledDefaults::andersonMaxAlpha),
+    maxCells_(coupledDefaults::andersonMaxCells),
+    rankTol_(coupledDefaults::andersonRankTol),
     n_(nCmpt*mesh.nCells()),
     nHist_(0),
     hasPrev_(false),
@@ -53,6 +55,15 @@ Foam::anderson::anderson(const fvMesh& mesh, const dictionary& coupledDict)
             coupledDefaults::andersonMaxAlpha
         );
 
+    maxCells_ = d.getOrDefault<label>("maxCells", maxCells_);
+    rankTol_ = d.getOrDefault<doubleScalar>("rankTol", rankTol_);
+    if (!(rankTol_ > 0 && rankTol_ < 1) || maxCells_ < 1)
+    {
+        FatalIOErrorInFunction(d)
+            << "anderson.rankTol must be in (0, 1) and anderson.maxCells >= 1,"
+            << " got " << rankTol_ << ", " << maxCells_ << exit(FatalIOError);
+    }
+
     if (m_ < 1 || !(beta_ > 0) || !(maxAlpha_ > 0))
     {
         FatalIOErrorInFunction(d)
@@ -66,11 +77,11 @@ Foam::anderson::anderson(const fvMesh& mesh, const dictionary& coupledDict)
     if (enabled_)
     {
         const label nTotal = returnReduce(mesh.nCells(), sumOp<label>());
-        if (nTotal > coupledDefaults::andersonMaxCells)
+        if (nTotal > maxCells_)
         {
             WarningInFunction
                 << "anderson.enabled ignored: " << nTotal << " cells > "
-                << coupledDefaults::andersonMaxCells
+                << maxCells_
                 << " (amendment B7 memory rule); Anderson acceleration is"
                 << " disabled" << endl;
             enabled_ = false;
@@ -242,7 +253,7 @@ bool Foam::anderson::orthogonalise(const label c)
 
     // Numerical rank: the orthogonal part must keep at least half of the
     // significant digits of the column (sqrt of the double epsilon)
-    const doubleScalar rankTol = coupledDefaults::andersonRankTol;
+    const doubleScalar rankTol = rankTol_;
 
     if (!(norm > rankTol*norm0) || !std::isfinite(norm))
     {
@@ -531,6 +542,8 @@ void Foam::anderson::writeSettings(dictionary& dict) const
     d.add("m", m_);
     d.add("beta", beta_);
     d.add("maxAlpha", maxAlpha_);
+    d.add("maxCells", maxCells_);
+    d.add("rankTol", rankTol_);
     dict.add("anderson", d);
 }
 

@@ -100,6 +100,7 @@ class rhieChow
         bool tensorial_;
         doubleScalar detRelTol_;
         doubleScalar pinvRelTol_;
+        label pinvMaxSweeps_;
 
         //- D = V A^-1 per cell with coupled boundary values (tensorial only)
         autoPtr<volTensorField> DTPtr_;

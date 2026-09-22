@@ -113,6 +113,10 @@ private:
         //- Clamp for the narrowing to blockScalar (9.2)
         const doubleScalar clampValue_;
 
+        //- Relative flux-balance tolerance of a closed domain (D-021;
+        //  guards.refFluxBalanceTol)
+        const doubleScalar refFluxBalanceTol_;
+
         //- Pressure reference
         bool needRef_;
         label pRefCell_;
@@ -262,6 +266,9 @@ public:
             rhieChow& rc() noexcept { return rc_; }
             const rhieChow& rc() const noexcept { return rc_; }
             const nonOrthCorrection& noc() const noexcept { return noc_; }
+
+            //- Effective clamp value of the block coefficients (9.2)
+            doubleScalar clampValue() const noexcept { return clampValue_; }
 
             const scalarField& abar() const noexcept { return abar_; }
 

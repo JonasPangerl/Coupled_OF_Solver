@@ -57,6 +57,9 @@ class blockSimplePrecon
 
     //- Schur scale and mode
     reduceScalar schurScale_;
+
+    //- Pivot guard of 1/diag(A_uu) (pivotGuard, as block4Ops)
+    reduceScalar pivotGuard_;
     bool sequential_;
 
     //- 1/diag of the u-u block per cell and u component (p entry 0)

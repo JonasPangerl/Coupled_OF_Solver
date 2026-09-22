@@ -65,7 +65,11 @@ Foam::blockSolver::blockSolver
     diag_(nullptr)
 {
     const word preconName =
-        dict.getOrDefault<word>("preconditioner", "none");
+        dict.getOrDefault<word>
+        (
+            "preconditioner",
+            word(coupledDefaults::preconditioner)
+        );
 
     if (preconName != "none")
     {

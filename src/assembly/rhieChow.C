@@ -111,16 +111,29 @@ Foam::rhieChow::rhieChow(const fvMesh& mesh, const dictionary& coupledDict)
             coupledDefaults::rhieChowPinvRelTol
         )
     ),
+    pinvMaxSweeps_
+    (
+        coupledDict.subOrEmptyDict("rhieChow").getOrDefault<label>
+        (
+            "pinvMaxSweeps",
+            coupledDefaults::rhieChowPinvMaxSweeps
+        )
+    ),
     DTPtr_(nullptr),
     nPinvLast_(0),
     nPinvWindow_(0),
     nPinvTotal_(0)
 {
-    if (!(detRelTol_ >= 0) || !(pinvRelTol_ > 0 && pinvRelTol_ < 1))
+    if
+    (
+        !(detRelTol_ >= 0) || !(pinvRelTol_ > 0 && pinvRelTol_ < 1)
+     || pinvMaxSweeps_ < 1
+    )
     {
         FatalIOErrorInFunction(coupledDict)
             << "rhieChow.detRelTol " << detRelTol_ << " must be >= 0 and"
-            << " rhieChow.pinvRelTol " << pinvRelTol_ << " in (0, 1)"
+            << " rhieChow.pinvRelTol " << pinvRelTol_ << " in (0, 1),"
+            << " rhieChow.pinvMaxSweeps " << pinvMaxSweeps_ << " >= 1"
             << exit(FatalIOError);
     }
 
@@ -273,7 +286,7 @@ void Foam::rhieChow::updateD
         {
             block4Ops::pseudoInverse3
             (
-                Ad, Ai, pinvRelTol_, coupledDefaults::rhieChowPinvMaxSweeps
+                Ad, Ai, pinvRelTol_, pinvMaxSweeps_
             );
             ++nPinv;
         }

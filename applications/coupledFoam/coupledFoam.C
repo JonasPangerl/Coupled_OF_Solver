@@ -86,7 +86,35 @@ int main(int argc, char *argv[])
     // * * * * * * * * * * * * * * Controls * * * * * * * * * * * * * * * * //
 
     const dictionary coupledDict(mesh.solutionDict().subOrEmptyDict("coupled"));
-    const dictionary& linearDict = mesh.solverDict("coupled");
+    // Amendment B7: FGMRES/GMRES restart restartLarge above
+    // restartLargeCells cells, unless restart/gmresRestart is given (D-066)
+    dictionary linearDictEff(mesh.solverDict("coupled"));
+    {
+        const label nCellsTotal =
+            returnReduce(mesh.nCells(), sumOp<label>());
+        const label largeCells = linearDictEff.getOrDefault<label>
+        (
+            "restartLargeCells",
+            coupledDefaults::restartLargeCells
+        );
+        if
+        (
+            nCellsTotal > largeCells
+         && !linearDictEff.found("restart")
+         && !linearDictEff.found("gmresRestart")
+        )
+        {
+            const label r = linearDictEff.getOrDefault<label>
+            (
+                "restartLarge",
+                coupledDefaults::restartLarge
+            );
+            linearDictEff.add("restart", r);
+            Info<< "coupledFoam: " << nCellsTotal << " cells > "
+                << largeCells << ": Krylov restart " << r << " (B7)" << endl;
+        }
+    }
+    const dictionary& linearDict = linearDictEff;
 
     const label maxIter =
         coupledDict.getOrDefault<label>("maxIter", coupledDefaults::outerMaxIter);
@@ -127,6 +155,26 @@ int main(int argc, char *argv[])
             "nutMaxFactor",
             coupledDefaults::nutMaxFactor
         );
+    // C2 warning interval of the Rhie-Chow pseudo-inverse fallbacks and the
+    // level-3 diagnostics cell count (D-066)
+    const label rhieChowWarnInterval =
+        coupledDict.subOrEmptyDict("rhieChow").getOrDefault<label>
+        (
+            "warnInterval",
+            coupledDefaults::rhieChowWarnInterval
+        );
+    const label diagTopLimited =
+        coupledDict.subOrEmptyDict("diagnostics").getOrDefault<label>
+        (
+            "topLimited",
+            coupledDefaults::diagTopLimited
+        );
+    if (rhieChowWarnInterval < 1 || diagTopLimited < 0)
+    {
+        FatalIOErrorInFunction(coupledDict)
+            << "rhieChow.warnInterval must be >= 1 and diagnostics.topLimited"
+            << " >= 0" << exit(FatalIOError);
+    }
 
     // FTZ/DAZ for benchmark runs (spec 9.1)
     const bool ftzApplied = (ftz ? runInfo::enableFTZ() : false);
@@ -292,6 +340,7 @@ int main(int argc, char *argv[])
             dictionary dg;
             dg.add("level", diag.level());
             dg.add("echo", diag.echo());
+            dg.add("topLimited", diagTopLimited);
             eff.add("diagnostics", dg);
         }
         dfields.writeSettings(eff);
@@ -441,7 +490,7 @@ int main(int argc, char *argv[])
 
     const blockGAMGPrecon* gpDiag =
         dynamic_cast<const blockGAMGPrecon*>(linSolver->preconditioner());
-    diagPhase phase;
+    diagPhase phase(coupledDict.subOrEmptyDict("diagnostics"));
     label diagHierVersion = -1;
     doubleScalar diagWritePrev = 0;
 
@@ -1022,10 +1071,10 @@ int main(int argc, char *argv[])
         {
             WarningInFunction
                 << nClamped << " coefficients clamped at +-"
-                << coupledDefaults::clampValue << " (spec 9.2)" << endl;
+                << assembler.clampValue() << " (spec 9.2)" << endl;
         }
         // C2: pseudo-inverse fallbacks of the tensorial Rhie-Chow D
-        if (iter % coupledDefaults::rhieChowWarnInterval == 0)
+        if (iter % rhieChowWarnInterval == 0)
         {
             const label nPinv = assembler.rc().takePseudoInverseWindow();
             if (nPinv)
@@ -1033,7 +1082,7 @@ int main(int argc, char *argv[])
                 WarningInFunction
                     << nPinv << " cells with a singular momentum block used"
                     << " the pseudo-inverse for the Rhie-Chow D in the last "
-                    << coupledDefaults::rhieChowWarnInterval
+                    << rhieChowWarnInterval
                     << " iterations (run total "
                     << assembler.rc().nPseudoInverseTotal() << ", C2)"
                     << endl;
@@ -1664,7 +1713,7 @@ int main(int argc, char *argv[])
                 // assembly, their centres and memory factors, plus the
                 // centroid of all limited cells (rank-local)
                 {
-                    const label nTop = coupledDefaults::diagTopLimited;
+                    const label nTop = diagTopLimited;
                     DynamicList<label> lim;
                     vector centroid(Zero);
                     forAll(locRatio, celli)
@@ -1726,7 +1775,7 @@ int main(int argc, char *argv[])
                 // i. Dynamic-set members (D-055): the first diagTopLimited
                 // cells of the set with centre, age and entry count
                 {
-                    const label nTop = coupledDefaults::diagTopLimited;
+                    const label nTop = diagTopLimited;
                     const labelList& age = rem.age();
                     const labelList& entries = rem.entries();
                     label n = 0;

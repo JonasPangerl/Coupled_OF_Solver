@@ -803,15 +803,43 @@ void Foam::diagnostics::writeRecord(const std::string& level1)
 
 // * * * * * * * * * * * * * * * * diagPhase * * * * * * * * * * * * * * * * //
 
-Foam::diagPhase::diagPhase()
+Foam::diagPhase::diagPhase(const dictionary& diagDict)
 :
-    window_(coupledDefaults::diagStallWindow),
-    resFactor_(coupledDefaults::diagAsymptoticResidualFactor),
-    forceFactor_(coupledDefaults::diagAsymptoticForceFactor),
+    window_
+    (
+        diagDict.getOrDefault<label>
+        (
+            "stallWindow",
+            coupledDefaults::diagStallWindow
+        )
+    ),
+    resFactor_
+    (
+        diagDict.getOrDefault<doubleScalar>
+        (
+            "asymptoticResidualFactor",
+            coupledDefaults::diagAsymptoticResidualFactor
+        )
+    ),
+    forceFactor_
+    (
+        diagDict.getOrDefault<doubleScalar>
+        (
+            "asymptoticForceFactor",
+            coupledDefaults::diagAsymptoticForceFactor
+        )
+    ),
     ring_(),
     head_(0),
     bestBefore_(GREAT)
-{}
+{
+    if (window_ < 1 || !(resFactor_ > 0) || !(forceFactor_ > 0))
+    {
+        FatalIOErrorInFunction(diagDict)
+            << "diagnostics.stallWindow must be >= 1 and the asymptotic"
+            << " factors > 0" << exit(FatalIOError);
+    }
+}
 
 
 const char* Foam::diagPhase::classify

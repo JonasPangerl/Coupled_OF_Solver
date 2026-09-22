@@ -48,7 +48,11 @@ Foam::ptcControl::ptcControl
 {
     const dictionary& d = coupledDict.subOrEmptyDict("ptc");
 
-    strategyName_ = d.getOrDefault<word>("cflStrategy", "mRDM");
+    strategyName_ = d.getOrDefault<word>
+    (
+        "cflStrategy",
+        word(coupledDefaults::cflStrategy)
+    );
     if (strategyName_ == "mRDM")
     {
         strategy_ = strategy::mRDM;

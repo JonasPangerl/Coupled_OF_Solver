@@ -66,7 +66,7 @@ Foam::autoPtr<Foam::blockSmoother> Foam::blockSmoother::New
 {
     const word smootherType
     (
-        dict.getOrDefault<word>("smoother", "blockGaussSeidel")
+        dict.getOrDefault<word>("smoother", word(coupledDefaults::smoother))
     );
 
     auto* ctorPtr = dictionaryConstructorTable(smootherType);

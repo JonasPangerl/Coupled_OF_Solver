@@ -51,7 +51,12 @@ Foam::coupledAssembler::coupledAssembler
             "nonOrthLimiter",
             coupledDefaults::nonOrthLimiter
         ),
-        staticCriteria::limitedNonOrthCoeff(coupledDict)       // D-066
+        staticCriteria::limitedNonOrthCoeff(coupledDict),      // D-066
+        coupledDict.getOrDefault<scalar>
+        (
+            "orthogonalityTolerance",
+            coupledDefaults::orthogonalityTolerance
+        )
     ),
     rc_(mesh, coupledDict),
     mrfPtr_(mrfPtr),
@@ -63,6 +68,14 @@ Foam::coupledAssembler::coupledAssembler
         (
             "clampValue",
             coupledDefaults::clampValue
+        )
+    ),
+    refFluxBalanceTol_
+    (
+        coupledDict.subOrEmptyDict("guards").getOrDefault<doubleScalar>
+        (
+            "refFluxBalanceTol",
+            coupledDefaults::refFluxBalanceTol
         )
     ),
     needRef_(false),
@@ -156,14 +169,14 @@ void Foam::coupledAssembler::checkReferenceFluxBalance
     if
     (
         std::abs(sums[0])
-      > coupledDefaults::refFluxBalanceTol*max(sums[1], VSMALL)
+      > refFluxBalanceTol_*max(sums[1], VSMALL)
     )
     {
         WarningInFunction
             << "Closed domain (pressure reference, D-021) but the boundary"
             << " fluxes do not balance: sum U_b.S_f = " << sums[0]
             << ", sum |U_b.S_f| = " << sums[1] << " (relative tolerance "
-            << coupledDefaults::refFluxBalanceTol << "). The continuity"
+            << refFluxBalanceTol_ << "). The continuity"
             << " equation of the reference cell is dropped, so the"
             << " imbalance is silently absorbed there." << endl;
     }

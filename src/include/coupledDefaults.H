@@ -37,8 +37,12 @@ constexpr doubleScalar relTol = 0.05;
 constexpr label maxIter = 200;
 constexpr label minIter = 1;                     // B1: never a zero increment
 constexpr label restart = 10;                    // B1: FGMRES/GMRES restart
-constexpr label restartLarge = 6;                // B7: above restartLargeCells
+// B7: restart restartLarge above restartLargeCells cells unless restart is
+// given (solvers.coupled.restartLarge, restartLargeCells; D-066)
+constexpr label restartLarge = 6;
 constexpr label restartLargeCells = 40000000;
+// Default preconditioner of solvers.coupled (none | blockGAMG | ...)
+constexpr const char* preconditioner = "none";
 
 // Eisenstat-Walker adaptive inner tolerance (amendment B2)
 constexpr bool adaptiveRelTol = true;
@@ -58,6 +62,22 @@ constexpr label nFinestSweeps = 2;
 constexpr doubleScalar coarsestTolerance = 1e-3;
 constexpr label coarsestMaxIter = 50;            // B3 6.3.3
 constexpr label denseLUMaxCells = 64;            // B3 6.3.3
+// Coarsest-level iterative solver (6.3.3): its preconditioner and absolute
+// tolerance (solvers.coupled.blockGAMG.coarsestPreconditioner,
+// coarsestAbsTolerance; D-066)
+constexpr const char* coarsestSolver = "blockBiCGStab";
+constexpr const char* coarsestPreconditioner = "blockDiagonal";
+constexpr doubleScalar coarsestAbsTolerance = 0;
+// blockGAMG defaults of the word keywords (6.1, 6.3.1, 6.3.4)
+constexpr const char* cycleType = "K";           // V | W | K
+constexpr const char* agglomerator = "faceAreaPair";
+constexpr const char* processorAgglomerator = "masterCoarsest";
+constexpr const char* smoother = "blockGaussSeidel";
+// Smoother used as the preconditioner itself (preconditioner blockSmoother)
+constexpr const char* smootherPreconSmoother = "blockILU0";
+constexpr label smootherPreconSweeps = 1;
+// blockSimple preconditioner: single | sequential
+constexpr const char* simpleMode = "single";
 
 // Cycles, ratio rule, controller (amendment B3)
 constexpr doubleScalar kCycleThreshold = 0.25;
@@ -84,7 +104,6 @@ constexpr const char* agglomerationWeights = "geometric";
 constexpr label reagglomerateInterval = 0;
 // precond-research: blockSimple Schur approximation S = schurScale*C
 constexpr doubleScalar schurScale = 2;
-constexpr label maxCopAttempts = 3;              // 6.3, D-008
 constexpr bool cacheAgglomeration = true;
 
 // Guards (spec 6.3, 9.2; D-008)
@@ -152,16 +171,18 @@ constexpr doubleScalar smootherRelaxation = 1.0;
 // 1e-4); 20, 50 and 100 leave T2 untouched (0 fallbacks). 0 disables it.
 constexpr doubleScalar iluPivotGrowthLimit = 20;
 
-// Orthogonal-mesh shortcut of nonOrthCorrection: the mesh counts as
-// orthogonal if max |k_f| <= this value, k_f the native (dimensionless)
-// non-orthogonal correction vector, |k_f| = tan(non-orthogonality angle).
-// Far above the double round-off of an orthogonal mesh (7.1e-14 measured on
-// the T0 blockMesh cavity, on which the former exact test kMax == 0 failed)
-// and far below any correction the float block matrix could represent
-// (eps_float ~1e-7).
-constexpr doubleScalar orthogonalityTolerance = 1e-10;
+// Orthogonal-mesh shortcut of nonOrthCorrection (coupled.
+// orthogonalityTolerance, D-066): the mesh counts as orthogonal if max |k_f|
+// <= this value, k_f the native (dimensionless) non-orthogonal correction
+// vector, |k_f| = tan(non-orthogonality angle). Default 0 = the exact test
+// (FABLE_REVIEW item 1). 1e-10 would be far above the double round-off of an
+// orthogonal mesh (7.1e-14 on the T0 blockMesh cavity) and far below any
+// correction the float block matrix represents (eps_float ~1e-7), but it
+// changes T0 Re 1000 np1 from 58 to 106 outer iterations (not understood).
+constexpr doubleScalar orthogonalityTolerance = 0;
 
 // PTC (spec 7.1)
+constexpr const char* cflStrategy = "mRDM";      // mRDM | EXP | SER
 constexpr doubleScalar CFL0 = 5;
 constexpr doubleScalar CFLmin = 1;
 constexpr doubleScalar CFLmax = 500;
@@ -392,6 +413,7 @@ constexpr doubleScalar boundOmegaMin = 1e-6;
 constexpr doubleScalar nutMaxFactor = 1e8;
 
 // Convergence (spec 12.3; D-005)
+constexpr const char* convergenceMode = "any";   // any | all
 constexpr label forceCoeffsWindow = 100;
 constexpr doubleScalar forceCoeffsTol = 0.002;
 constexpr doubleScalar residualTol = 1e-6;
