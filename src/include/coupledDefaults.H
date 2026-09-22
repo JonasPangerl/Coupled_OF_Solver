@@ -200,7 +200,7 @@ constexpr doubleScalar lineSearchBeta = 1.0;
 // Local limit (spec 7.3)
 constexpr bool localLimitEnabled = true;
 constexpr doubleScalar fLoc = 0.5;
-// Local limiter memory (D-049): per-cell dt factor kept between iterations.
+// Local limiter memory (D-055): per-cell dt factor kept between iterations.
 // memory no = the memoryless limiter of 7.3 (bit-identical). localRecovery
 // is the per-iteration release factor of a throttled cell (the global PTC
 // growth betaMax), localHold the iterations without release after a limit
@@ -208,7 +208,7 @@ constexpr doubleScalar fLoc = 0.5;
 // never released (0 = never sticky).
 constexpr bool localMemory = false;
 // Implicit (Jacobi) estimate |r_P|/(V_P/dt_P + a_P) of the local limiter
-// instead of the explicit |r_P| dt_P/V_P of 7.3 (D-049)
+// instead of the explicit |r_P| dt_P/V_P of 7.3 (D-055)
 constexpr bool localImplicit = false;
 constexpr doubleScalar localRecovery = 1.5;
 constexpr label localHold = 0;
@@ -244,9 +244,9 @@ constexpr doubleScalar cSpike = 0.5;
 constexpr label nLayers = 1;
 constexpr label nQuietIters = 20;
 // A cell that entered the dynamic set stickyAfter times stays in it for the
-// rest of the run (D-049); 0 = never (the hysteresis of 8.2 only)
+// rest of the run (D-055); 0 = never (the hysteresis of 8.2 only)
 constexpr label dynamicStickyAfter = 3;
-// Release ramp (D-049): a released cell returns to the global beta and to
+// Release ramp (D-055): a released cell returns to the global beta and to
 // CFL factor 1 over releaseIters iterations (beta linear, CFL factor
 // geometric from dynamic.cflFactor); 0 = instant release of 8.2
 constexpr label dynamicReleaseIters = 0;
@@ -331,7 +331,7 @@ constexpr label diagStallWindow = 50;            // "stalled": no new min R
 constexpr doubleScalar diagAsymptoticResidualFactor = 100;  // R <= 100*tol
 constexpr doubleScalar diagAsymptoticForceFactor = 10;      // window <= 10*tol
 // Level 3: number of locally CFL-limited cells (largest dU/(fLoc Uref))
-// whose centres are logged per iteration (D-049)
+// whose centres are logged per iteration (D-055)
 constexpr label diagTopLimited = 20;
 
 // ---------------------------------------------------------------------------

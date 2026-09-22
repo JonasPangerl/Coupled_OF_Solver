@@ -17,7 +17,7 @@ Description
     current assembly, dU_P = |r_P| dt_P / V_P; if dU_P > fLoc*Uref the cell's
     dt is reduced by fLoc*Uref/dU_P.
 
-    Implicit estimate (coupled.localLimit.implicit, D-049): dU_P =
+    Implicit estimate (coupled.localLimit.implicit, D-055): dU_P =
     |r_P| / (V_P/dt_P + a_P) with a_P the mean momentum diagonal of the cell
     (convection and diffusion, without PTC) - the update the implicit step
     makes in the cell with its neighbours frozen (Jacobi estimate). The
@@ -25,7 +25,7 @@ Description
     the factor 1 + a_P dt_P/V_P (hundreds in wall-adjacent cells at CFL
     500), so it limits cells whose implicit update is small.
 
-    Local limiter with memory (coupled.localLimit.memory, D-049): a per-cell
+    Local limiter with memory (coupled.localLimit.memory, D-055): a per-cell
     factor f_P in (0, 1] multiplies dt_P before the check. When the cell is
     limited, f_P is reduced to the factor the check needs. Every line-search
     retrial starts from the factor of the start of the outer iteration and
@@ -35,7 +35,7 @@ Description
     after a hold of localHold iterations since the last limit event. A cell that was limited
     in localStickyAfter iterations (0 = never) keeps its factor for the rest
     of the run: it is never released. memory no is the memoryless limiter of
-    7.3 (bit-identical to the implementation before D-049).
+    7.3 (bit-identical to the implementation before D-055).
 
     Global CFL strategies (7.1), R_n = ||r_n||/||r_1||:
         mRDM  if R_n <= R_(n-1):
@@ -93,7 +93,7 @@ private:
         scalar fLoc_;
         bool localImplicit_;
 
-        // Local limiter memory (D-049)
+        // Local limiter memory (D-055)
         bool localMemory_;
         scalar localRecovery_;
         label localHold_;

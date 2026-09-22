@@ -268,7 +268,7 @@ Foam::label Foam::ptcControl::applyLocalLimit
         return nLocalLimited_;
     }
 
-    // Limiter with memory (D-049): dt_P <- f_P dt_P first, then the check.
+    // Limiter with memory (D-055): dt_P <- f_P dt_P first, then the check.
     // f_P is the factor at the start of the iteration, so a line-search
     // retrial (smaller global CFL) does not compound the cut of an earlier
     // trial; the last trial's factor is the one kept. A cell counts one

@@ -29,9 +29,9 @@ Description
     |U_P + dU_P - Ubar_N| <= cSpike Uref (the field itself is never
     overwritten). Hysteresis: a cell leaves the set after nQuietIters
     consecutive iterations without being re-marked. A cell that entered the
-    set stickyAfter times (0 = never, D-049) stays in it for the rest of
+    set stickyAfter times (0 = never, D-055) stays in it for the rest of
     the run; the per-cell entry counters are part of the restart state.
-    Release ramp (dynamic.releaseIters N > 0, D-049): a released cell is
+    Release ramp (dynamic.releaseIters N > 0, D-055): a released cell is
     out of the set (no clipping, not counted in nDyn) but for N further
     iterations, with j = N, N-1, ..., 1 iterations of the ramp left, its
     beta is scaled by 1 - j/(N+1) and its CFL factor is

@@ -228,7 +228,7 @@ public:
             }
 
             //- Mean momentum diagonal per cell (rows 0-2, no PTC): the
-            //  implicit estimate of the local limiter (D-049)
+            //  implicit estimate of the local limiter (D-055)
             const scalarField& momentumDiag() const noexcept
             {
                 return aMom_;

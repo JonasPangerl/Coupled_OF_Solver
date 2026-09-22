@@ -121,7 +121,7 @@ coupled
     {
         enabled         yes;
         fLoc            0.5;
-        implicit        no;     // explicit estimate of 7.3 (D-049: yes on T3)
+        implicit        no;     // explicit estimate of 7.3 (D-055: yes on T3)
     }
 
     anderson
@@ -152,8 +152,8 @@ coupled
             cSpike              0.5;
             nLayers             1;
             nQuietIters         20;
-            stickyAfter         3;      // never released after the 3rd entry (D-049)
-            releaseIters        0;      // 0 = instant release; N = ramp over N iterations (D-049)
+            stickyAfter         3;      // never released after the 3rd entry (D-055)
+            releaseIters        0;      // 0 = instant release; N = ramp over N iterations (D-055)
             cflFactor           0.1;
             clipToNeighbourMean yes;
         }

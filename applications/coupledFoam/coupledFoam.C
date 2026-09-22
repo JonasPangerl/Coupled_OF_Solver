@@ -1569,7 +1569,7 @@ int main(int argc, char *argv[])
                 bcInit = true;
                 e.endObject();
 
-                // h. Locally CFL-limited cells (D-049): the diagTopLimited
+                // h. Locally CFL-limited cells (D-055): the diagTopLimited
                 // cells with the largest dU_P/(fLoc Uref) of the accepted
                 // assembly, their centres and memory factors, plus the
                 // centroid of all limited cells (rank-local)
@@ -1633,7 +1633,7 @@ int main(int argc, char *argv[])
                     e.endObject();
                 }
 
-                // i. Dynamic-set members (D-049): the first diagTopLimited
+                // i. Dynamic-set members (D-055): the first diagTopLimited
                 // cells of the set with centre, age and entry count
                 {
                     const label nTop = coupledDefaults::diagTopLimited;
