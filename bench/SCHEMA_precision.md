@@ -27,7 +27,7 @@ self-test (SP procedure with the DP build, `CF_SP_ALLOW_DP_BUILD=1`) writes
 | `meshShift` | [sx, sy, sz] or null | null | origin shift applied to the DP mesh: points_SP = points_DP + shift (= minus the bounding-box centre of the DP checkMesh) |
 | `checkMeshDiff` | list or null | null | failed-check kinds that differ between DP and SP `checkMesh -allGeometry -allTopology`: `[{"check": "<message without numbers>", "only": "sp" or "dp"}]`; `[]` = identical |
 | `nCheckMeshDiff` | int or null (bench) | null | `len(checkMeshDiff)` |
-| `spGeometry` | string or null | null | `"ok"` or `"SP-geometry-fail"` (D5.3; the run is then skipped: bench record `skipped: true`, no timings) |
+| `spGeometry` | string or null | null | `"ok"`, `"SP-geometry-fail"` (D5.3; the run is then skipped: bench record `skipped: true`, no timings) or `"ok-overridden"` (an SP-only failed check matched `CF_SP_GATE_OVERRIDE`; listed in `spHarness.gateOverridden`; not the default gate) |
 | `staticSetSize` | int or null | cells in the static remediation set (first `nStat` of the coupledFoam log) | the same, computed by the SP build (D5.5) |
 | `staticSetSizeDP` | int or null | null | `staticSetSize` of the DP counterpart |
 | `staticSetSizeDiff` | int or null | null | SP - DP |
@@ -38,7 +38,7 @@ self-test (SP procedure with the DP build, `CF_SP_ALLOW_DP_BUILD=1`) writes
 | `spVsDpPass` | bool or null | null | all monitored `<m>_rel_to_DP` within `spVsDpTol` (T0: centreline L2 < 1e-3, keys `l2rel_u_vs_DP`, `l2rel_v_vs_DP`); null if the DP counterpart is missing |
 | `speedupWall_DP_over_SP`, `speedupCpu_DP_over_SP` | float or null (bench) | absent | DP counterpart median wall / CPU-h to convergence over this run's |
 | `dpCounterpart` | object | absent | tests: `{"record", "case"}`; bench: `{"config", "runs"}` |
-| `spHarness` | object | absent | `bboxCentreDP`, `shiftedEntries` (file, key, old, new), `unclassifiedVectors` (three-component entries the harness did not classify - should be empty), `reasons` (gate), `wallSecondsDPMesh`, `wallSecondsPrepare`; tests also `checkMeshFailedDP`, `checkMeshFailedSP` (raw *** lines) |
+| `spHarness` | object | absent | `bboxCentreDP`, `shiftedEntries` (file, key, old, new), `unclassifiedVectors` (three-component entries the harness did not classify - should be empty), `reasons` (gate), `gateOverridden`, `spSolverSettings` (`segregatedTolerance`: (U\|k\|omega) solver tolerances raised to 1e-6; `profileEntriesRemoved`: the precision-profile keywords removed so that `coupled.precisionProfile auto` applies, D-064), `wallSecondsDPMesh`, `wallSecondsPrepare`; tests also `checkMeshFailedDP`, `checkMeshFailedSP` (raw *** lines) |
 | `forceSource` | string | `"coupledForces"` or `"forceCoeffs"` (which file the forces came from, D6) | same |
 
 Summary (`results/bench/summary.csv`/`.json`, per case and configuration):

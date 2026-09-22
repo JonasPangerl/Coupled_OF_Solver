@@ -2017,6 +2017,120 @@ with 12 digits, FTZ on, FPE traps on).**
 5. Cosmetic, pre-existing: "Attempt to add entry relTol which already
    exists" in the effective-settings dictionary (linear solver and
    Eisenstat-Walker both add relTol), DP and SP.
+## D-065 - Amendment D6/D5/D11: double-accumulated forces, SP harness, precision records (2026-09-23)
+
+**Status:** implemented on branch `amend-d-forces` (merged with
+`amend-d-core-int`). Record schema: `bench/SCHEMA_precision.md`.
+
+**D6 coupledForces** (`src/io/coupledForces.{H,C}`, function object
+`coupledForcesFO`, `system/coupledForcesDict` in T3/T4/T5, entry
+`coupledForces` in their controlDicts):
+- Frame and Cm follow native v2606 forceCoeffs, not the literal text of
+  D6: `coordSystem::cartesian(CofR, e3 = liftDir, e1 = dragDir)`, e1
+  orthogonalised against e3, Cm = CmPitch about e2 = e3 ^ e1. v2606
+  ignores the legacy `pitchAxis`; coupledForces reads it only to print a
+  note when it differs from e2 (T3: pitchAxis (0 0 1), native axis
+  (0 0 -1), which is the sign of every T3 CmPitch so far).
+- Viscous force as native: `S_f . devRhoReff`, devReff = -nuEff
+  dev(2 symm grad U) (the minus sign is inside devReff), i.e.
+  F_v = -rhoInf tau . S_f. The "-(devReff . S_f)" of the amendment text
+  would flip the viscous part against native; the identity test decides.
+  Optional pRef as native. No SMALL in the scalings (double guard 1e-300,
+  D3 comment).
+- coupledFoam evaluates it after every outer iteration when
+  `system/coupledForcesDict` exists and feeds 12.3(ii) from it
+  (`convergenceMonitor::record(Cd, Cl, Cm, source)`). The native path lags
+  one iteration (function objects run at the top of the next
+  `runTime.loop()`); the internal evaluation does not. T3-SST DP still
+  stops at the same iteration (611) with the same Cd. coeffs.dat has one
+  row per iteration including rollback iterations; the monitor skips the
+  repeated (Cd, Cl) of a restored state as before.
+- The function object is dormant inside coupledFoam (static flag set by
+  coupledFoam; `libs (coupledFoam)` resolves to the loaded library). A
+  libcoupledFoam without coupledForcesFO (older install) only makes
+  simpleFoam warn "Unknown function type"; the harness then falls back to
+  the native forceCoeffs file.
+- Allrun's `foamDictionary -entry application -set` rewrites controlDict
+  and quantises its scalars to 6 digits: after the SP shift the native
+  forceCoeffs CofR has at most 6 digits; coupledForcesDict (never
+  rewritten) keeps full precision.
+
+**D5 SP harness** (`tests/cflib/precision.py`; `CF_PRECISION=sp` or
+`pytest --precision sp`, in a shell with the SP OpenFOAM environment and
+the SP private install; details in the module doc):
+- The DP steps (Allrun -mesh-only with writeFormat ascii / writePrecision
+  12, foamFormatConvert of a compressed mesh, checkMesh) run in `env -i` +
+  the DP etc/bashrc (`CF_DP_BASHRC`, default the system install).
+- Point settings are shifted by a text edit (foamDictionary would
+  quantise): POINT_KEYS and the lists probeLocations/points in system/
+  (mesh-generation dictionaries excluded), constant/{MRFProperties,
+  fvOptions, dynamicMeshDict} and 0.orig/; any other three-component entry
+  outside 0.orig is reported as unclassifiedVectors (none in T0-T5).
+- Gate D5.3: failed checks are the checkMesh `***` lines, compared as kinds
+  (numbers removed). `CF_SP_GATE_OVERRIDE` (default empty) lists kinds that
+  are reported but do not fail the gate; this is not the specified gate and
+  needs a user decision (below).
+- SP solver settings (amend-d-core findings, D-064): in an SP build the
+  (U|k|omega) solver tolerance is raised to 1e-6 and the five
+  precision-profile keywords of the templates are removed so that
+  `coupled.precisionProfile auto` applies; a keyword the run sets itself
+  (benchmark `residualTol 0`) is kept (`harnessSets.json`).
+- Self-test without an SP build: `CF_SP_ALLOW_DP_BUILD=1` runs the SP
+  procedure with the DP build (label `dp-shifted`).
+
+**D11:** `F1` = simpleFoam SP with the settings of B (DP counterpart B; A
+on T1 where B is out of scope), `F2` = coupledFoam SP with the settings of
+C; scope T1, T3-SST, T4a; one repeat (D-063). SP and DP configurations run
+from separate shells. DP configuration hashes are unchanged.
+
+**Results** (1 rank, shared machine, load 20-30 on 32 threads: wall times
+are not benchmark quality; wall = solver loop, CPU-h all ranks).
+- DP pytest (this branch before the merge, private DP install): T0 Re100
+  pass 65 its 9.1 s / 0.0026 CPU-h; T0 Re1000 pass 99 its 38.0 s / 0.0106;
+  T1 pass 400 its 53.0 s / 0.0148, dp -5.728650; T2 pass 1000 its 415 s /
+  0.115, xr 0.08173; T3-SST pass 611 its 77.8 s / 0.0217, Cd 0.0908571,
+  Cl 0.246564 (unchanged against the integration run); T3-GEKO FAIL
+  Cd 5.97 % > 5 %, identical to the integration and main results
+  (pre-existing).
+- D6 identity in DP: coupledForces vs native forceCoeffs of the same run
+  at every iteration max 5e-11 (coupledFoam 611 rows, simpleFoam
+  function object 20000 rows; the limit is the %.10e print). 
+  Test-coupledForces: bit-identical on 1 and 4 ranks.
+- Harness self-test (shifted DP vs DP): T0 centrelines 2.9e-9 (Re100),
+  6.0e-9 (Re1000); T1 dp 2.5e-8; T3-SST Cd 2.2e-5, Cl 2.8e-4 (the T3-SST
+  limit cycle, not the shift); checkMeshDiff empty.
+- SP (private SP OpenFOAM, SP build of this branch after the merge):
+  - Test-coupledForces SP: pass, native float sum vs double
+    4.8e-7 (Cm), 1.8e-7 (Cl), 1.5e-7 (Cd); histories 4.7e-7 of scale;
+    coupledForces 1 vs 4 ranks 2.5e-12.
+  - Gate: T0 and T3 ok (T3: the same two *** kinds as DP). **T1 fails the
+    specified gate**: SP checkMesh reports `***Boundary openness (7.6e-11
+    -6.1e-9 -1.7e-6) possible hole`, DP does not. The openness is the
+    float sum of the boundary face-area vectors in checkMesh itself (1e-6
+    relative threshold), not a geometric defect. Per D5.3 T1 is
+    SP-geometry-fail and skipped; with `CF_SP_GATE_OVERRIDE="Boundary
+    openness"` (user decision needed) it runs.
+  - T1 SP (override, coupledFoam only): 400 its, R 3.4e-5, dp within
+    1.5e-6 of DP (D10 0.3 %: pass), 23.2 s / 0.0065 CPU-h.
+  - T3-SST SP (coupledFoam only): stops at 357 its on R 9.96e-6 < the SP
+    profile residualTol 1e-5 (mode any), before the force window settles:
+    final-window mean Cd -0.38 %, Cl +2.4 % against DP (D10 0.3 %: FAIL).
+    The SP profile residualTol lets T3 stop on the residual; for the D10
+    comparison the force window must decide (open item below).
+  - The SP simpleFoam references do not finish: their residualControl
+    (1e-8 class) is below the float floor, so they run to endTime (T0
+    Re100 > 20 min instead of 3 min, T1 > 1360 its); stopped.
+
+**Open (user/lead decision):** (1) accept a checkMesh-openness override
+for SP (float noise) or keep T1 SP-geometry-fail; (2) SP runs of the
+force cases: coupled.convergence.mode all (or residualTol 0) so that
+12.3(ii) decides; (3) SP simpleFoam references need a residualControl
+above the float floor (or a fixed budget, as the benchmark does);
+(4) T0 SP-vs-DP profiles: the centreline lies on a face plane, SP
+coordinates land in neighbouring cells (D-064: up to 9 % apparent error);
+the harness maps the coordinates back but still compares sampled values -
+a cell-centre pairing as in tests/test_unit.py (87049df) is not done yet.
+
 ## D-066 - Remediation cell categories; every tunable is a run-time keyword (user, 2026-09-22)
 
 User request (D-063): the pre-selected remediation cells get separate,
