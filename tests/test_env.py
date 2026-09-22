@@ -2,7 +2,9 @@
 
 - Python >= 3.11 with the required packages
 - OpenFOAM v2606, label size 32
-- Test-precision: blockScalar 4 bytes, scalar and reduceScalar 8 (D-001)
+- Test-precision: per build sizeof(scalar)/sizeof(solveScalar) (DP 8/8,
+  SP 4/4, SPDP 4/8), blockScalar 4 and reduceScalar 8 always (D-001,
+  amendment D1, D-064); the binary's build matches WM_PRECISION_OPTION
 - coupledFoam and the test applications are built
 - native simpleFoam runs the pitzDaily tutorial (short run)
 """
@@ -63,6 +65,10 @@ def test_env(foam, tmp_path):
     if pj.exists():
         import json
         checks["precision"] = json.loads(pj.read_text())
+    # The binary was built for the sourced precision option (D1)
+    checks["precisionMatchesEnv"] = (
+        checks.get("precision", {}).get("precision")
+        == os.environ.get("WM_PRECISION_OPTION"))
 
     # simpleFoam pitzDaily tutorial (short)
     tut = Path(os.environ["FOAM_TUTORIALS"]) / "incompressible/simpleFoam/pitzDaily"
@@ -83,7 +89,8 @@ def test_env(foam, tmp_path):
     passed = (
         checks["pythonOk"] and not missing and checks["versionOk"]
         and checks["labelOk"] and not checks["appsMissing"]
-        and rc == 0 and checks["pitzDailyOk"]
+        and rc == 0 and checks["precisionMatchesEnv"]
+        and checks["pitzDailyOk"]
     )
     rec["pass"] = passed
     results.write("tests", "test_env", rec)
@@ -93,5 +100,7 @@ def test_env(foam, tmp_path):
     assert checks["versionOk"], checks["WM_PROJECT_VERSION"]
     assert checks["labelOk"]
     assert not checks["appsMissing"], f"not built: {checks['appsMissing']}"
-    assert rc == 0, "Test-precision gate failed (D-001)"
+    assert rc == 0, "Test-precision gate failed (D-001, D1)"
+    assert checks["precisionMatchesEnv"], (
+        "Test-precision build does not match WM_PRECISION_OPTION")
     assert checks["pitzDailyOk"], "simpleFoam pitzDaily tutorial failed"
