@@ -26,8 +26,22 @@ Outputs (PNG, 300 dpi at the paper's text width, report/paper/figures/):
     render_<C>_surface_Cp.png  C_p on the body, simpleFoam | coupledFoam
     render_<C>_mean_U.png      |UMean|/U_inf mid-plane, both solvers (if the
                                mean fields exist in both cases)
-    render_<C>_delta.png       magUMeanDeltaRel on both planes and CpMeanDelta
-                               on the body (if coupledFieldCompare has run)
+    render_<C>_delta_slices.png  mean-field differences coupledFoam minus
+                               simpleFoam on the mid-plane and the wheel-height
+                               plane: streamwise velocity dU_x/U_inf (top row)
+                               and pressure coefficient dC_p = dp/(0.5 U_inf^2)
+                               (bottom row); diverging colour map (RdBu_r,
+                               white = 0), fixed symmetric limits
+    render_<C>_delta_surface.png dC_p on the body surface, iso and top view
+                               (both from coupledFieldCompare: UMeanDelta,
+                               CpMeanDelta; written only if it has run)
+
+The earlier single delta figure render_<C>_delta.png (|dU|/U_inf on a
+sequential map) is replaced by the two signed figures above and deleted
+when they are written.
+
+Scope (D-063): T5 is not run by user decision; the default case list is
+T4a and T4b (T5 can still be named with --cases).
 
 Missing inputs are skipped with a note; a case whose logs (simpleFoam or coupledFoam
 directory) were modified within --busy-minutes is treated as running and
@@ -80,20 +94,31 @@ CASES = {
     "T4b": dict(cf="T4b_np10", sf="ref_T4b_np10", title="T4b motorBike (1.70M cells)"),
     "T5": dict(cf="T5_np10", sf="ref_T5_np10", title="T5 Ahmed body"),
 }
+# D-063: T5 (Ahmed body) is not run for now (user decision)
+DEFAULT_CASES = ["T4a", "T4b"]
 
 # Colour ranges (fixed, identical for both solvers)
 RANGES = {
     "magUrel": (0.0, 1.3),        # |U|/U_inf
     "Cp": (-1.5, 1.0),            # p/(0.5 U_inf^2), p kinematic, p_inf = 0
     "magUMeanDeltaRel": (0.0, 0.2),
-    "CpMeanDelta": (-0.2, 0.2),
+    # signed mean-field differences coupledFoam - simpleFoam, symmetric
+    "dUxRel": (-0.2, 0.2),        # (UMean_cf - UMean_sf)_x / U_inf
+    "CpMeanDelta": (-0.2, 0.2),   # (pMean_cf - pMean_sf) / (0.5 U_inf^2)
 }
 PRESETS = {"magUrel": "Viridis (matplotlib)", "Cp": "Cool to Warm",
-           "magUMeanDeltaRel": "Inferno (matplotlib)",
-           "CpMeanDelta": "Blue Orange (divergent)"}
+           "magUMeanDeltaRel": "Inferno (matplotlib)"}
 # inverted: zero difference light (the dark end of Inferno would hide the
 # panel titles and read as "large")
 INVERT = {"magUMeanDeltaRel"}
+# Diverging map of the signed differences: matplotlib RdBu_r (the map of the
+# 2D delta panels, bench/plot_fields2d.py), white exactly at zero, blue:
+# coupledFoam lower, red: coupledFoam higher. Control points on [-1, 1].
+DIVERGING = {"dUxRel", "CpMeanDelta"}
+RDBU_R = [(-1.0, 0.020, 0.188, 0.380), (-0.5, 0.263, 0.576, 0.765),
+          (-0.25, 0.573, 0.773, 0.871), (0.0, 0.969, 0.969, 0.969),
+          (0.25, 0.957, 0.647, 0.510), (0.5, 0.839, 0.376, 0.302),
+          (1.0, 0.404, 0.000, 0.122)]
 BG = [1.0, 1.0, 1.0]
 PANEL_PX = (1300, 620)     # one view; figures are 2 x 2 or 1 x 2 views
 
@@ -190,15 +215,31 @@ def with_norm(src, uinf: float, have: set[str]):
     if "UMean" in have:
         out = Calculator(Input=out, ResultArrayName="magUMeanrel",
                          Function=f"mag(UMean)/{uinf}")
+    if "UMeanDelta" in have:
+        # UMeanDelta = UMean_cf - UMean_ref (coupledFieldCompare)
+        out = Calculator(Input=out, ResultArrayName="dUxRel",
+                         Function=f"UMeanDelta_X/{uinf}")
     return out
 
 
 def lut(array: str, rng_key: str | None = None):
+    key = rng_key or array
     lt = GetColorTransferFunction(array)
-    lt.ApplyPreset(PRESETS.get(rng_key or array, "Viridis (matplotlib)"), True)
-    if (rng_key or array) in INVERT:
+    lo, hi = RANGES[key]
+    if key in DIVERGING:
+        # symmetric limits, white at zero (RdBu_r control points)
+        m = max(abs(lo), abs(hi))
+        lt.ColorSpace = "Lab"
+        pts = []
+        for s, r, g, b in RDBU_R:
+            pts += [s * m, r, g, b]
+        lt.RGBPoints = pts
+        lt.AutomaticRescaleRangeMode = "Never"
+        GetOpacityTransferFunction(array).RescaleTransferFunction(-m, m)
+        return lt
+    lt.ApplyPreset(PRESETS.get(key, "Viridis (matplotlib)"), True)
+    if key in INVERT:
         lt.InvertTransferFunction()
-    lo, hi = RANGES[rng_key or array]
     lt.RescaleTransferFunction(lo, hi)
     lt.AutomaticRescaleRangeMode = "Never"
     GetOpacityTransferFunction(array).RescaleTransferFunction(lo, hi)
@@ -399,6 +440,9 @@ def slice_panel(src: Src | None, bb, plane: str, array: str, rng: str,
     v = new_view()
     sl = src.slices(bb)[plane]
     d = Show(sl, v)
+    # flat, unlit colours: a plane needs no shading, and lighting would turn
+    # the white zero of the diverging maps grey
+    d.Ambient, d.Diffuse = 1.0, 0.0
     colour(d, v, array, rng, bar_title)
     b = Show(src.body, v)
     b.ColorArrayName = ["POINTS", ""]
@@ -449,20 +493,37 @@ def fig_mean(name, sfm: Src, cfm: Src, out: Path):
     save_grid([row], out / f"render_{name}_mean_U.png")
 
 
-def fig_delta(name, dl: Src, out: Path):
-    bb = dl.bb
-    v1 = slice_panel(dl, bb, "y", "magUMeanDeltaRel", "magUMeanDeltaRel",
-                     "mag(dUMean) / U_inf", "mean-velocity delta, mid-plane")
-    v2 = slice_panel(dl, bb, "z", "magUMeanDeltaRel", "magUMeanDeltaRel",
-                     "mag(dUMean) / U_inf", "mean-velocity delta, wheel height")
-    v3 = surface_panel(dl, bb, "CpMeanDelta", "CpMeanDelta", "dC_p (mean)",
-                       "mean surface-pressure delta")
-    v4 = new_view()
-    d4 = Show(dl.body, v4)
-    colour(d4, v4, "CpMeanDelta", "CpMeanDelta", "dC_p (mean)")
-    camera(v4, bb, "top")
-    label(v4, "mean surface-pressure delta, top view")
-    save_grid([[v1, v2], [v3, v4]], out / f"render_{name}_delta.png")
+# colour-bar titles of the signed differences (dimensionless, [-])
+BAR_DUX = "ΔU_x / U_inf  [-]"
+BAR_DCP = "ΔC_p  [-]"
+
+
+def fig_delta(name, dl: Src, bb, out: Path):
+    """Signed mean-field differences coupledFoam - simpleFoam
+    (coupledFieldCompare): dU_x/U_inf and dC_p on both planes, and dC_p on
+    the body. Fixed symmetric limits (RANGES), white = no difference."""
+    pl = {"y": "mid-plane y = y_c",
+          "z": f"plane z = z_min + {WHEEL_Z:g} h"}
+    rows = [
+        [slice_panel(dl, bb, p, "dUxRel", "dUxRel", BAR_DUX,
+                     f"ΔU_x (coupledFoam − simpleFoam), {pl[p]}")
+         for p in ("y", "z")],
+        [slice_panel(dl, bb, p, "CpMeanDelta", "CpMeanDelta", BAR_DCP,
+                     f"ΔC_p (coupledFoam − simpleFoam), {pl[p]}")
+         for p in ("y", "z")],
+    ]
+    save_grid(rows, out / f"render_{name}_delta_slices.png")
+    v1 = surface_panel(dl, bb, "CpMeanDelta", "CpMeanDelta", BAR_DCP,
+                       "surface ΔC_p, coupledFoam − simpleFoam")
+    v2 = new_view()
+    d2 = Show(dl.body, v2)
+    colour(d2, v2, "CpMeanDelta", "CpMeanDelta", BAR_DCP)
+    camera(v2, bb, "top")
+    label(v2, "surface ΔC_p, top view")
+    save_grid([[v1, v2]], out / f"render_{name}_delta_surface.png")
+    old = out / f"render_{name}_delta.png"      # superseded single figure
+    if old.exists():
+        old.unlink()
 
 
 # --------------------------------------------------------------------------- #
@@ -543,10 +604,10 @@ def render_case(name: str, cfg: dict, out: Path, busy_minutes: float,
     else:
         notes.append(f"{name}: mean fields UMean/pMean not in both cases, "
                      "mean figure skipped")
-    delta = ("magUMeanDeltaRel", "CpMeanDelta")
+    delta = ("UMeanDelta", "CpMeanDelta")
     td = times_with(cfd, delta) if cf_ok else []
     if td:
-        fig_delta(name, Src(cfd, td[-1], list(delta), body, uinf), out)
+        fig_delta(name, Src(cfd, td[-1], list(delta), body, uinf), sf.bb, out)
     else:
         notes.append(f"{name}: delta fields (coupledFieldCompare) missing, "
                      "delta figure skipped")
@@ -555,7 +616,7 @@ def render_case(name: str, cfg: dict, out: Path, busy_minutes: float,
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cases", nargs="*", default=list(CASES))
+    ap.add_argument("--cases", nargs="*", default=list(DEFAULT_CASES))
     ap.add_argument("--out", default=str(REPO / "report" / "paper" / "figures"))
     ap.add_argument("--busy-minutes", type=float, default=10.0)
     ap.add_argument("--reference-only", action="store_true",

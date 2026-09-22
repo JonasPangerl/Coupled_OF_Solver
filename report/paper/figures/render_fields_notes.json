@@ -1,4 +1,5 @@
 [
- "T4b: run/ref_T4b_np10 or run/T4b_np10 is being written, case skipped (previous renders kept)",
- "T5: run/ref_T5_np10 missing, skipped"
+ "T4b: no coupledFoam result yet, panels pending",
+ "T4b: mean fields UMean/pMean not in both cases, mean figure skipped",
+ "T4b: delta fields (coupledFieldCompare) missing, delta figure skipped"
 ]
