@@ -4,6 +4,7 @@
 \*---------------------------------------------------------------------------*/
 
 #include "blockSmootherPrecon.H"
+#include "coupledDefaults.H"
 #include "addToRunTimeSelectionTable.H"
 
 namespace Foam
@@ -26,12 +27,19 @@ Foam::blockSmootherPrecon::blockSmootherPrecon
 :
     blockPreconditioner(solver),
     smoother_(),
-    nSweeps_(dict.getOrDefault<label>("nSweeps", 1))
+    nSweeps_
+    (
+        dict.getOrDefault<label>
+        (
+            "nSweeps",
+            coupledDefaults::smootherPreconSweeps
+        )
+    )
 {
     dictionary sd(dict);
     if (!sd.found("smoother"))
     {
-        sd.add("smoother", word("blockILU0"));
+        sd.add("smoother", word(coupledDefaults::smootherPreconSmoother));
     }
     smoother_ = blockSmoother::New(solver.matrix(), sd);
 }

@@ -147,6 +147,12 @@ private:
         doubleScalar beta_;
         doubleScalar maxAlpha_;
 
+        //- Not enabled above this many cells (B7 memory rule; maxCells)
+        label maxCells_;
+
+        //- Numerical-rank tolerance of the QR update (rankTol)
+        doubleScalar rankTol_;
+
         //- Number of doubles per vector (4 per cell: u, v, w, p)
         label n_;
 

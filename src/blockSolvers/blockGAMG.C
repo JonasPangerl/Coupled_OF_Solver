@@ -275,7 +275,14 @@ Foam::blockGAMG::blockGAMG
     dict_(dict),
     cycle_
     (
-        cycleFromWord(dict.getOrDefault<word>("cycleType", "K"))
+        cycleFromWord
+        (
+            dict.getOrDefault<word>
+            (
+                "cycleType",
+                word(coupledDefaults::cycleType)
+            )
+        )
     ),
     kThreshold_
     (
@@ -358,7 +365,11 @@ Foam::blockGAMG::blockGAMG
     aggFromMatrix_(false),
     procAgglomType_
     (
-        dict.getOrDefault<word>("processorAgglomerator", "masterCoarsest")
+        dict.getOrDefault<word>
+        (
+            "processorAgglomerator",
+            word(coupledDefaults::processorAgglomerator)
+        )
     ),
     procAgglomCellsPerRank_
     (
@@ -407,11 +418,11 @@ Foam::blockGAMG::blockGAMG
             dict_.add(key, value);
         }
     };
-    setDefault("agglomerator", word("faceAreaPair"));
+    setDefault("agglomerator", word(coupledDefaults::agglomerator));
     setDefault("nCellsInCoarsestLevel", coupledDefaults::nCellsInCoarsestLevel);
     setDefault("mergeLevels", coupledDefaults::mergeLevels);
-    setDefault("smoother", word("blockGaussSeidel"));
-    setDefault("coarsestSolver", word("blockBiCGStab"));
+    setDefault("smoother", word(coupledDefaults::smoother));
+    setDefault("coarsestSolver", word(coupledDefaults::coarsestSolver));
     setDefault("coarsestTolerance", coupledDefaults::coarsestTolerance);
     setDefault("coarsestMaxIter", coupledDefaults::coarsestMaxIter);
     setDefault("cacheAgglomeration", coupledDefaults::cacheAgglomeration);
@@ -466,6 +477,14 @@ Foam::blockGAMG::blockGAMG
         FatalIOErrorInFunction(dict)
             << "agglomerationWeights " << aggWeights_
             << ": valid geometric momentum pressure combined"
+            << exit(FatalIOError);
+    }
+    // The K cycle does at most two GCR steps (6.3.2); larger values were
+    // silently treated as 2 (D-066)
+    if (kMaxSteps_ < 1 || kMaxSteps_ > 2)
+    {
+        FatalIOErrorInFunction(dict)
+            << "kCycleMaxSteps " << kMaxSteps_ << ": valid 1 or 2"
             << exit(FatalIOError);
     }
     dict_.set("agglomerationWeights", aggWeights_);
@@ -592,8 +611,34 @@ void Foam::blockGAMG::buildHierarchy()
         {
             dictionary cd;
             cd.add("solver", dict_.get<word>("coarsestSolver"));
-            cd.add("preconditioner", word("blockDiagonal"));
-            cd.add("tolerance", doubleScalar(0));
+            cd.add
+            (
+                "preconditioner",
+                dict_.getOrDefault<word>
+                (
+                    "coarsestPreconditioner",
+                    word(coupledDefaults::coarsestPreconditioner)
+                )
+            );
+            cd.add
+            (
+                "tolerance",
+                dict_.getOrDefault<doubleScalar>
+                (
+                    "coarsestAbsTolerance",
+                    coupledDefaults::coarsestAbsTolerance
+                )
+            );
+            // Optional pass-through (D-066); absent: the blockSolver
+            // defaults, as before
+            if (dict_.found("coarsestMinIter"))
+            {
+                cd.add("minIter", dict_.get<label>("coarsestMinIter"));
+            }
+            if (dict_.found("coarsestMaxRestarts"))
+            {
+                cd.add("maxRestarts", dict_.get<label>("coarsestMaxRestarts"));
+            }
             cd.add("relTol", dict_.get<doubleScalar>("coarsestTolerance"));
             cd.add("maxIter", dict_.get<label>("coarsestMaxIter"));
             cd.add

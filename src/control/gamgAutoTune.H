@@ -82,6 +82,16 @@ private:
         label tuneInterval_;
         label nPostSweepsMax_;
 
+        //- Decision thresholds of 6.3.5 (keywords tuneRhoHigh, tuneRhoLow,
+        //  tuneRhoDemote, tuneRhoFail, tuneConsecutiveWindows,
+        //  nPostSweepsMin; D-066)
+        scalar rhoHigh_;
+        scalar rhoLow_;
+        scalar rhoDemote_;
+        scalar rhoFail_;
+        label consecutiveWindows_;
+        label nPostSweepsMin_;
+
         //- Cycle type given by the user (lower bound for demotion)
         blockGAMG::cycleKind userCycle_;
 

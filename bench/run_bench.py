@@ -38,8 +38,8 @@ Configurations (DECISIONS.md D-025, amendment B10):
     E variants (amendment C7): configuration E plus one change each,
     compared with C (and E) in the B10 table. Scope in CONFIG_SCOPE:
        E-rcScalar   coupled.rhieChow.tensorial no (scalar D, C2). T2, T4b, T5
-       E-nonOrth60  remediation.static.nonOrthThreshold 60 (C1). T4a, T4b, T5
-       E-nonOrth65  remediation.static.nonOrthThreshold 65 (C1 value; the
+       E-nonOrth60  remediation.meshQuality.nonOrthThreshold 60 (C1). T4a, T4b, T5
+       E-nonOrth65  remediation.meshQuality.nonOrthThreshold 65 (C1 value; the
                     default stays 85, D-047/D-051). T4a, T4b, T5
        E-algPair    blockGAMG agglomerator algebraicPair (C4; the templates'
                     agglomerationWeights combined is replaced by pressure,
@@ -141,8 +141,8 @@ CASES = {
 # cflib.case.set_entry)
 E_VARIANTS = {
     "E-rcScalar": {"coupled.rhieChow.tensorial": "no"},
-    "E-nonOrth60": {"coupled.remediation.static.nonOrthThreshold": 60},
-    "E-nonOrth65": {"coupled.remediation.static.nonOrthThreshold": 65},
+    "E-nonOrth60": {"coupled.remediation.meshQuality.nonOrthThreshold": 60},
+    "E-nonOrth65": {"coupled.remediation.meshQuality.nonOrthThreshold": 65},
     "E-algPair": {"solvers.coupled.blockGAMG.agglomerator": "algebraicPair",
                   "solvers.coupled.blockGAMG.agglomerationWeights":
                   "pressure"},

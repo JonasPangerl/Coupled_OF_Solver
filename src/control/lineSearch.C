@@ -28,6 +28,7 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
     UrefSource_(),
     stepMode_(coupledDefaults::UrefStepMode),
     stepCap_(coupledDefaults::UrefStepCap),
+    UrefFallbackFactor_(coupledDefaults::UrefFallbackFactor),
     UstepExplicit_(0),
     Ufield0_(0),
     Ustep_(0),
@@ -108,6 +109,17 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
                 << " or a value > 0, got " << tok << exit(FatalIOError);
         }
     }
+    UrefFallbackFactor_ = coupledDict.getOrDefault<scalar>
+    (
+        "UrefFallbackFactor",
+        UrefFallbackFactor_
+    );
+    if (!(UrefFallbackFactor_ >= 0 && UrefFallbackFactor_ <= 1))
+    {
+        FatalIOErrorInFunction(coupledDict)
+            << "coupled.UrefFallbackFactor must be in [0, 1], got "
+            << UrefFallbackFactor_ << exit(FatalIOError);
+    }
     stepCap_ = coupledDict.getOrDefault<scalar>
     (
         "UrefStepCap",
@@ -183,7 +195,7 @@ void Foam::lineSearch::setReference(const volVectorField& U)
         Umax = max(Ufield, Ubnd);
         UrefSource_ = "field";
     }
-    else if (Ubnd > coupledDefaults::UrefFallbackFactor*Ufield)
+    else if (Ubnd > UrefFallbackFactor_*Ufield)
     {
         Umax = Ubnd;
         UrefSource_ = "boundary";
@@ -416,6 +428,7 @@ void Foam::lineSearch::writeSettings(dictionary& dict) const
         dict.add("UrefStep", stepMode_);
     }
     dict.add("UrefStepCap", stepCap_);
+    dict.add("UrefFallbackFactor", UrefFallbackFactor_);
     dict.add("startupReference", startupRef_);
 }
 

@@ -45,6 +45,8 @@ Foam::sfdControl::sfdControl
     resetOnFlush_ = d.getOrDefault<bool>("resetOnFlush", resetOnFlush_);
     afterStartup_ = d.getOrDefault<bool>("afterStartup", afterStartup_);
     startIter_ = d.getOrDefault<label>("startIter", startIter_);
+    // Iterations below deactivateBelowR before SFD-off (default ptc.nHold)
+    nHold_ = d.getOrDefault<label>("nHold", nHold_);
 
     // Negated comparisons also reject non-finite input
     if

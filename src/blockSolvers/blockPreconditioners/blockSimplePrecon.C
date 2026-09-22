@@ -74,6 +74,14 @@ Foam::blockSimplePrecon::blockSimplePrecon
             coupledDefaults::schurScale
         )
     ),
+    pivotGuard_
+    (
+        dict.getOrDefault<doubleScalar>
+        (
+            "pivotGuard",
+            coupledDefaults::pivotGuard
+        )
+    ),
     sequential_(false),
     rL_(),
     t_(),
@@ -81,7 +89,11 @@ Foam::blockSimplePrecon::blockSimplePrecon
     y_(),
     y2_()
 {
-    const word mode(dict.getOrDefault<word>("simpleMode", "single"));
+    const word mode(dict.getOrDefault<word>
+    (
+        "simpleMode",
+        word(coupledDefaults::simpleMode)
+    ));
     if (mode == "sequential")
     {
         sequential_ = true;
@@ -150,7 +162,7 @@ void Foam::blockSimplePrecon::update()
 
     // 1/diag of the u-u block
     rL_.resize_nocopy(blockDim*nCells);
-    const reduceScalar guard = coupledDefaults::pivotGuard;
+    const reduceScalar guard = pivotGuard_;
     for (label c = 0; c < nCells; ++c)
     {
         for (label k = 0; k < pIdx; ++k)

@@ -23,8 +23,9 @@ Description
     pass the gradient that is cellLimited in static cells (D-018), so the
     non-orthogonal part of q_f uses it too.
 
-    The orthogonal-mesh shortcut is taken only if max |k_f| == 0 exactly
-    (all correction vectors bit-zero). A blockMesh cavity is NOT exactly
+    The orthogonal-mesh shortcut is taken only if max |k_f| <=
+    coupled.orthogonalityTolerance (default 0: all correction vectors
+    bit-zero, D-066). A blockMesh cavity is NOT exactly
     orthogonal in double (max |k_f| = 7.1e-14 on T0), so the correction is
     evaluated there, with values at round-off level (FABLE_REVIEW.md item 1).
 
@@ -93,15 +94,17 @@ public:
         (
             const fvMesh& mesh,
             const scalar limiter,
-            const scalar limiterStatic
+            const scalar limiterStatic,
+            const scalar orthogonalityTolerance
         );
 
 
     // Member Functions
 
-        //- Set the static cells (from remediation, 8.1). Collective (swaps
-        //  the static flag across coupled patches)
-        void setStaticCells(const boolList& isStatic);
+        //- Set the cells whose faces use the static limiter (remediation
+        //  cells with nonOrthLimiter, 8.1/D-066). Collective (swaps the
+        //  flag across coupled patches)
+        void setLimitedCells(const boolList& isStatic);
 
         //- True if all native correction vectors are exactly zero
         bool orthogonal() const noexcept

@@ -47,10 +47,15 @@ Every case in `cases/` has `Allrun` and `Allclean`:
     cd cases/T0_cavity && ./Allrun
 
 Solver controls live in `system/fvSolution` (`solvers.coupled` for the linear
-solver, top-level `coupled` for the outer iteration); every keyword and its
-default is listed in spec Section 11 and printed at start-up under
-`coupledFoam: effective settings`. Keywords added after the spec (all with
-their defaults in `src/include/coupledDefaults.H`):
+solver, top-level `coupled` for the outer iteration). The complete keyword
+reference - every keyword with its default, range, meaning and decision - is
+`docs/KEYWORDS.md` (D-066: every tunable setting is a run-time keyword);
+the effective values are printed at start-up under
+`coupledFoam: effective settings`. The pre-selected remediation cells come
+in four categories with their own switches and treatment
+(`coupled.remediation.meshQuality`, `badMesh`, `processor`, `wall`; see
+`docs/KEYWORDS.md`). Keywords added after the spec (all with their defaults
+in `src/include/coupledDefaults.H`) include:
 
 - `coupled.startupMode upwind | hybrid | none` (D-048, default `upwind`,
   the original behaviour): `hybrid` ramps the convection blending beta
