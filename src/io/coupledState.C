@@ -8,6 +8,7 @@
 #include "localIOdictionary.H"
 #include "fileOperation.H"
 #include "OSspecific.H"
+#include "IFstream.H"
 #include "surfaceFields.H"
 #include <limits>
 
@@ -49,6 +50,25 @@ bool Foam::coupledState::read(dictionary& state) const
     if (!io.typeHeaderOk<localIOdictionary>(true))
     {
         return false;
+    }
+
+    // The state is always written as ASCII (see write()), but with a
+    // binary writeFormat the header may still say "format binary" (seen on
+    // T1, 2026-09-22), and a header-driven read then parses the ASCII
+    // content in binary mode and fails on the empty dynamicSet. With the
+    // uncollated handler the file is therefore parsed as a plain ASCII
+    // dictionary, ignoring the header's format entry.
+    if (fileHandler().type() == "uncollated")
+    {
+        IFstream is(io.objectPath(), IOstreamOption(IOstreamOption::ASCII));
+        if (!is.good())
+        {
+            return false;
+        }
+        dictionary d(is);
+        d.remove("FoamFile");
+        state = d;
+        return true;
     }
 
     localIOdictionary d(io);
