@@ -1159,12 +1159,14 @@ relative on integral quantities. Native references are produced with
   and 1--2\,M cells (b; retargeted from the specified 3--5\,M cells,
   D-031), 10 ranks (the development machine is capped at 10 cores for this
   work, D-031). Each mesh is built once and reused by all tests and
-  benchmarks. Pass: converged by the force window
-  criterion (Section~\ref{sec:perf}); $C_d$ within 1\,\% of
-  \code{simpleFoam}; static set at most 1\,\% of the cells; no rollbacks.
+  benchmarks. Pass: both solvers reach a stationary window mean of $C_d$
+  and $C_l$ (averaged force criterion for oscillating wakes, D-042,
+  Section~\ref{sec:perf}); window means within $\max(2\,\%,0.002)$ ($C_d$)
+  and $\max(2\,\%,0.01)$ ($C_l$) of \code{simpleFoam}; static set at most
+  1\,\% of the cells; no rollbacks.
 \item[T5, Ahmed body, $25^\circ$ slant.] Generated geometry, half model,
   5--8\,M cells, $U_\infty=\SI{40}{m/s}$, SST with wall functions. Pass:
-  $C_d$ within 1\,\% of \code{simpleFoam}; comparison with the experimental
+  as T4 (averaged force criterion, D-042); comparison with the experimental
   $C_d=0.285$~\cite{Ahmed1984} ($\pm10$\,\%) is informational.
 \item[T-restart.] T1 and T3-SST, split at iteration 150: iteration count
   $\pm2$, final quantities within $10^{-5}$, flux consistency below
@@ -1289,6 +1291,18 @@ a fixed iteration budget is run. The harness determines the convergence
 iteration identically for all solvers: over the last 100 iterations,
 $\max C_d-\min C_d\le0.002\,|\overline{C_d}|$ and the same for $C_l$ (the
 pressure drop for T1 and T2).
+
+\paragraph{Wake cases (D-042).} T4a, T4b and T5 have physically oscillating
+wakes: the T4b \code{simpleFoam} reference oscillates by about $\pm1\,\%$ in
+$C_d$ and $\pm8\,\%$ in $C_l$ indefinitely, so the window criterion above
+cannot be met by any steady solver on these cases. For them (user decision,
+D-042) a run of $n$ iterations is converged when its window mean is
+stationary: over the last $W=\max(500,n/4)$ iterations ($W\le n/2$) the means
+of the two half-windows differ by at most $\max(0.005\,|\overline{C}|,0.002)$,
+for $C_d$ and $C_l$ separately. The convergence iteration is the first
+iteration (scanned in steps of 50) at which this holds, and the coefficients
+compared are the window means, within $\max(2\,\%,0.002)$ for $C_d$ and
+$\max(2\,\%,0.01)$ for $C_l$. The criteria of T0--T3 are unchanged.
 
 \paragraph{Timing.} Every rank of every application that the case script
 starts runs under \code{/usr/bin/time -v}. The total cost of a solution is
@@ -1556,7 +1570,8 @@ Section~\ref{sec:perf} is authoritative.
   the largest meshes of the test suite are T4b and T5.
 \item \emph{Residual definitions} of coupledFoam and \code{simpleFoam} differ;
   the iteration criterion of T2 is defined in D-024, and all timing
-  comparisons use the solver-independent force window.
+  comparisons use the solver-independent force window (for the wake cases
+  T4 and T5 the stationary window mean, D-042).
 \end{itemize}
 
 \subsection{Phase 2}

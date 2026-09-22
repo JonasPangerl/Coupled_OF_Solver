@@ -701,3 +701,23 @@ accepted (D-012 keeps accumulation in double; unit tests hold at their
 tolerances) - measured effect: T0 Re100 56 -> 57 outer iterations, i.e.
 inside the trajectory scatter of FABLE_REVIEW item 1, for ~37 % less
 solve time per linear iteration.
+
+## D-042 - Averaged force comparison for wake cases (user decision, 2026-09-22)
+
+T4a, T4b and T5 have physically oscillating wakes: the T4b
+simpleFoam reference oscillates Cd by +-1 % and Cl by +-8 %
+indefinitely (run/ref_T4b_np10), so criterion 12.3(ii) (0.2 %
+min/max window) is unsatisfiable for any steady solver on these
+cases, coupledFoam and simpleFoam alike. The user approved
+averaging and coarser tolerances for exactly these cases ("bei den
+motorbike und ahmed body cases muessen wir wahrscheinlich averagen
+und das vergleichen und vllt auch groebere toleranzen nehmen wegen
+dem nachlauf problem. das ist okay", 2026-09-22). New evaluation,
+oscillatory cases only: window W = max(500, n/4) (<= n/2);
+stationarity = the two half-window means differ by <=
+max(0.5 % |mean|, 0.002) for Cd and Cl; comparison = window means,
+Cd within max(2 % relative, 0.002 absolute), Cl within
+max(2 % relative, 0.01 absolute) of the reference. Time to
+convergence uses the first stationary window. T0-T3 criteria are
+unchanged. This is a user-approved criterion change, not an agent
+loosening.

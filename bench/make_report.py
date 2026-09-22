@@ -150,11 +150,14 @@ def git_commit() -> str:
 
 def tex_escape(s: str) -> str:
     return (str(s).replace("_", r"\_").replace("%", r"\%")
-            .replace("&", r"\&").replace("#", r"\#"))
+            .replace("&", r"\&").replace("#", r"\#")
+            .replace("±", r"$\pm$")
+            .replace("†", r"\textsuperscript{\dag}"))
 
 
 def write_table(name: str, header: list[str], rows: list[list], caption: str,
-                label: str, resize: bool = False) -> str:
+                label: str, resize: bool = False,
+                note: str | None = None) -> str:
     TABLES.mkdir(parents=True, exist_ok=True)
     cols = "l" + "r" * (len(header) - 1)
     lines = [
@@ -172,12 +175,17 @@ def write_table(name: str, header: list[str], rows: list[list], caption: str,
     lines += [r"\bottomrule", r"\end{tabular}"]
     if resize:
         lines.append("}")
+    if note:
+        lines += [r"\par\smallskip", r"{\footnotesize " + tex_escape(note)
+                  + r"\par}"]
     lines += [r"\end{table}", ""]
     (TABLES / f"{name}.tex").write_text("\n".join(lines))
     # Markdown version for REPORT.md
     md = ["| " + " | ".join(header) + " |",
           "|" + "---|" * len(header)]
     md += ["| " + " | ".join(str(c) for c in r) + " |" for r in rows]
+    if note:
+        md += ["", note]
     return "\n".join(md)
 
 
@@ -356,7 +364,9 @@ def fig_bench(rows: list[dict]) -> str:
         num(f"pf cpuh {c}", _med(rows, c, "C", "preCpuHours"), "{:.2g}")
     return write_table("executive_summary", header, tab,
                        "Executive summary: time to convergence (identical "
-                       "window criterion, coupledFoam including its "
+                       "criterion for all solvers: the force window, for the "
+                       "wake cases T4 and T5 the first stationary window "
+                       "mean, D-042; coupledFoam including its "
                        "potentialFoam initialisation), best native "
                        "configuration vs.\\ coupledFoam, wall-clock time and "
                        "CPU-hours.", "tab:summary")
@@ -608,20 +618,49 @@ def table_validation(tests: dict) -> str:
         rows.append([name, q, fmt(d.get(kc), "{:.5g}"), fmt(d.get(kr), "{:.5g}"),
                      fmt(d.get(kd), "{:.2e}"), fmt(d.get(kt), "{:.3g}"),
                      "yes" if d.get("pass") else "NO"])
+    osc_rows = False
     for name in sorted(tests):
-        if name.startswith(("T4", "T5")) and "Cd" in tests[name]:
-            d = tests[name]
+        if not name.startswith(("T4", "T5")) or "Cd" not in tests[name]:
+            continue
+        d = tests[name]
+        ok = "yes" if d.get("pass") else "NO"
+        if d.get("criterion") == run_bench.STAT_CRITERION:
+            # wake case (D-042): window mean +- std, tolerance
+            # max(relative, absolute) of the reference mean
+            osc_rows = True
+            ref = d.get("reference") or {}
+            for q, (rel, ab) in run_bench.OSC_TOL.items():
+                rows.append([
+                    f"{name}†", f"{q} (mean ± std)",
+                    _pm(d.get(f"{q}_mean"), d.get(f"{q}_std")),
+                    _pm(ref.get(f"{q}_mean"), ref.get(f"{q}_std")),
+                    fmt(d.get(f"{q}RelDiff"), "{:.2e}"),
+                    f"max({rel:.0%}, {ab:g})", ok])
+        else:
             rows.append([name, "Cd", fmt(d.get("Cd"), "{:.5g}"),
                          fmt(d.get("CdRef"), "{:.5g}"),
-                         fmt(d.get("CdRelDiff"), "{:.2e}"), "0.01",
-                         "yes" if d.get("pass") else "NO"])
+                         fmt(d.get("CdRelDiff"), "{:.2e}"), "0.01", ok])
     if not rows:
         notes.append("validation table: no T1-T5 results")
         return ""
+    note = None
+    if osc_rows:
+        note = ("† Oscillating wake: stationary window mean over the "
+                "last W = max(500, n/4) iterations, mean ± standard "
+                "deviation; tolerance max(relative, absolute) of the "
+                "simpleFoam mean (averaged force criterion, D-042).")
     return write_table("validation", header, rows,
                        "Validation: integral quantities, coupledFoam vs. "
-                       "simpleFoam on identical meshes and schemes.",
-                       "tab:validation")
+                       "simpleFoam on identical meshes and schemes; wake "
+                       "cases T4 and T5 compared by window means (D-042).",
+                       "tab:validation", note=note)
+
+
+def _pm(m, s) -> str:
+    """mean +- std of a window (D-042 rows of the validation table)."""
+    if m is None:
+        return "n/a"
+    return f"{m:.4f} ± {s:.4f}" if s is not None else f"{m:.4f}"
 
 
 def _gamg_record(name: str, d: dict) -> dict:

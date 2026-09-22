@@ -5,12 +5,19 @@ Two meshes: (a) tutorial refinement (~350 k cells), (b) surface level
 (6 6), features 7, refinementBox 5 (target 1-2 M cells, D-031; the
 actual count is recorded).
 
-Pass (per mesh): converges by criterion 12.3(ii) with window 100 and tol
-0.002 on Cd and Cl, evaluated with the benchmark harness function
-bench/run_bench.py:iters_to_conv; Cd within 1 % of simpleFoam (SIMPLEC) on
-the same mesh (window means at convergence); static remediation set
-<= 1 % of the cells; nRollbacks == 0. Peak RSS, wall time and CPU-hours of
-both solvers are recorded (every rank runs under bench/rank_wrapper.sh).
+Pass (per mesh), averaged force criterion for the oscillating wake (D-042,
+user decision; the old 12.3(ii) 0.2 % min/max window is unsatisfiable for
+any steady solver here, the simpleFoam reference included): both solvers
+have a stationary window mean of Cd and Cl at the end of their run
+(bench/run_bench.py:stationary_mean - window W = max(500, n/4) <= n/2,
+half-window means differ by <= max(0.5 % |mean|, 0.002)); the window means
+agree with simpleFoam (SIMPLEC) on the same mesh: Cd within
+max(2 %, 0.002 absolute), Cl within max(2 %, 0.01 absolute); static
+remediation set <= 1 % of the cells; nRollbacks == 0. Time to convergence
+uses the first stationary window (run_bench.iters_to_stationary). Peak RSS,
+wall time and CPU-hours of both solvers are recorded (every rank runs under
+bench/rank_wrapper.sh). The coupledFoam runtime stop (convergence dict) is
+unchanged: runs stop on their budget or their own 12.3(ii) stop.
 
 Meshing is expensive, so every mesh is built once into run/<mesh name>
 (Allrun -mesh-only) and reused while it exists: solver runs are fresh copies
@@ -196,13 +203,64 @@ def force_history(case: Path) -> dict[str, list[float]]:
     return {"Cd": fc["Cd"].tolist(), "Cl": fc["Cl"].tolist()}
 
 
+def evaluate_history(rec: dict, case: Path, solver: str,
+                     hist: dict[str, list[float]], ranks: dict,
+                     oscillatory: bool = False) -> int | None:
+    """Convergence, coefficients and time to convergence of a force history
+    into `rec`; returns the convergence iteration.
+
+    oscillatory (D-042): convergence := stationary final window
+    (run_bench.stationary_eval); the convergence iteration is
+    iters_to_stationary, Cd / Cl are the final-window means (with std, W,
+    half-window drift). Otherwise criterion 12.3(ii) (run_bench.iters_to_conv,
+    window means at convergence)."""
+    rec["iterationsRun"] = min((len(h) for h in hist.values()), default=0)
+    if hist:
+        rec["CdFinal"] = hist["Cd"][-1]
+        rec["ClFinal"] = hist["Cl"][-1]
+    if oscillatory:
+        st = run_bench.stationary_eval(hist) if rec["iterationsRun"] else \
+            {"criterion": run_bench.STAT_CRITERION, "stationary": False,
+             "iters_to_stationary": None}
+        rec.update(st)
+        it = st["iters_to_stationary"]
+        rec["itersToConv"] = it
+        # the 12.3(ii) result for information only (not a pass condition)
+        rec["itersToConvWindow"] = (run_bench.iters_to_conv(hist)
+                                    if rec["iterationsRun"] else None)
+        if st.get("Cd_mean") is not None:
+            rec["Cd"] = st["Cd_mean"]
+            rec["Cl"] = st["Cl_mean"]
+    else:
+        rec["criterion"] = f"window {WINDOW}, tol {TOL} (12.3 ii)"
+        it = run_bench.iters_to_conv(hist) if rec["iterationsRun"] else None
+        rec["itersToConv"] = it
+        if it is not None:
+            rec["Cd"] = float(np.mean(hist["Cd"][it - WINDOW:it]))
+            rec["Cl"] = float(np.mean(hist["Cl"][it - WINDOW:it]))
+            # Cd alone with the post.py implementation (cross-check)
+            rec["itersToConvCdOnly"] = post.window_converged(
+                np.asarray(hist["Cd"]), WINDOW, TOL)
+    if it is not None:
+        frac = run_bench.progress_fraction(case, solver, it)
+        rec["progressFraction"] = frac
+        if frac is not None and ranks:
+            # potentialFoam is a fixed offset, the solver part is scaled
+            tc = run_bench.to_convergence(ranks, frac)
+            rec["wallToConv_s"] = tc.get("wall_to_conv_s")
+            rec["cpuHoursToConv"] = tc.get("cpu_to_conv_h")
+    return it
+
+
 def run_solver(template: str, mesh: Path, name: str, solver: str,
                mesh_args: list[str], sets: dict | None = None,
                fpe: bool | None = None,
-               extra_env: dict | None = None) -> tuple[Path, dict]:
+               extra_env: dict | None = None,
+               oscillatory: bool = False) -> tuple[Path, dict]:
     """Run one solver on a copy of a cached mesh; returns the case and a
-    record with convergence (harness criterion), coefficients, wall time,
-    CPU-hours and peak RSS (per-rank /usr/bin/time -v)."""
+    record with convergence (harness criterion; D-042 stationary mean if
+    `oscillatory`), coefficients, wall time, CPU-hours and peak RSS
+    (per-rank /usr/bin/time -v)."""
     info = mesh_info(mesh)
     nprocs = int(info.get("np", "1"))
     case = case_from_mesh(template, mesh, name, sets)
@@ -227,25 +285,7 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
     }
 
     hist = force_history(case)
-    rec["iterationsRun"] = min((len(h) for h in hist.values()), default=0)
-    it = run_bench.iters_to_conv(hist) if rec["iterationsRun"] else None
-    rec["itersToConv"] = it
-    if hist:
-        rec["CdFinal"] = hist["Cd"][-1]
-        rec["ClFinal"] = hist["Cl"][-1]
-    if it is not None:
-        rec["Cd"] = float(np.mean(hist["Cd"][it - WINDOW:it]))
-        rec["Cl"] = float(np.mean(hist["Cl"][it - WINDOW:it]))
-        # Cd alone with the post.py implementation (cross-check)
-        rec["itersToConvCdOnly"] = post.window_converged(
-            np.asarray(hist["Cd"]), WINDOW, TOL)
-        frac = run_bench.progress_fraction(case, solver, it)
-        rec["progressFraction"] = frac
-        if frac is not None and ranks:
-            # potentialFoam is a fixed offset, the solver part is scaled
-            tc = run_bench.to_convergence(ranks, frac)
-            rec["wallToConv_s"] = tc.get("wall_to_conv_s")
-            rec["cpuHoursToConv"] = tc.get("cpu_to_conv_h")
+    it = evaluate_history(rec, case, solver, hist, ranks, oscillatory)
 
     if solver == "coupledFoam":
         log = case / "log.coupledFoam"
@@ -284,26 +324,58 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
     return case, rec
 
 
+def reevaluate_reference(case: Path, rec: dict,
+                         oscillatory: bool = False) -> dict:
+    """Re-evaluate a cached reference record with the current criterion
+    (read-only: reference.json is not rewritten). The force history and
+    the rank timing reports are re-read from the case; records written
+    before the pre-processing split lack solverWallSeconds, so the rank
+    timing is re-parsed when needed."""
+    rec = dict(rec)
+    ranks = rec.get("ranks") or {}
+    if ranks and "solverWallSeconds" not in ranks:
+        ranks = run_bench.rank_times(case, "simpleFoam") or ranks
+        rec["ranks"] = ranks
+    for k in ("wallToConv_s", "cpuHoursToConv", "progressFraction", "Cd",
+              "Cl", "itersToConvCdOnly"):
+        rec.pop(k, None)
+    evaluate_history(rec, case, "simpleFoam", force_history(case), ranks,
+                     oscillatory)
+    return rec
+
+
 def reference(template: str, mesh: Path, name: str, mesh_args: list[str],
-              sets: dict | None = None) -> tuple[Path, dict]:
+              sets: dict | None = None,
+              oscillatory: bool = False) -> tuple[Path, dict]:
     """simpleFoam (SIMPLEC) reference on the same mesh, cached in
-    run/<name> together with its record (reference.json)."""
+    run/<name> together with its record (reference.json). A cached record
+    is re-evaluated with the current criterion (D-042 for `oscillatory`)."""
     case = cfcase.RUN_ROOT / name
     meta = case / "reference.json"
     if cfcase.solver_ok(case, "simpleFoam") and meta.exists():
         rec = json.loads(meta.read_text())
         if rec.get("meshCells") == mesh_cells(mesh):
-            return case, rec
+            return case, reevaluate_reference(case, rec, oscillatory)
     case, rec = run_solver(template, mesh, name, "simpleFoam", mesh_args,
-                           sets, fpe=False)
+                           sets, fpe=False, oscillatory=oscillatory)
     meta.write_text(json.dumps(results._clean(rec), indent=2) + "\n")
     assert rec["rc"] == 0 and cfcase.solver_ok(case, "simpleFoam"), \
         f"simpleFoam reference {name} failed"
     return case, rec
 
 
-def compare(rec: dict, ref: dict, tol_cd: float = TOL_CD) -> dict:
-    """Solver-to-solver comparison and the common pass conditions."""
+STAT_KEYS = ("W", "iterations_run", "Cd_mean", "Cd_std", "Cl_mean", "Cl_std",
+             "Cd_drift", "Cd_driftTol", "Cl_drift", "Cl_driftTol",
+             "stationary", "iters_to_stationary")
+
+
+def compare(rec: dict, ref: dict, tol_cd: float = TOL_CD,
+            oscillatory: bool = False) -> dict:
+    """Solver-to-solver comparison and the common pass conditions.
+    oscillatory: the averaged force criterion of D-042 (stationary window
+    means, Cd within max(2 %, 0.002), Cl within max(2 %, 0.01))."""
+    if oscillatory:
+        return _compare_mean(rec, ref)
     out: dict = {"tolCd": tol_cd, "window": WINDOW, "tolWindow": TOL}
     if rec.get("Cd") is not None and ref.get("Cd") is not None:
         out["CdRef"] = ref["Cd"]
@@ -330,13 +402,65 @@ def compare(rec: dict, ref: dict, tol_cd: float = TOL_CD) -> dict:
     return out
 
 
+def _speedups(out: dict, rec: dict, ref: dict) -> None:
+    if rec.get("wallToConv_s") and ref.get("wallToConv_s"):
+        out["speedupWall"] = ref["wallToConv_s"] / rec["wallToConv_s"]
+    if rec.get("cpuHoursToConv") and ref.get("cpuHoursToConv"):
+        out["speedupCpu"] = ref["cpuHoursToConv"] / rec["cpuHoursToConv"]
+
+
+def _compare_mean(rec: dict, ref: dict) -> dict:
+    """D-042 comparison: both runs stationary, window means within the
+    user-approved tolerances (run_bench.mean_comparison)."""
+    mc = run_bench.mean_comparison(rec, ref)
+    out: dict = {
+        "criterion": run_bench.STAT_CRITERION,
+        "tolCd": run_bench.OSC_TOL["Cd"], "tolCl": run_bench.OSC_TOL["Cl"],
+        "meanComparison": mc,
+        "stationaryMean": {
+            rec.get("solver", "coupledFoam"):
+            {k: rec.get(k) for k in STAT_KEYS},
+            ref.get("solver", "simpleFoam"):
+            {k: ref.get(k) for k in STAT_KEYS},
+        },
+    }
+    if rec.get("Cd_mean") is not None and ref.get("Cd_mean") is not None:
+        out.update({
+            "CdRef": ref["Cd_mean"], "ClRef": ref["Cl_mean"],
+            "CdRefStd": ref.get("Cd_std"), "ClRefStd": ref.get("Cl_std"),
+            "CdRelDiff": mc.get("Cd_relDiff"), "ClRelDiff": mc.get("Cl_relDiff"),
+            "CdAbsDiff": mc.get("Cd_absDiff"), "ClAbsDiff": mc.get("Cl_absDiff"),
+            "CdTol": mc.get("Cd_tol"), "ClTol": mc.get("Cl_tol"),
+        })
+    _speedups(out, rec, ref)
+    out["checks"] = {
+        "rc": rec["rc"] == 0 and not rec.get("fpeTrap"),
+        "converged": bool(rec.get("stationary"))
+        and rec.get("iters_to_stationary") is not None,
+        "referenceConverged": bool(ref.get("stationary"))
+        and ref.get("iters_to_stationary") is not None,
+        "Cd": bool(mc.get("Cd_pass")),
+        "Cl": bool(mc.get("Cl_pass")),
+        "staticSet": rec.get("staticFraction") is not None
+        and rec["staticFraction"] <= MAX_STATIC_FRACTION,
+        "rollbacks": rec.get("rollbacks") == 0,
+        "peakRSS": rec.get("peakRSS_MB_sum") is not None
+        or rec.get("peakRSS_GB_sum") is not None,
+    }
+    out["pass"] = all(out["checks"].values())
+    return out
+
+
 def assert_checks(cmp: dict, rec: dict, ref: dict) -> None:
     c = cmp["checks"]
+    crit = cmp.get("criterion", "12.3(ii)")
     assert c["rc"], f"coupledFoam failed (rc {rec['rc']}, fpe {rec.get('fpeTrap')})"
     assert c["referenceConverged"], \
-        "simpleFoam reference did not meet 12.3(ii) within its budget"
-    assert c["converged"], "coupledFoam did not meet 12.3(ii)"
+        f"simpleFoam reference did not meet {crit} within its budget"
+    assert c["converged"], f"coupledFoam did not meet {crit}"
     assert c["Cd"], (rec.get("Cd"), ref.get("Cd"), cmp.get("CdRelDiff"))
+    if "Cl" in c:
+        assert c["Cl"], (rec.get("Cl"), ref.get("Cl"), cmp.get("ClAbsDiff"))
     assert c["staticSet"], (rec.get("staticCells"), rec.get("staticFraction"))
     assert c["rollbacks"], rec.get("rollbacks")
     assert c["peakRSS"], "no peak RSS recorded"
@@ -352,17 +476,19 @@ def test_T4(foam, variant):
     mesh_args = ["-mesh", variant]
     mesh = mesh_dir(TEMPLATE, f"T4{variant}_mesh", mesh_args, NP)
     budget = BUDGET[variant]
+    # wake case: averaged force criterion (D-042)
+    osc = run_bench.is_oscillatory(f"T4{variant}")
 
     ref_case, ref = reference(
         TEMPLATE, mesh, f"ref_T4{variant}_np{NP}", mesh_args,
-        budget_sets("simpleFoam", budget["simpleFoam"]))
+        budget_sets("simpleFoam", budget["simpleFoam"]), oscillatory=osc)
 
     name = f"T4{variant}_np{NP}"
     case, rec = run_solver(
         TEMPLATE, mesh, name, "coupledFoam", mesh_args,
-        budget_sets("coupledFoam", budget["coupledFoam"]))
+        budget_sets("coupledFoam", budget["coupledFoam"]), oscillatory=osc)
 
-    cmp = compare(rec, ref)
+    cmp = compare(rec, ref, oscillatory=osc)
     meshing = cfcase.RUN_ROOT / f"T4{variant}_mesh" / "meshing.json"
     rec.update(cmp)
     rec.update({

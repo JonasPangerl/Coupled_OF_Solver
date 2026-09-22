@@ -7,6 +7,14 @@ iteration with the identical criterion for all solvers (spec 12.3 ii): over
 the last `window` iterations max - min <= tol*|mean| for every monitored
 quantity (Cd and Cl, or the pressure drop for T1/T2).
 
+Exception, the wake cases marked "oscillatory" (T4a, T4b, T5; D-042): their
+forces oscillate physically for ever, so 12.3(ii) is unsatisfiable. There
+"converged" means a stationary window mean (stationary_mean: window
+W = max(500, n/4) <= n/2, the two half-window means of Cd and of Cl differ
+by at most max(0.5 % |mean|, 0.002)); the time to convergence uses the
+first stationary window (iters_to_stationary, scanned in steps of 50) in
+place of iters_to_conv, and Cd / Cl are the final-window means.
+
 Configurations (DECISIONS.md D-025, amendment B10):
     A  simpleFoam, the tutorial's solver settings and relaxation factors.
        Per-case overrides where the test case differs from the tutorial:
@@ -96,12 +104,15 @@ CASES = {
                 "iters": {"simpleFoam": 6000, "coupledFoam": 2000}, "np": 1},
     "T4a": {"template": "T4_motorBike", "args": ["-mesh", "a"],
             "monitor": "forces",
-            "iters": {"simpleFoam": 3000, "coupledFoam": 1500}, "np": HEAVY_NP},
+            "iters": {"simpleFoam": 3000, "coupledFoam": 1500}, "np": HEAVY_NP,
+            "oscillatory": True},
     "T4b": {"template": "T4_motorBike", "args": ["-mesh", "b"],
             "monitor": "forces",
-            "iters": {"simpleFoam": 4000, "coupledFoam": 2000}, "np": HEAVY_NP},
+            "iters": {"simpleFoam": 4000, "coupledFoam": 2000}, "np": HEAVY_NP,
+            "oscillatory": True},
     "T5": {"template": "T5_ahmed", "args": [], "monitor": "forces",
-           "iters": {"simpleFoam": 5000, "coupledFoam": 2500}, "np": HEAVY_NP},
+           "iters": {"simpleFoam": 5000, "coupledFoam": 2500}, "np": HEAVY_NP,
+           "oscillatory": True},
 }
 
 CONFIGS = ("A", "B", "C", "D", "E", "F", "G", "H")
@@ -135,6 +146,17 @@ PRE_APPS = ("potentialFoam",)
 
 WINDOW = 100
 TOL = 0.002
+
+# Oscillatory wake cases ("oscillatory": True in CASES; D-042): criterion
+# 12.3(ii) is unsatisfiable there, convergence := stationary window mean
+STAT_CRITERION = "stationaryMean (D-042)"
+STAT_WINDOW_MIN = 500       # W = max(500, n//4), capped at n//2
+STAT_REL = 0.005            # half-window means differ <= max(0.5 % |m|,
+STAT_ABS = 0.002            #                                  0.002)
+STAT_STEP = 50              # scan step of iters_to_stationary
+STAT_QUANTITIES = ("Cd", "Cl")
+# comparison of the window means with the reference: (relative, absolute)
+OSC_TOL = {"Cd": (0.02, 0.002), "Cl": (0.02, 0.01)}
 
 # B10 acceptance (F): adaptive (C) not more than 5 % slower than fixed
 # relTol (F), and identical Cd / dp to 1e-4 (relative)
@@ -216,12 +238,17 @@ def config_hash(name: str, cfg: str) -> str:
     """Hash of everything that defines a run of (case, configuration)."""
     spec = CASES[name]
     solver, sets, files = config_sets(cfg, spec, name)
-    blob = json.dumps({"v": HARNESS_VERSION, "case": name, "cfg": cfg,
-                       "template": spec["template"], "args": spec["args"],
-                       "monitor": spec["monitor"], "solver": solver,
-                       "sets": sets, "files": files,
-                       "window": WINDOW, "tol": TOL},
-                      sort_keys=True, default=str)
+    d = {"v": HARNESS_VERSION, "case": name, "cfg": cfg,
+         "template": spec["template"], "args": spec["args"],
+         "monitor": spec["monitor"], "solver": solver,
+         "sets": sets, "files": files,
+         "window": WINDOW, "tol": TOL}
+    if spec.get("oscillatory"):
+        # D-042 evaluation: only the wake cases' records become stale
+        d["criterion"] = {"name": STAT_CRITERION, "wmin": STAT_WINDOW_MIN,
+                          "rel": STAT_REL, "abs": STAT_ABS,
+                          "step": STAT_STEP}
+    blob = json.dumps(d, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
 
@@ -261,6 +288,140 @@ def _window_ok(h: list[float]) -> bool:
     w = h[-WINDOW:]
     mean = sum(w) / WINDOW
     return max(w) - min(w) <= TOL * abs(mean)
+
+
+# --------------------------------------------------------------------------- #
+# oscillatory wake cases (D-042): stationary window mean instead of 12.3(ii)
+# --------------------------------------------------------------------------- #
+
+def is_oscillatory(name: str) -> bool:
+    """True for the cases with a physically oscillating wake (D-042)."""
+    return bool(CASES.get(name, {}).get("oscillatory", False))
+
+
+def stat_window(n: int) -> int:
+    """Averaging window of a run of n iterations: max(500, n//4), capped at
+    n//2 (D-042)."""
+    return min(max(STAT_WINDOW_MIN, n // 4), n // 2)
+
+
+def stationary_mean(hist: dict[str, list[float]], quantity: str,
+                    n: int | None = None, w: int | None = None) -> dict:
+    """Window statistics of one monitored quantity (D-042).
+
+    n is the number of iterations run (default: the shortest history in
+    `hist`, i.e. all quantities are evaluated over the same iterations);
+    the window is the last W samples up to n, W = stat_window(n) unless
+    given (iters_to_stationary slides the run's window W over the history).
+    Returns W, mean, std (population), the half-window means mean1 (first
+    W/2) and mean2 (last W/2), the drift |mean1 - mean2|, its tolerance
+    max(0.5 % |mean|, 0.002) and `stationary` (drift <= tolerance). For an
+    odd W the middle sample belongs to neither half; a window that does
+    not fit (W > n) or has fewer than 2 samples is never stationary."""
+    if n is None:
+        n = min(len(h) for h in hist.values())
+    h = hist[quantity][:n]
+    n = len(h)
+    if w is None:
+        w = stat_window(n)
+    half = w // 2
+    out: dict = {"n": n, "W": w, "mean": None, "std": None, "mean1": None,
+                 "mean2": None, "drift": None, "driftTol": None,
+                 "stationary": False}
+    if half < 1 or w > n:
+        return out
+    win = h[n - w:]
+    m = sum(win) / w
+    m1 = sum(win[:half]) / half
+    m2 = sum(win[w - half:]) / half
+    tol = max(STAT_REL * abs(m), STAT_ABS)
+    out.update({
+        "mean": m,
+        "std": (sum((x - m) ** 2 for x in win) / w) ** 0.5,
+        "mean1": m1, "mean2": m2, "drift": abs(m1 - m2), "driftTol": tol,
+        "stationary": abs(m1 - m2) <= tol,
+    })
+    return out
+
+
+def is_stationary(hist: dict[str, list[float]], n: int | None = None,
+                  quantities: tuple[str, ...] = STAT_QUANTITIES,
+                  w: int | None = None) -> bool:
+    """Both Cd and Cl stationary in the window (W = w, default
+    stat_window(n)) ending at iteration n."""
+    return all(stationary_mean(hist, q, n, w)["stationary"]
+               for q in quantities)
+
+
+def iters_to_stationary(hist: dict[str, list[float]],
+                        quantities: tuple[str, ...] = STAT_QUANTITIES
+                        ) -> int | None:
+    """Smallest N <= n (iterations run) such that the window ending at N is
+    stationary for all quantities; None if never (D-042).
+
+    "The window" is the run's window W = stat_window(n), slid along the
+    history: N is scanned in steps of STAT_STEP (50) from the first
+    multiple of 50 >= W, and finally N = n itself, so a stationary final
+    window always yields a value. (Re-deriving W from N instead would
+    shrink the window to N/2 < 500 early in the run: on the T4a reference
+    that declares a 75-iteration window at N = 150 stationary.)"""
+    if not hist:
+        return None
+    n = min(len(h) for h in hist.values())
+    w = stat_window(n)
+    if w < 2:
+        return None
+    first = -(-w // STAT_STEP) * STAT_STEP
+    cand = list(range(first, n + 1, STAT_STEP))
+    if not cand or cand[-1] != n:
+        cand.append(n)
+    for N in cand:
+        if is_stationary(hist, N, quantities, w):
+            return N
+    return None
+
+
+def stationary_eval(hist: dict[str, list[float]],
+                    quantities: tuple[str, ...] = STAT_QUANTITIES) -> dict:
+    """Record of the D-042 evaluation of a force history: W, means, stds,
+    half-window drifts per quantity, `stationary` (final window, all
+    quantities) and iters_to_stationary."""
+    if not hist or not all(q in hist for q in quantities):
+        return {"criterion": STAT_CRITERION, "stationary": False,
+                "iters_to_stationary": None}
+    n = min(len(h) for h in hist.values())
+    out: dict = {"criterion": STAT_CRITERION, "iterations_run": n,
+                 "W": stat_window(n)}
+    for q in quantities:
+        s = stationary_mean(hist, q, n)
+        out.update({f"{q}_mean": s["mean"], f"{q}_std": s["std"],
+                    f"{q}_mean1": s["mean1"], f"{q}_mean2": s["mean2"],
+                    f"{q}_drift": s["drift"], f"{q}_driftTol": s["driftTol"],
+                    f"{q}_stationary": s["stationary"]})
+    out["stationary"] = all(out[f"{q}_stationary"] for q in quantities)
+    out["iters_to_stationary"] = iters_to_stationary(hist, quantities)
+    return out
+
+
+def mean_comparison(rec: dict, ref: dict) -> dict:
+    """D-042 comparison of window means (keys Cd_mean, Cl_mean of
+    stationary_eval): PASS iff |Cd - Cd_ref| <= max(2 % |Cd_ref|, 0.002)
+    and |Cl - Cl_ref| <= max(2 % |Cl_ref|, 0.01)."""
+    out: dict = {"criterion": STAT_CRITERION}
+    ok = True
+    for q, (rel, ab) in OSC_TOL.items():
+        a, b = rec.get(f"{q}_mean"), ref.get(f"{q}_mean")
+        if a is None or b is None:
+            out[f"{q}_pass"] = False
+            ok = False
+            continue
+        tol = max(rel * abs(b), ab)
+        out.update({f"{q}_absDiff": abs(a - b),
+                    f"{q}_relDiff": abs(a - b) / max(abs(b), 1e-12),
+                    f"{q}_tol": tol, f"{q}_pass": abs(a - b) <= tol})
+        ok = ok and out[f"{q}_pass"]
+    out["pass"] = ok
+    return out
 
 
 def _parse_time_reports(reps: list[Path]) -> dict:
@@ -473,7 +634,16 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
         results.write("bench", tag, rec)
         return rec
 
-    it = iters_to_conv(hist)
+    osc = is_oscillatory(name)
+    if osc:
+        # D-042: convergence := stationary window mean of Cd and Cl; the
+        # first stationary window gives the time to convergence
+        st = stationary_eval(hist)
+        rec.update(st)
+        it = st["iters_to_stationary"]
+    else:
+        rec["criterion"] = f"window {WINDOW}, tol {TOL} (12.3 ii)"
+        it = iters_to_conv(hist)
     rec["iters_to_conv"] = it
     rec["iterations_run"] = min(len(h) for h in hist.values())
     # final values at the end of the fixed budget (B10 identity check)
@@ -488,9 +658,13 @@ def run_one(name: str, cfg: str, run: int, nprocs: int, force: bool) -> dict:
             # one-off cost)
             rec["time_per_iter_s"] = tc["solver_wall_to_conv_s"] / it
             rec["cpu_per_iter_s"] = tc["solver_cpu_to_conv_h"] * 3600.0 / it
-        rec.update({k: v[it - 1] for k, v in hist.items()})
-        rec.update({f"{k}_windowMean": sum(v[it - WINDOW:it]) / WINDOW
-                    for k, v in hist.items()})
+        if osc:
+            # compared quantities: the final-window means (D-042)
+            rec.update({k: rec.get(f"{k}_mean") for k in hist})
+        else:
+            rec.update({k: v[it - 1] for k, v in hist.items()})
+            rec.update({f"{k}_windowMean": sum(v[it - WINDOW:it]) / WINDOW
+                        for k, v in hist.items()})
         if solver == "coupledFoam":
             rec.update(coupled_breakdown(case, it))
     results.write("bench", tag, rec)
@@ -538,6 +712,10 @@ def summary_rows(recs: list[dict]) -> list[dict]:
             "Cd": _med(g, "Cd"), "Cl": _med(g, "Cl"), "dp": _med(g, "dp"),
             "Cd_final": _med(g, "Cd_final"), "Cl_final": _med(g, "Cl_final"),
             "dp_final": _med(g, "dp_final"),
+            "Cd_std": _med(g, "Cd_std"), "Cl_std": _med(g, "Cl_std"),
+            "W": _med(g, "W"),
+            "criterion": ",".join(sorted({str(x["criterion"]) for x in g
+                                          if x.get("criterion")})) or None,
             "cycleTypeFinal": ",".join(sorted({str(x.get("cycleTypeFinal"))
                                                for x in g
                                                if x.get("cycleTypeFinal")}))
@@ -655,7 +833,8 @@ SUMMARY_FIELDS = [
     "wall_max", "cpuh_median", "cpuh_min", "cpuh_max", "pre_wall_median",
     "pre_cpuh_median", "time_per_iter_median", "cpu_per_iter_median",
     "rss_sum_GB", "nCells", "Cd", "Cl", "dp", "Cd_final", "Cl_final",
-    "dp_final", "cycleTypeFinal", "nPostSweepsFinal",
+    "dp_final", "Cd_std", "Cl_std", "W", "criterion", "cycleTypeFinal",
+    "nPostSweepsFinal",
     "speedup_wall_B_over_C", "speedup_cpu_B_over_C"]
 B10_FIELDS = [
     "case", "config", "reference", "status", "pass", "criterion",

@@ -6,9 +6,12 @@ Allrun if missing, with this interpreter: CF_PYTHON). Mesh: snappyHexMesh,
 target 5-8 M cells (Allrun -mesh fine); CF_T5_MESH=coarse selects the ~1-2 M
 development mesh instead (recorded in the result; spec runs use fine).
 
-Pass: converged by 12.3(ii) (window 100, tol 0.002 on Cd and Cl, harness
-function bench/run_bench.py:iters_to_conv); Cd within 1 % of simpleFoam on
-the same mesh; static set <= 1 % of cells; nRollbacks == 0; peak RSS, wall
+Pass, averaged force criterion for the oscillating wake (D-042, user
+decision; see test_T4_motorBike.py): both solvers have a stationary window
+mean of Cd and Cl (harness function bench/run_bench.py:stationary_mean);
+window means within max(2 %, 0.002) (Cd) and max(2 %, 0.01) (Cl) of
+simpleFoam on the same mesh; time to convergence from the first stationary
+window; static set <= 1 % of cells; nRollbacks == 0; peak RSS, wall
 and CPU-hours recorded for both solvers. Informational only: both Cd within
 +-10 % of the experimental 0.285 (Ahmed et al. 1984); y+ on the body.
 
@@ -82,16 +85,19 @@ def test_T5(foam):
     mesh = mesh_dir(TEMPLATE, mesh_name, mesh_args, NP, extra_env=env)
 
     suffix = "" if variant == "fine" else f"_{variant}"
+    # wake case: averaged force criterion (D-042)
+    osc = run_bench.is_oscillatory("T5")
     ref_case, ref = reference(
         TEMPLATE, mesh, f"ref_T5{suffix}_np{NP}", mesh_args,
-        budget_sets("simpleFoam", BUDGET["simpleFoam"]))
+        budget_sets("simpleFoam", BUDGET["simpleFoam"]), oscillatory=osc)
 
     name = f"T5{suffix}_np{NP}"
     case, rec = run_solver(
         TEMPLATE, mesh, name, "coupledFoam", mesh_args,
-        budget_sets("coupledFoam", BUDGET["coupledFoam"]), extra_env=env)
+        budget_sets("coupledFoam", BUDGET["coupledFoam"]), extra_env=env,
+        oscillatory=osc)
 
-    cmp = compare(rec, ref)
+    cmp = compare(rec, ref, oscillatory=osc)
     stats_file = mesh / "geometry" / "ahmed25_stats.json"
     meshing = mesh / "meshing.json"
     info = {

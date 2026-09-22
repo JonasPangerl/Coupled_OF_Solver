@@ -1700,15 +1700,16 @@ Table~\ref{tab:tests}.
 \item[T4, motorBike.] The OpenFOAM motorbike-with-rider tutorial meshed with
   \code{snappyHexMesh}: a coarse mesh of about 350\,k cells (T4a) and a
   finer mesh (T4b, retargeted to 1--2\,M cells, D-031), run in parallel.
-  Pass: converged by the force-window criterion; $C_d$ within 1\,\% of
-  \code{simpleFoam}; static remediation set at most 1\,\% of the cells; no
+  Pass: the averaged $C_d$ and $C_l$ have settled and agree with
+  \code{simpleFoam} (2\,\% for $C_d$; averaged criterion for the oscillating
+  wake, D-042); static remediation set at most 1\,\% of the cells; no
   rollbacks. \emph{Why you should care:} this is the first case with a
   complex 3D geometry and an automatically generated mesh with real
   bad cells, the closest test to a car.
 \item[T5, Ahmed body, $25^\circ$ slant.] A simplified car body with a slanted
   rear, the standard automotive bluff-body benchmark~\cite{Ahmed1984}; half
   model, 5--8\,M cells, $U_\infty=\SI{40}{m/s}$, SST with wall functions.
-  Pass: $C_d$ within 1\,\% of \code{simpleFoam}; the comparison with the
+  Pass: as T4 (averaged criterion, D-042); the comparison with the
   experimental $C_d=0.285$ ($\pm10$\,\%) is for information only.
   \emph{Why you should care:} it is the size class and flow type of a
   vehicle simulation: separation on the slant, a wake, ground effect.
@@ -1740,7 +1741,13 @@ same mesh, their relative difference, the tolerance of the test, and the
 verdict. \emph{Good} means: the relative difference is well below the
 tolerance. A difference close to the tolerance on a case with many
 remediated cells would point to the local upwinding of
-Section~\ref{sec:remediation}.
+Section~\ref{sec:remediation}. The wake behind the motorbike and the Ahmed
+body (rows marked \textsuperscript{\dag}) never settles, not even in
+\code{simpleFoam}, so for T4 and T5 the table compares averages over a long
+window, shown as mean $\pm$ standard deviation, and ``converged'' means that
+this average has stopped drifting (D-042). Their tolerances are
+correspondingly coarser (2\,\% for $C_d$, and an absolute 0.01 for the small
+$C_l$), a change the project owner approved for exactly these cases.
 
 \cffigure{remediation_history}{Remediation set sizes and rollbacks over the
 iterations for T4 and T5.}{fig:remediation}
@@ -1780,7 +1787,9 @@ a fixed number of iterations is run. Afterwards the harness finds, for all
 solvers in the same way, the first iteration at which the force
 coefficients have settled: over the last 100 iterations, $C_d$ and $C_l$
 vary by at most 0.2\,\% of their mean (for T1 and T2, the pressure drop).
-This is the ``convergence iteration''.
+This is the ``convergence iteration''. For the wake cases T4 and T5, whose
+forces never settle, it is instead the first iteration at which their
+long-window average stops drifting (D-042).
 
 \paragraph{Stopwatch.} Every rank runs under \code{/usr/bin/time}, which
 records the wall-clock time and the CPU time. The totals of the whole run
