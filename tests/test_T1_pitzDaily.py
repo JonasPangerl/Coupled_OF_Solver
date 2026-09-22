@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from cflib import post, refcase, results
+from cflib import post, precision, refcase, results
 
 MAX_ITERS = 400
 R_TARGET = 1e-5      # user-approved relaxation 1e-6 -> 1e-5 (D-046)
@@ -50,6 +50,7 @@ def test_T1(foam, nprocs):
         "CFLmaxReached": cfl_max, "cutsAfter100": cuts_late,
         "reference": ref_rec,
     })
+    precision.annotate(rec, case, {"dp": dp})
     if nprocs > 1:
         serial = results.read("tests", "T1_np1")
         if serial:

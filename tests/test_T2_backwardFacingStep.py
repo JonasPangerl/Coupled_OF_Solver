@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from cflib import logs, post, refcase, results
+from cflib import logs, post, precision, refcase, results
 
 STEP_HEIGHT = 0.0127
 TOL_REATTACH = 0.02
@@ -28,7 +28,9 @@ def reattachment(case) -> float:
     tdir = max((d for d in base.iterdir()), key=lambda d: float(d.name))
     f = next(tdir.rglob("*wallShearStress*"))
     d = np.loadtxt(f, comments="#")
-    x, tx = d[:, 0], d[:, 3]
+    # x in the DP frame (an SP run is shifted to the origin, D5.2): the
+    # step is at x = 0
+    x, tx = post.unshift(case, d[:, 0], "x"), d[:, 3]
     order = np.argsort(x)
     x, tx = x[order], tx[order]
     down = x > 0
@@ -79,6 +81,7 @@ def test_T2(foam, nprocs):
         "requiredRatio": ITER_FACTOR,
         "reference": ref_rec,
     })
+    precision.annotate(rec, case, {"xr": xr})
     passed = (
         rec["rc"] == 0 and not rec["fpeTrap"]
         and rec["xrRelDiff"] < TOL_REATTACH

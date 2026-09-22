@@ -93,7 +93,15 @@ def complete_timing(record: dict) -> dict:
     return record
 
 
+def _tag(kind: str, name: str) -> str:
+    """Test records of an SP run are <name>_sp (cflib.precision, D11); the
+    benchmark has its own SP configurations (F1, F2) and is not tagged."""
+    from . import precision  # noqa: PLC0415
+    return precision.tag(name) if kind == "tests" else name
+
+
 def write(kind: str, name: str, data: dict) -> Path:
+    name = _tag(kind, name)
     out = RESULTS / kind / f"{name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     head = provenance.git_head()
@@ -112,5 +120,11 @@ def write(kind: str, name: str, data: dict) -> Path:
 
 
 def read(kind: str, name: str) -> dict | None:
+    """Record of the current precision (tests: <name>_sp in SP)."""
+    return read_exact(kind, _tag(kind, name))
+
+
+def read_exact(kind: str, name: str) -> dict | None:
+    """Record <name> as given (no precision tag)."""
     f = RESULTS / kind / f"{name}.json"
     return json.loads(f.read_text()) if f.exists() else None

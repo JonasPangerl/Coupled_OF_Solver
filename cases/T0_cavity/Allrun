@@ -3,7 +3,11 @@
 # T0 - lid-driven cavity 128x128 (spec 13)
 #
 #   ./Allrun [-solver coupledFoam|simpleFoam] [-np N] [-Re 100|1000]
-#            [-mesh-only]
+#            [-mesh-only] [-keep-mesh]
+#
+#   -keep-mesh   use the mesh already in constant/polyMesh (no mesh
+#                generation): the SP harness generates the mesh in DP and
+#                shifts it (amendment D5, tests/cflib/precision.py)
 #
 # Defaults: coupledFoam, 1 rank, Re 100. Deterministic for a given rank count.
 # Parallel runs use scotch and mpirun --bind-to core --map-by core.
@@ -15,6 +19,7 @@ solver=coupledFoam
 np=1
 Re=100
 meshOnly=false
+keepMesh=false
 
 while [ "$#" -gt 0 ]
 do
@@ -23,6 +28,7 @@ do
         -np) np="$2"; shift 2 ;;
         -Re) Re="$2"; shift 2 ;;
         -mesh-only) meshOnly=true; shift ;;
+        -keep-mesh) keepMesh=true; shift ;;
         *) echo "Unknown option $1" 1>&2; exit 1 ;;
     esac
 done
@@ -33,7 +39,7 @@ foamDictionary -entry nu -set "$nu" constant/transportProperties > /dev/null
 foamDictionary -entry application -set "$solver" system/controlDict > /dev/null
 
 restore0Dir
-runApplication blockMesh
+[ "$keepMesh" = true ] || runApplication blockMesh
 
 [ "$meshOnly" = true ] && exit 0
 

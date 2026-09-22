@@ -7,6 +7,8 @@ environment sourced:
     pytest tests/ --heavy              # also T4, T5, T-scaling
     pytest tests/ -k T0                # one case
     pytest tests/ --ranks 1            # serial variants only
+    pytest tests/ --precision sp       # SP runs (amendment D5; needs the SP
+                                       # environment, see cflib/precision.py)
 
 Every test writes results/tests/<name>.json (measured quantities and
 pass/fail). Case runs go to run/ (git-ignored); simpleFoam references are
@@ -29,6 +31,7 @@ import os
 import pytest
 
 from cflib import env as cfenv
+from cflib import precision
 
 
 def pytest_addoption(parser):
@@ -36,9 +39,15 @@ def pytest_addoption(parser):
                      help="run heavy tests (T4, T5, T-scaling)")
     parser.addoption("--ranks", default="1,4",
                      help="comma-separated rank counts for the case tests")
+    parser.addoption("--precision", default=None, choices=("dp", "sp"),
+                     help="dp (default) or sp: sets CF_PRECISION; sp needs "
+                          "the SP OpenFOAM environment (amendment D5, "
+                          "cflib/precision.py)")
 
 
 def pytest_configure(config):
+    if config.getoption("--precision"):
+        os.environ["CF_PRECISION"] = config.getoption("--precision")
     config.addinivalue_line("markers", "heavy: long-running, many cores")
     config.addinivalue_line("markers", "unit: unit-test applications")
     config.addinivalue_line("markers", "case: solver case tests")
@@ -72,8 +81,10 @@ def pytest_generate_tests(metafunc):
 @pytest.fixture(scope="session")
 def foam():
     try:
-        return cfenv.foam_env()
-    except RuntimeError as err:
+        env = cfenv.foam_env()
+        precision.check_environment()
+        return env
+    except (RuntimeError, ValueError) as err:
         pytest.exit(str(err), returncode=2)
 
 
