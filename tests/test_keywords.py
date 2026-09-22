@@ -19,12 +19,38 @@ KEYWORDS = REPO / "docs" / "KEYWORDS.md"
 _CONST = re.compile(r"^\s*constexpr\s+[\w:\s\*]+?\b(\w+)\s*=", re.M)
 
 
+_NS = re.compile(r"namespace\s+(\w+)\s*\{")
+
+
 def _constants() -> list[str]:
+    """Constant names; constants of a namespace nested in coupledDefaults
+    (e.g. the D-064 precision profiles dpProfile/spProfile) are qualified
+    as ns::name."""
     text = DEFAULTS.read_text()
     # drop comments so that commented-out constants do not count
     text = re.sub(r"//[^\n]*", "", text)
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    return _CONST.findall(text)
+    names, stack, pos = [], [], 0
+    events = sorted(
+        [(m.start(), "ns", m.group(1)) for m in _NS.finditer(text)]
+        + [(m.start(), "const", m.group(1)) for m in _CONST.finditer(text)]
+        + [(i, "open", None) for i, c in enumerate(text) if c == "{"]
+        + [(i, "close", None) for i, c in enumerate(text) if c == "}"])
+    pending = None
+    for _, kind, val in events:
+        if kind == "ns":
+            pending = val
+        elif kind == "open":
+            stack.append(pending)
+            pending = None
+        elif kind == "close":
+            if stack:
+                stack.pop()
+        else:
+            inner = [n for n in stack if n not in (None, "Foam",
+                                                    "coupledDefaults")]
+            names.append("::".join(inner + [val]))
+    return names
 
 
 def test_defaults_parsed():

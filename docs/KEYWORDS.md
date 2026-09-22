@@ -368,6 +368,24 @@ is rejected, because it has been replaced by the categories.
 | `gamg.tuneRhoFail` | 0.9 | [tuneRhoHigh, 1) | failure condition | 6.3.5, D-066 | `tuneRhoFail` |
 | `gamg.tuneConsecutiveWindows` | 2 | >= 1 | hysteresis windows | 6.3.5, D-066 | `tuneConsecutiveWindows` |
 
+### c.precisionProfile (amendment D7, D-064)
+
+`coupled.precisionProfile auto | dp | sp` (constant `precisionProfile`,
+default `auto` = `sp` when sizeof(scalar) == 4, else `dp`). The profile sets
+DEFAULT values only; an explicitly set keyword always wins, so the case
+templates, which set these keywords, override it (the SP harness removes
+them for SP runs). Values:
+
+| keyword | dp profile (`dpProfile::...`) | sp profile (`spProfile::...`) |
+|---|---|---|
+| `coupled.convergence.residualTol` | `dpProfile::residualTol` = residualTol (1e-6) | `spProfile::residualTol` = 1e-5 |
+| linear `tolerance` (absolute floor) | `dpProfile::tolerance` = tolerance (1e-8) | `spProfile::tolerance` = 1e-6 |
+| `etaMin` | `dpProfile::etaMin` = etaMin (1e-3) | `spProfile::etaMin` = 1e-2 |
+| `coupled.bounds.omegaMin` | `dpProfile::boundOmegaMin` = boundOmegaMin | `spProfile::boundOmegaMin` = 1e-5 |
+| `coupled.bounds.kMin` | `dpProfile::kMin` = kMin (1e-12) | `spProfile::kMin` = 1e-10 |
+| Anderson above `anderson.maxCells` | `dpProfile::andersonAboveMaxCells` = no | `spProfile::andersonAboveMaxCells` = yes |
+| its history length there | `dpProfile::andersonLargeMaxM` = 4 | `spProfile::andersonLargeMaxM` = 4 |
+
 ## Compile-time items (not keywords, by design)
 
 | item | where | reason |
