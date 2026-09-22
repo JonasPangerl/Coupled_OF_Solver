@@ -40,11 +40,20 @@ def prepare(template: str, name: str, sets: dict | None = None,
 
 
 def set_entry(case: Path, fname: str, entry: str, value) -> None:
-    """foamDictionary -entry <entry> -set <value> <file>"""
-    subprocess.run(
-        ["foamDictionary", "-entry", entry, "-set", str(value), fname],
-        cwd=case, check=True, stdout=subprocess.DEVNULL,
-    )
+    """foamDictionary -entry <entry> -set <value> <file>
+
+    fvSolution: with -disableFunctionEntries, otherwise foamDictionary
+    rewrites the file with directives expanded and silently drops the
+    `#sinclude "relaxation"` of the case templates (k/omega unrelaxed;
+    found 2026-09-22 on the T4 runs). Other dictionaries keep the plain
+    call: controlDict/fvSchemes use $-macros ($inletP, $turbulence) that
+    must be expanded, and the flag would write them back quoted.
+    """
+    cmd = ["foamDictionary"]
+    if Path(fname).name == "fvSolution":
+        cmd.append("-disableFunctionEntries")
+    cmd += ["-entry", entry, "-set", str(value), fname]
+    subprocess.run(cmd, cwd=case, check=True, stdout=subprocess.DEVNULL)
 
 
 def get_entry(case: Path, fname: str, entry: str) -> str:

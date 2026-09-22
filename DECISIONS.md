@@ -987,3 +987,15 @@ T2 - iteration-ratio definition fixed, no threshold changed:
 - Required ratio >= 2 and the xr tolerance of 2 % are unchanged.
 
 T0 is unchanged.
+
+### D-040 addendum - the explicit case value overrode the fix (2026-09-22)
+
+All six case templates carried an explicit `coupled.bounds.nutMaxFactor
+1e5`, which overrides the coupledDefaults value, so the D-040 fix never
+reached any case run (the T3 root-cause experiment set 1e8 explicitly).
+Templates now say 1e8. Found together with a harness defect:
+tests/cflib/case.py set_entry rewrote fvSolution without
+-disableFunctionEntries and dropped `#sinclude "relaxation"` (k/omega
+unrelaxed) in every pytest case whose fvSolution it edited (T4/T5 budget
+sets); now fixed for fvSolution. T4 coupledFoam results before this
+commit are invalid.
