@@ -340,6 +340,20 @@ int main(int argc, char *argv[])
                 const scalarField& Dc = tD().primitiveField();
                 scalarField abar(mesh.V()/max(Dc, VSMALL));  // GUARD
                 assembler.rc().updateD(abar, p);
+                if (assembler.rc().tensorial())
+                {
+                    // Tensorial D_f (C2) from the stored coupledDT
+                    tmp<volTensorField> tDT = state.readDT();
+                    if (tDT.valid())
+                    {
+                        assembler.rc().setDT(tDT(), p);
+                    }
+                    else
+                    {
+                        Info<< "coupledFoam: restart without coupledDT,"
+                            << " phi check uses the scalar D_f" << endl;
+                    }
+                }
 
                 // The written phi was built with the explicit term q_f of
                 // the assembly that was solved (rhieChow::updateFlux); use
@@ -511,6 +525,10 @@ int main(int argc, char *argv[])
         // C6 (C3 hook: dfields.setSFD(&Ubar) while SFD is active -> USFD)
         dfields.write(phi);
         state.writeD(assembler.rc().D());
+        if (assembler.rc().tensorial())
+        {
+            state.writeDT(assembler.rc().DT());
+        }
         state.writeQ(assembler.rc().q());
         state.write(stateDict());
     };
@@ -881,6 +899,21 @@ int main(int argc, char *argv[])
             WarningInFunction
                 << nClamped << " coefficients clamped at +-"
                 << coupledDefaults::clampValue << " (spec 9.2)" << endl;
+        }
+        // C2: pseudo-inverse fallbacks of the tensorial Rhie-Chow D
+        if (iter % coupledDefaults::rhieChowWarnInterval == 0)
+        {
+            const label nPinv = assembler.rc().takePseudoInverseWindow();
+            if (nPinv)
+            {
+                WarningInFunction
+                    << nPinv << " cells with a singular momentum block used"
+                    << " the pseudo-inverse for the Rhie-Chow D in the last "
+                    << coupledDefaults::rhieChowWarnInterval
+                    << " iterations (run total "
+                    << assembler.rc().nPseudoInverseTotal() << ", C2)"
+                    << endl;
+            }
         }
 
         if (skipStep)
@@ -1582,6 +1615,8 @@ int main(int argc, char *argv[])
         j.add("rampStartIter", startup.rampStartIter());
         j.add("rampEndIter", startup.rampEndIter());
         j.add("phiConsistency", phiConsistency);
+        j.add("rhieChowTensorial", assembler.rc().tensorial());
+        j.add("nPseudoInverse", assembler.rc().nPseudoInverseTotal());
         j.add("ftz", ftzApplied);
         j.add("fpeTraps", runInfo::fpeActive());
         if (conv.haveForces())

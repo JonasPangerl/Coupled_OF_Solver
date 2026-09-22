@@ -48,12 +48,45 @@ def set_entry(case: Path, fname: str, entry: str, value) -> None:
     found 2026-09-22 on the T4 runs). Other dictionaries keep the plain
     call: controlDict/fvSchemes use $-macros ($inletP, $turbulence) that
     must be expanded, and the flag would write them back quoted.
+
+    Missing sub-dictionaries of a dotted entry are created (foamDictionary
+    -set refuses a path whose parent does not exist): e.g.
+    coupled.rhieChow.tensorial on a template without coupled.rhieChow sets
+    coupled.rhieChow to "{ tensorial <value>; }". Existing sibling entries
+    of an existing parent are never replaced.
     """
-    cmd = ["foamDictionary"]
+    base = ["foamDictionary"]
     if Path(fname).name == "fvSolution":
-        cmd.append("-disableFunctionEntries")
-    cmd += ["-entry", entry, "-set", str(value), fname]
-    subprocess.run(cmd, cwd=case, check=True, stdout=subprocess.DEVNULL)
+        base.append("-disableFunctionEntries")
+
+    def _run(ent: str, val: str) -> int:
+        return subprocess.run(base + ["-entry", ent, "-set", val, fname],
+                              cwd=case, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode
+
+    def _exists(ent: str) -> bool:
+        return subprocess.run(base + ["-entry", ent, fname], cwd=case,
+                              stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0
+
+    if _run(entry, str(value)) == 0:
+        return
+    parts = entry.split(".")
+    # deepest existing parent: parts[:k] (k = 0: top level)
+    k = len(parts) - 1
+    while k > 0 and not _exists(".".join(parts[:k])):
+        k -= 1
+    if k == len(parts) - 1:
+        # the parent exists: the failure was not a missing sub-dictionary
+        subprocess.run(base + ["-entry", entry, "-set", str(value), fname],
+                       cwd=case, check=True, stdout=subprocess.DEVNULL)
+        return
+    nested = f"{parts[-1]} {value};"
+    for p in reversed(parts[k + 1:-1]):
+        nested = f"{p} {{ {nested} }}"
+    subprocess.run(base + ["-entry", ".".join(parts[:k + 1]),
+                           "-set", f"{{ {nested} }}", fname],
+                   cwd=case, check=True, stdout=subprocess.DEVNULL)
 
 
 def get_entry(case: Path, fname: str, entry: str) -> str:

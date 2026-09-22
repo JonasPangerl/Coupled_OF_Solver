@@ -12,6 +12,15 @@ Description
     Agglomeration: native GAMGAgglomeration::New(mesh, dict) (faceAreaPair
     by default). Each mergeLevels attempt uses its own agglomeration "name"
     so that a retry creates a new cached object.
+    Matrix-weighted pair agglomeration (D-039), keyword agglomerationWeights
+    geometric | momentum | pressure | combined, rebuilt every
+    reagglomerateInterval matrix updates. "agglomerator algebraicPair"
+    (amendment C4) is the spec name of agglomerationWeights pressure: face
+    weights = p-p block (row 3, col 3) magnitudes max(|U_pp|, |L_pp|), so
+    the agglomeration follows the anisotropy of the Rhie-Chow Laplacian;
+    before the first matrix exists the hierarchy is faceAreaPair. An
+    explicit agglomerationWeights other than pressure together with
+    algebraicPair is a FatalIOError.
 
     Acceptance of an agglomeration (6.3, 6.3.1), mergeLevels from the
     dictionary value up to maxMergeLevels (4):
@@ -159,7 +168,8 @@ private:
         label scaleMode_;
 
         //- Agglomeration weights: geometric (native agglomerator) or from
-        //  the finest block matrix (momentum | pressure | combined)
+        //  the finest block matrix (momentum | pressure | combined).
+        //  "agglomerator algebraicPair" (amendment C4) selects pressure.
         word aggWeights_;
         label reaggInterval_;
         label nUpdates_;

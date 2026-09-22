@@ -228,4 +228,49 @@ Foam::tmp<Foam::volScalarField> Foam::coupledState::readD() const
 }
 
 
+void Foam::coupledState::writeDT(const volTensorField& DT) const
+{
+    if (!writeState_)
+    {
+        return;
+    }
+
+    volTensorField Dw
+    (
+        IOobject
+        (
+            "coupledDT",
+            mesh_.time().timeName(),
+            mesh_,
+            IOobject::NO_READ,
+            IOobject::NO_WRITE,
+            IOobject::NO_REGISTER
+        ),
+        DT
+    );
+    Dw.write();
+}
+
+
+Foam::tmp<Foam::volTensorField> Foam::coupledState::readDT() const
+{
+    IOobject io
+    (
+        "coupledDT",
+        mesh_.time().timeName(),
+        mesh_,
+        IOobject::MUST_READ,
+        IOobject::NO_WRITE,
+        IOobject::NO_REGISTER
+    );
+
+    if (!io.typeHeaderOk<volTensorField>(true))
+    {
+        return nullptr;
+    }
+
+    return tmp<volTensorField>::New(io, mesh_);
+}
+
+
 // ************************************************************************* //

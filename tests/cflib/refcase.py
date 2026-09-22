@@ -121,6 +121,8 @@ def coupled(template: str, name: str, args: list[str],
         "fpeTrap": logs.fpe_trapped(log),
         "nClampedMax": max((r.get("nClamped", 0) for r in rows), default=None),
         "rollbacks": summ.get("rollbacks"),
+        # C2: pseudo-inverse fallbacks of the tensorial Rhie-Chow D
+        "nPseudoInverse": summ.get("nPseudoInverse", 0),
         "wallSecondsSolver": summ.get("wallSeconds"),
         "cpuHoursSolver": summ.get("cpuHours"),
         "peakRSS_MB_sum": summ.get("peakRSS_MB_sum"),

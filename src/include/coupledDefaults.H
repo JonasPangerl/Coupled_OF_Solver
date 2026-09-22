@@ -230,6 +230,20 @@ constexpr doubleScalar sentinelPFactor = 50;
 constexpr doubleScalar sentinelCflFactor = 0.25;
 constexpr label sentinelMaxReport = 20;
 
+// Rhie-Chow diffusivity, coupled.rhieChow (amendment C2, D-053).
+// tensorial yes: D_P = V_P A_P^-1 (3x3 momentum diagonal block incl. PTC and
+// implicit MRF Coriolis), D_f = n.interpolate(D)_f.n; no: the scalar
+// D_P = V_P/abar_P (bit-identical to the implementation before C2).
+constexpr bool rhieChowTensorial = true;
+// invert3 guard: A_P singular if |det A_P| < tol |trace(A_P)/3|^3 (C2)
+constexpr doubleScalar rhieChowDetRelTol = 1e-12;
+// Pseudo-inverse fallback: singular values <= tol*sigma_max count as zero
+// (so a nearly singular direction does not give an unbounded D)
+constexpr doubleScalar rhieChowPinvRelTol = 1e-6;
+constexpr label rhieChowPinvMaxSweeps = 60;      // Jacobi SVD sweeps (3x3)
+// nPseudoInverse > 0 is reported as a Warning every this many iterations
+constexpr label rhieChowWarnInterval = 100;
+
 // Bounds (spec 5.8, 9.2)
 constexpr doubleScalar kMin = 1e-12;
 constexpr doubleScalar boundOmegaMin = 1e-6;

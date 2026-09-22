@@ -35,6 +35,20 @@ Configurations (DECISIONS.md D-025, amendment B10):
     H  coupledFoam with autoTune no (fixed K-cycle, fixed nPostSweeps): the
        clean reference for E, which differs from C also by the controller.
        Same scope as E.
+    E variants (amendment C7): configuration E plus one change each,
+    compared with C (and E) in the B10 table. Scope in CONFIG_SCOPE:
+       E-rcScalar   coupled.rhieChow.tensorial no (scalar D, C2). T2, T4b, T5
+       E-nonOrth60  remediation.static.nonOrthThreshold 60 (C1). T4a, T4b, T5
+       E-nonOrth65  remediation.static.nonOrthThreshold 65 (C1 value; the
+                    default stays 85, D-047/D-051). T4a, T4b, T5
+       E-algPair    blockGAMG agglomerator algebraicPair (C4; the templates'
+                    agglomerationWeights combined is replaced by pressure,
+                    which algebraicPair means). T4a, T4b, T5
+       E-sfd        coupled.sfd.enabled yes (C3, T3 only). T3-SST, T3-GEKO
+       E-eta07      etaMax 0.7 with minIter 2 ("solve loosely, iterate
+                    often"). T2, T4b, T5
+    T4a is in the scope of the heavy-case variants because every change is
+    tried on T4a before T4b (user rule, 2026-09-22).
 Configurations with a scope run only on the cases of their scope unless
 --no-scope is given.
 
@@ -119,7 +133,22 @@ CASES = {
            "oscillatory": True},
 }
 
-CONFIGS = ("A", "B", "C", "D", "E", "F", "G", "H")
+# Amendment C7: variants of configuration E, one change each (foamDictionary
+# sets on top of E; missing sub-dictionaries are created by
+# cflib.case.set_entry)
+E_VARIANTS = {
+    "E-rcScalar": {"coupled.rhieChow.tensorial": "no"},
+    "E-nonOrth60": {"coupled.remediation.static.nonOrthThreshold": 60},
+    "E-nonOrth65": {"coupled.remediation.static.nonOrthThreshold": 65},
+    "E-algPair": {"solvers.coupled.blockGAMG.agglomerator": "algebraicPair",
+                  "solvers.coupled.blockGAMG.agglomerationWeights":
+                  "pressure"},
+    "E-sfd": {"coupled.sfd.enabled": "yes"},
+    "E-eta07": {"solvers.coupled.etaMax": 0.7,
+                "solvers.coupled.minIter": 2},
+}
+
+CONFIGS = ("A", "B", "C", "D", "E", "F", "G", "H") + tuple(E_VARIANTS)
 NATIVE_CONFIGS = frozenset({"A", "B"})
 
 # B10 case scoping (default when E, F, G, H are requested)
@@ -128,6 +157,13 @@ CONFIG_SCOPE = {
     "F": frozenset({"T1", "T3-SST"}),
     "G": frozenset({"T1", "T3-SST"}),
     "H": frozenset({"T2", "T4b", "T5"}),
+    # C7 E variants (C1/C4 name T4b/T5; C3 names T3)
+    "E-rcScalar": frozenset({"T2", "T4b", "T5"}),
+    "E-nonOrth60": frozenset({"T4a", "T4b", "T5"}),
+    "E-nonOrth65": frozenset({"T4a", "T4b", "T5"}),
+    "E-algPair": frozenset({"T4a", "T4b", "T5"}),
+    "E-sfd": frozenset({"T3-SST", "T3-GEKO"}),
+    "E-eta07": frozenset({"T2", "T4b", "T5"}),
 }
 
 # Per-case overrides of a configuration (foamDictionary sets).
@@ -235,10 +271,11 @@ def config_sets(cfg: str, spec: dict, name: str | None = None
         if cfg == "D":
             fv["solvers.coupled.preconditioner"] = "blockDiagonal"
             # the K-cycle needs FGMRES; blockDiagonal is a fixed operator
-        if cfg == "E":
+        if cfg == "E" or cfg in E_VARIANTS:
             # fixed V-cycle: autoTune would promote V -> F -> W (6.3.5)
             fv["solvers.coupled.blockGAMG.cycleType"] = "V"
             fv["solvers.coupled.blockGAMG.autoTune"] = "no"
+        fv.update(E_VARIANTS.get(cfg, {}))
         if cfg == "F":
             fv["solvers.coupled.adaptiveRelTol"] = "no"
         if cfg == "G":
@@ -910,7 +947,7 @@ def b10_evaluate(table: list[dict]) -> list[dict]:
     by = {(t["case"], t["config"]): t for t in table}
     out = []
     for (case, cfg), t in sorted(by.items()):
-        if cfg not in ("E", "F", "G", "H"):
+        if cfg not in ("E", "F", "G", "H") and cfg not in E_VARIANTS:
             continue
         ref_cfg = "C"
         c = by.get((case, ref_cfg))
@@ -960,6 +997,14 @@ def b10_evaluate(table: list[dict]) -> list[dict]:
                 row["dWall_E_vs_H"] = _rel(t["wall_median"], h["wall_median"])
                 row["dCpu_E_vs_H"] = _rel(t["cpuh_median"], h["cpuh_median"])
             row["cycleTypeFinal"] = t.get("cycleTypeFinal")
+        if cfg in E_VARIANTS:
+            # C7: the variant against plain E isolates its one change
+            e = by.get((case, "E"))
+            if e:
+                row["dWall_X_vs_E"] = _rel(t["wall_median"], e["wall_median"])
+                row["dCpu_X_vs_E"] = _rel(t["cpuh_median"], e["cpuh_median"])
+                row["iters_E"] = e["iters_median"]
+            row["cycleTypeFinal"] = t.get("cycleTypeFinal")
         out.append(row)
     return out
 
@@ -999,7 +1044,8 @@ B10_FIELDS = [
     "case", "config", "reference", "status", "pass", "criterion",
     "wall_X", "wall_C", "dWall_X_vs_C", "cpuh_X", "cpuh_C", "dCpu_X_vs_C",
     "slowdownWall_C_vs_F", "slowdownCpu_C_vs_F", "monitor", "monitorRelDiff",
-    "dWall_E_vs_H", "dCpu_E_vs_H", "cycleTypeFinal", "iters_X", "iters_C"]
+    "dWall_E_vs_H", "dCpu_E_vs_H", "dWall_X_vs_E", "dCpu_X_vs_E",
+    "cycleTypeFinal", "iters_X", "iters_C", "iters_E"]
 
 
 def summarise(names: list[str], cfgs: list[str]) -> Path:
@@ -1031,10 +1077,10 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cases", default="T1,T2,T3-SST,T3-GEKO")
     ap.add_argument("--configs", default=",".join(CONFIGS),
-                    help="E, F, G, H run only on their B10 cases "
-                         "(see --no-scope)")
+                    help="E, F, G, H and the C7 E variants run only on "
+                         "their scope (see --no-scope)")
     ap.add_argument("--no-scope", action="store_true",
-                    help="run E/F/G/H on every requested case")
+                    help="run E/F/G/H/E-* on every requested case")
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--np", type=int, default=0,
                     help="ranks (0: the case default)")
@@ -1048,7 +1094,7 @@ def main() -> int:
         for k, v in CASES.items():
             cf = [c for c in CONFIGS if in_scope(k, c)]
             print(f"{k:8s} {v['template']:26s} np={v['np']} "
-                  f"monitor={v['monitor']} configs={''.join(cf)}")
+                  f"monitor={v['monitor']} configs={','.join(cf)}")
         return 0
     names = [n for n in a.cases.split(",") if n]
     cfgs = [c for c in a.configs.split(",") if c]

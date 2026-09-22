@@ -26,6 +26,7 @@ Description
 #include "blockScalar.H"
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -402,6 +403,227 @@ inline label invert
     }
 
     return nGuarded;
+}
+
+
+// * * * * * * * * * * * * * 3x3 operations in double * * * * * * * * * * * //
+//
+// Tensorial Rhie-Chow diffusivity (amendment C2): D_P = V_P A_P^-1 with A_P
+// the 3x3 momentum diagonal block (row-major, index r*3 + c), in double.
+
+//- Invert a 3x3 matrix by LU with partial pivoting, in double.
+//  Guard (C2): the matrix counts as singular if
+//      |det A| < detRelTol |trace(A)/3|^3   (or det is not finite);
+//  then false is returned and Ainv is left untouched, so the caller can
+//  fall back to pseudoInverse3. Returns true for a regular matrix.
+inline bool invert3
+(
+    const reduceScalar* __restrict__ A,
+    reduceScalar* __restrict__ Ainv,
+    const reduceScalar detRelTol
+)
+{
+    constexpr label n = 3;
+    reduceScalar lu[n][n];
+    label perm[n] = {0, 1, 2};
+    for (label r = 0; r < n; ++r)
+    {
+        for (label c = 0; c < n; ++c)
+        {
+            lu[r][c] = A[r*n + c];
+        }
+    }
+
+    reduceScalar det = 1;
+    reduceScalar rPiv[n];
+    for (label k = 0; k < n; ++k)
+    {
+        label piv = k;
+        reduceScalar big = std::abs(lu[k][k]);
+        for (label r = k + 1; r < n; ++r)
+        {
+            const reduceScalar a = std::abs(lu[r][k]);
+            if (a > big)
+            {
+                big = a;
+                piv = r;
+            }
+        }
+        if (piv != k)
+        {
+            for (label c = 0; c < n; ++c)
+            {
+                const reduceScalar t = lu[k][c];
+                lu[k][c] = lu[piv][c];
+                lu[piv][c] = t;
+            }
+            const label t = perm[k];
+            perm[k] = perm[piv];
+            perm[piv] = t;
+            det = -det;
+        }
+        det *= lu[k][k];
+
+        // GUARD: an exactly zero pivot means det = 0: stop before dividing
+        if (!(big > 0))
+        {
+            return false;
+        }
+
+        rPiv[k] = 1.0/lu[k][k];
+        for (label r = k + 1; r < n; ++r)
+        {
+            lu[r][k] *= rPiv[k];
+            const reduceScalar f = lu[r][k];
+            for (label c = k + 1; c < n; ++c)
+            {
+                lu[r][c] -= f*lu[k][c];
+            }
+        }
+    }
+
+    const reduceScalar t3 = std::abs(A[0] + A[4] + A[8])/n;
+    if (!std::isfinite(det) || std::abs(det) < detRelTol*t3*t3*t3)
+    {
+        return false;
+    }
+
+    for (label col = 0; col < n; ++col)
+    {
+        reduceScalar y[n];
+        for (label r = 0; r < n; ++r)
+        {
+            reduceScalar s = (perm[r] == col ? 1.0 : 0.0);
+            for (label c = 0; c < r; ++c)
+            {
+                s -= lu[r][c]*y[c];
+            }
+            y[r] = s;
+        }
+        for (label r = n - 1; r >= 0; --r)
+        {
+            reduceScalar s = y[r];
+            for (label c = r + 1; c < n; ++c)
+            {
+                s -= lu[r][c]*y[c];
+            }
+            y[r] = s*rPiv[r];   // reciprocal pivots: 3 divisions, not 12
+        }
+        for (label r = 0; r < n; ++r)
+        {
+            Ainv[r*n + col] = y[r];
+        }
+    }
+    return true;
+}
+
+
+//- Moore-Penrose pseudo-inverse of a 3x3 matrix by a one-sided (Hestenes)
+//  Jacobi SVD in double: the columns of W = A V are orthogonalised by plane
+//  rotations accumulated in V, then sigma_i = |w_i| and
+//      A^+ = sum_{sigma_i > relTol sigma_max} v_i w_i^T / sigma_i^2.
+//  Singular values at or below relTol*sigma_max count as zero. The zero
+//  matrix gives the zero matrix. At most maxSweeps Jacobi sweeps (a 3x3
+//  matrix converges in a handful). Returns the numerical rank.
+inline label pseudoInverse3
+(
+    const reduceScalar* __restrict__ A,
+    reduceScalar* __restrict__ Ainv,
+    const reduceScalar relTol,
+    const label maxSweeps
+)
+{
+    constexpr label n = 3;
+    reduceScalar W[n][n];   // W[r][c], columns w_c
+    reduceScalar V[n][n] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    for (label r = 0; r < n; ++r)
+    {
+        for (label c = 0; c < n; ++c)
+        {
+            W[r][c] = A[r*n + c];
+        }
+    }
+
+    constexpr reduceScalar eps = std::numeric_limits<reduceScalar>::epsilon();
+    for (label sweep = 0; sweep < maxSweeps; ++sweep)
+    {
+        bool rotated = false;
+        for (label i = 0; i < n - 1; ++i)
+        {
+            for (label j = i + 1; j < n; ++j)
+            {
+                reduceScalar alpha = 0, beta = 0, gamma = 0;
+                for (label r = 0; r < n; ++r)
+                {
+                    alpha += W[r][i]*W[r][i];
+                    beta += W[r][j]*W[r][j];
+                    gamma += W[r][i]*W[r][j];
+                }
+                if (!(std::abs(gamma) > eps*std::sqrt(alpha*beta)))
+                {
+                    continue;
+                }
+                rotated = true;
+                const reduceScalar zeta = (beta - alpha)/(2*gamma);
+                const reduceScalar t =
+                    (zeta >= 0 ? 1.0 : -1.0)
+                   /(std::abs(zeta) + std::sqrt(1 + zeta*zeta));
+                const reduceScalar cs = 1/std::sqrt(1 + t*t);
+                const reduceScalar sn = cs*t;
+                for (label r = 0; r < n; ++r)
+                {
+                    const reduceScalar wi = W[r][i];
+                    const reduceScalar wj = W[r][j];
+                    W[r][i] = cs*wi - sn*wj;
+                    W[r][j] = sn*wi + cs*wj;
+                    const reduceScalar vi = V[r][i];
+                    const reduceScalar vj = V[r][j];
+                    V[r][i] = cs*vi - sn*vj;
+                    V[r][j] = sn*vi + cs*vj;
+                }
+            }
+        }
+        if (!rotated)
+        {
+            break;
+        }
+    }
+
+    reduceScalar s2[n];
+    reduceScalar s2max = 0;
+    for (label c = 0; c < n; ++c)
+    {
+        s2[c] = 0;
+        for (label r = 0; r < n; ++r)
+        {
+            s2[c] += W[r][c]*W[r][c];
+        }
+        if (s2[c] > s2max) s2max = s2[c];
+    }
+
+    for (label i = 0; i < n*n; ++i)
+    {
+        Ainv[i] = 0;
+    }
+    label rank = 0;
+    const reduceScalar cut2 = relTol*relTol*s2max;
+    for (label k = 0; k < n; ++k)
+    {
+        if (!(s2[k] > cut2) || !(s2[k] > 0))
+        {
+            continue;
+        }
+        ++rank;
+        const reduceScalar rs2 = 1/s2[k];
+        for (label r = 0; r < n; ++r)
+        {
+            for (label c = 0; c < n; ++c)
+            {
+                Ainv[r*n + c] += V[r][k]*W[c][k]*rs2;
+            }
+        }
+    }
+    return rank;
 }
 
 } // End namespace block4Ops
