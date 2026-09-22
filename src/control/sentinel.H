@@ -14,6 +14,16 @@ Description
     Fail condition: nNonFinite > 0, gMax|U| > UFactor*Uref or
     max|p| > pFactor*pref.
 
+    The turbulence fields are restored verbatim, internal AND boundary
+    values, without evaluating their boundary conditions (D-056): the
+    native omega/epsilon wall functions look up the production field
+    <model>:G in updateCoeffs(), which the model registers only inside
+    turbulence->correct(); omega.correctBoundaryConditions() outside it
+    is a FatalError ("failed lookup of kOmegaSST:G"). The stored boundary
+    values are those evaluated by the model itself at the end of the
+    previous accepted iteration, so the restored state is exactly that
+    state (processor patches included, all ranks restore together).
+
     On failure the caller restores the copies (restore()), cuts
     CFL <- max(CFLmin, cflFactor*CFL), marks the offending cells into the
     dynamic remediation set and counts a rollback. After maxRollbacks
@@ -94,7 +104,32 @@ private:
         scalarField k0_;
         scalarField omega0_;
         scalarField nut0_;
+        //- Boundary values of the turbulence fields (restored verbatim,
+        //  D-056)
+        List<scalarField> k0Boundary_;
+        List<scalarField> omega0Boundary_;
+        List<scalarField> nut0Boundary_;
         bool stored_;
+
+
+    // Private Member Functions
+
+        //- Copy internal and boundary values of a turbulence field
+        static void storeTurbulence
+        (
+            const volScalarField& fld,
+            scalarField& internal,
+            List<scalarField>& boundary
+        );
+
+        //- Restore internal and boundary values verbatim, without
+        //  evaluating a boundary condition (D-056)
+        static void restoreTurbulence
+        (
+            volScalarField& fld,
+            const scalarField& internal,
+            const List<scalarField>& boundary
+        );
 
 
 public:

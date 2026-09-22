@@ -54,10 +54,46 @@ void Foam::sentinel::store
     {
         phi0Boundary_[patchi] = phi.boundaryField()[patchi];
     }
-    if (k) k0_ = k->primitiveField();
-    if (omega) omega0_ = omega->primitiveField();
-    if (nut) nut0_ = nut->primitiveField();
+    if (k) storeTurbulence(*k, k0_, k0Boundary_);
+    if (omega) storeTurbulence(*omega, omega0_, omega0Boundary_);
+    if (nut) storeTurbulence(*nut, nut0_, nut0Boundary_);
     stored_ = true;
+}
+
+
+void Foam::sentinel::storeTurbulence
+(
+    const volScalarField& fld,
+    scalarField& internal,
+    List<scalarField>& boundary
+)
+{
+    internal = fld.primitiveField();
+    boundary.resize(fld.boundaryField().size());
+    forAll(fld.boundaryField(), patchi)
+    {
+        boundary[patchi] = fld.boundaryField()[patchi];
+    }
+}
+
+
+void Foam::sentinel::restoreTurbulence
+(
+    volScalarField& fld,
+    const scalarField& internal,
+    const List<scalarField>& boundary
+)
+{
+    fld.primitiveFieldRef() = internal;
+    // Forced assignment (==) of the stored values: no updateCoeffs(), no
+    // evaluate(). correctBoundaryConditions() would call the updateCoeffs()
+    // of omegaWallFunction/epsilonWallFunction, which look up <model>:G -
+    // registered only inside turbulence->correct() (D-056)
+    volScalarField::Boundary& bf = fld.boundaryFieldRef();
+    forAll(bf, patchi)
+    {
+        bf[patchi] == boundary[patchi];
+    }
 }
 
 
@@ -182,20 +218,18 @@ void Foam::sentinel::restore
     U.correctBoundaryConditions();
     p.correctBoundaryConditions();
 
-    if (k && k0_.size())
+    // Turbulence fields: verbatim, without boundary evaluation (D-056)
+    if (k && k0Boundary_.size())
     {
-        k->primitiveFieldRef() = k0_;
-        k->correctBoundaryConditions();
+        restoreTurbulence(*k, k0_, k0Boundary_);
     }
-    if (omega && omega0_.size())
+    if (omega && omega0Boundary_.size())
     {
-        omega->primitiveFieldRef() = omega0_;
-        omega->correctBoundaryConditions();
+        restoreTurbulence(*omega, omega0_, omega0Boundary_);
     }
-    if (nut && nut0_.size())
+    if (nut && nut0Boundary_.size())
     {
-        nut->primitiveFieldRef() = nut0_;
-        nut->correctBoundaryConditions();
+        restoreTurbulence(*nut, nut0_, nut0Boundary_);
     }
 
     ++consecutive_;
