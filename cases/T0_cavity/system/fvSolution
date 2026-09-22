@@ -139,6 +139,7 @@ coupled
             nLayers             1;
             nQuietIters         20;
             stickyAfter         3;      // never released after the 3rd entry (D-049)
+            releaseIters        0;      // 0 = instant release; N = ramp over N iterations (D-049)
             cflFactor           0.1;
             clipToNeighbourMean yes;
         }
@@ -169,6 +170,16 @@ coupled
         enabled         no;     // amendment B5
         m               4;
         beta            1.0;
+    }
+
+    sfd                         // amendment C3, D-052
+    {
+        enabled         no;
+        chi             0.5;    // chi* = chi Uref/Lref
+        Delta           1.0;    // Delta* = Delta Lref/Uref
+        Lref            1.0;
+        deactivateBelowR 1e-4;  // SFD-off after nHold iterations below
+        resetOnFlush    yes;    // Ubar = U with every Anderson flush
     }
 
     ftz             yes;
