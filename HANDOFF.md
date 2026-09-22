@@ -146,6 +146,14 @@ Correctness-critical, worth a careful independent read:
 - Parallel subagents are welcome to speed up work (give them exclusive
   files; the lead integrates, builds and commits).
 
+## 7a. Work order
+
+OPUS_TASKS.md (written by Fable, 2026-09-22 ~08:00) is the binding,
+prescriptive task list for the day: robust preconditioner defaults
+(grid + selection rule), the user-approved averaging criterion for
+T4/T5 (D-042 text ready to paste), the T3 probes, and the remaining
+pipeline. Follow it before this section.
+
 ## 7. State at model handover, 2026-09-22 ~07:40 (by Fable)
 
 Read FABLE_REVIEW.md first - it carries the live issue list. Summary:
