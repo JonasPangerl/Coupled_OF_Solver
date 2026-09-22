@@ -20,6 +20,26 @@ namespace Foam
 }
 
 
+// * * * * * * * * * * * * * * * Local Functions * * * * * * * * * * * * * * //
+
+namespace
+{
+    //- The blockGAMG sub-dictionary plus the internal key
+    //  fixedPreconditioner: every solver except blockFGMRES assumes a fixed
+    //  (linear) preconditioner (D-069 F10)
+    Foam::dictionary gamgDict(const Foam::dictionary& dict)
+    {
+        Foam::dictionary d(dict.subOrEmptyDict("blockGAMG"));
+        const Foam::word solverType
+        (
+            dict.getOrDefault<Foam::word>("solver", Foam::word::null)
+        );
+        d.set("fixedPreconditioner", solverType != "blockFGMRES");
+        return d;
+    }
+}
+
+
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
 Foam::blockGAMGPrecon::blockGAMGPrecon
@@ -29,7 +49,7 @@ Foam::blockGAMGPrecon::blockGAMGPrecon
 )
 :
     blockPreconditioner(solver),
-    gamg_(solver.matrix(), dict.subOrEmptyDict("blockGAMG"))
+    gamg_(solver.matrix(), gamgDict(dict))
 {
     // Amendment B1: the K-cycle is a variable preconditioner
     const word solverType(dict.getOrDefault<word>("solver", word::null));

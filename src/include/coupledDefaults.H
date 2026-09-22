@@ -37,8 +37,12 @@ constexpr doubleScalar relTol = 0.05;
 constexpr label maxIter = 200;
 constexpr label minIter = 1;                     // B1: never a zero increment
 constexpr label restart = 10;                    // B1: FGMRES/GMRES restart
-constexpr label restartLarge = 6;                // B7: above restartLargeCells
+// B7: restart restartLarge above restartLargeCells cells unless restart is
+// given (solvers.coupled.restartLarge, restartLargeCells; D-066)
+constexpr label restartLarge = 6;
 constexpr label restartLargeCells = 40000000;
+// Default preconditioner of solvers.coupled (none | blockGAMG | ...)
+constexpr const char* preconditioner = "none";
 
 // Eisenstat-Walker adaptive inner tolerance (amendment B2)
 constexpr bool adaptiveRelTol = true;
@@ -58,6 +62,22 @@ constexpr label nFinestSweeps = 2;
 constexpr doubleScalar coarsestTolerance = 1e-3;
 constexpr label coarsestMaxIter = 50;            // B3 6.3.3
 constexpr label denseLUMaxCells = 64;            // B3 6.3.3
+// Coarsest-level iterative solver (6.3.3): its preconditioner and absolute
+// tolerance (solvers.coupled.blockGAMG.coarsestPreconditioner,
+// coarsestAbsTolerance; D-066)
+constexpr const char* coarsestSolver = "blockBiCGStab";
+constexpr const char* coarsestPreconditioner = "blockDiagonal";
+constexpr doubleScalar coarsestAbsTolerance = 0;
+// blockGAMG defaults of the word keywords (6.1, 6.3.1, 6.3.4)
+constexpr const char* cycleType = "K";           // V | W | K
+constexpr const char* agglomerator = "faceAreaPair";
+constexpr const char* processorAgglomerator = "masterCoarsest";
+constexpr const char* smoother = "blockGaussSeidel";
+// Smoother used as the preconditioner itself (preconditioner blockSmoother)
+constexpr const char* smootherPreconSmoother = "blockILU0";
+constexpr label smootherPreconSweeps = 1;
+// blockSimple preconditioner: single | sequential
+constexpr const char* simpleMode = "single";
 
 // Cycles, ratio rule, controller (amendment B3)
 constexpr doubleScalar kCycleThreshold = 0.25;
@@ -84,7 +104,6 @@ constexpr const char* agglomerationWeights = "geometric";
 constexpr label reagglomerateInterval = 0;
 // precond-research: blockSimple Schur approximation S = schurScale*C
 constexpr doubleScalar schurScale = 2;
-constexpr label maxCopAttempts = 3;              // 6.3, D-008
 constexpr bool cacheAgglomeration = true;
 
 // Guards (spec 6.3, 9.2; D-008)
@@ -152,16 +171,18 @@ constexpr doubleScalar smootherRelaxation = 1.0;
 // 1e-4); 20, 50 and 100 leave T2 untouched (0 fallbacks). 0 disables it.
 constexpr doubleScalar iluPivotGrowthLimit = 20;
 
-// Orthogonal-mesh shortcut of nonOrthCorrection: the mesh counts as
-// orthogonal if max |k_f| <= this value, k_f the native (dimensionless)
-// non-orthogonal correction vector, |k_f| = tan(non-orthogonality angle).
-// Far above the double round-off of an orthogonal mesh (7.1e-14 measured on
-// the T0 blockMesh cavity, on which the former exact test kMax == 0 failed)
-// and far below any correction the float block matrix could represent
-// (eps_float ~1e-7).
-constexpr doubleScalar orthogonalityTolerance = 1e-10;
+// Orthogonal-mesh shortcut of nonOrthCorrection (coupled.
+// orthogonalityTolerance, D-066): the mesh counts as orthogonal if max |k_f|
+// <= this value, k_f the native (dimensionless) non-orthogonal correction
+// vector, |k_f| = tan(non-orthogonality angle). Default 0 = the exact test
+// (FABLE_REVIEW item 1). 1e-10 would be far above the double round-off of an
+// orthogonal mesh (7.1e-14 on the T0 blockMesh cavity) and far below any
+// correction the float block matrix represents (eps_float ~1e-7), but it
+// changes T0 Re 1000 np1 from 58 to 106 outer iterations (not understood).
+constexpr doubleScalar orthogonalityTolerance = 0;
 
 // PTC (spec 7.1)
+constexpr const char* cflStrategy = "mRDM";      // mRDM | EXP | SER
 constexpr doubleScalar CFL0 = 5;
 constexpr doubleScalar CFLmin = 1;
 constexpr doubleScalar CFLmax = 500;
@@ -266,15 +287,75 @@ constexpr bool sfdAfterStartup = true;
 // studies, D-052)
 constexpr label sfdStartIter = 0;
 
-// Remediation, static (spec 8.1)
-constexpr bool staticEnabled = true;
+// Remediation, pre-selected (static) cell categories (spec 8.1, C1, D-061,
+// D-066), coupled.remediation.<category>. Every category has the switch
+// enabled, its criteria and the treatment beta, cflFactor, gradLimiter
+// (forced limitedGradScheme gradient of p in the Rhie-Chow terms) and
+// nonOrthLimiter (limitedNonOrthCoeff on the faces of the cell). A cell in
+// several categories gets the most restrictive value of each (min beta,
+// min cflFactor, OR of the limiter switches). Cells that actually
+// misbehave (meshQuality, badMesh) get the full treatment of 8.1; cells
+// that are only selected in advance by their position (processor, wall)
+// the mild treatment of D-061: full convection scheme, no limiters, half
+// the local step.
+//
+// meshQuality: the quality criteria of 8.1
+constexpr bool meshQualityEnabled = true;
 constexpr doubleScalar nonOrthThreshold = 85;     // user, D-047 (was 70)
 constexpr doubleScalar skewThreshold = 6;         // user, D-047 (was 4)
 constexpr doubleScalar volRatioThreshold = 30;    // user, D-047 (was 20)
 constexpr doubleScalar aspectThreshold = 2000;    // user, D-047 (was 1000)
-constexpr doubleScalar staticBeta = 0;
-constexpr doubleScalar staticNonOrthLimiter = 0.2;
-constexpr doubleScalar staticCflFactor = 0.5;
+constexpr doubleScalar meshQualityBeta = 0;
+constexpr doubleScalar meshQualityCflFactor = 0.5;
+constexpr bool meshQualityGradLimiter = true;
+constexpr bool meshQualityNonOrthLimiter = true;
+// badMesh: severe defects (C1 volumeJump; closedness and optional severe
+// non-orthogonality/skewness, D-066)
+constexpr bool badMeshEnabled = true;
+constexpr bool volumeJumpEnabled = true;          // coupledFoam switch
+constexpr doubleScalar volJumpThreshold = 0.98;   // volume ratio > 50
+// Cell openness |sum S_f|/sum |S_f| (primitiveMeshTools::cellClosedness)
+// above this value: an open cell (the checkMesh closedThreshold); 0 = off
+constexpr doubleScalar closednessThreshold = 1e-6;
+// Severe face criteria in degrees / skewness; 0 = off. They let a case put
+// moderate defects into meshQuality and severe ones into badMesh.
+constexpr doubleScalar severeNonOrthThreshold = 0;
+constexpr doubleScalar severeSkewThreshold = 0;
+constexpr doubleScalar badMeshBeta = 0;
+constexpr doubleScalar badMeshCflFactor = 0.5;
+constexpr bool badMeshGradLimiter = true;
+constexpr bool badMeshNonOrthLimiter = true;
+// processor: cells at processor patches (decomposition dependent)
+constexpr bool processorEnabled = true;
+constexpr bool procAMIEnabled = true;             // C1 keyword procAMI
+// Layers of cells next to processor patches (layer 1 = cells with a
+// processor face); 0 = none
+constexpr label processorNLayers = 0;
+constexpr doubleScalar processorBeta = 1;         // mild (D-061)
+constexpr doubleScalar processorCflFactor = 0.5;
+constexpr bool processorGradLimiter = false;
+constexpr bool processorNonOrthLimiter = false;
+// wall: cells at wall patches
+constexpr bool wallEnabled = true;
+constexpr bool wallStarvedEnabled = false;       // off by default (user,
+// D-061): on T4a the 12 wallStarved cells sit on the body surface, where
+// the forces are integrated; with the full static treatment they moved Cl
+// by -18 % (0.063 vs 0.077 simpleFoam). The criterion stays available
+// (remediation.wall.wallStarved yes) with the mild wall treatment.
+constexpr label maxWallInternalFaces = 2;
+// Layers of cells next to the patches of wall.patches (wordRes, default
+// none; layer 1 = cells with a face on the patches)
+constexpr label wallNLayers = 1;
+constexpr doubleScalar wallBeta = 1;              // mild (D-061)
+constexpr doubleScalar wallCflFactor = 0.5;
+constexpr bool wallGradLimiter = false;
+constexpr bool wallNonOrthLimiter = false;
+// Treatment of the limited cells: non-orthogonal limiter coefficient on the
+// faces of cells with nonOrthLimiter (remediation.limitedNonOrthCoeff, the
+// former remediation.static.nonOrthLimiter) and the gradient scheme of p in
+// the Rhie-Chow terms of cells with gradLimiter (D-018)
+constexpr doubleScalar limitedNonOrthCoeff = 0.2;
+constexpr const char* limitedGradScheme = "cellLimited Gauss linear 1";
 
 // Remediation, dynamic (spec 8.2)
 constexpr bool dynamicEnabled = true;
@@ -332,6 +413,7 @@ constexpr doubleScalar boundOmegaMin = 1e-6;
 constexpr doubleScalar nutMaxFactor = 1e8;
 
 // Convergence (spec 12.3; D-005)
+constexpr const char* convergenceMode = "any";   // any | all
 constexpr label forceCoeffsWindow = 100;
 constexpr doubleScalar forceCoeffsTol = 0.002;
 constexpr doubleScalar residualTol = 1e-6;
@@ -380,14 +462,9 @@ constexpr label diagTopLimited = 20;
 // ---------------------------------------------------------------------------
 // Amendment C1/C5/C6 (SPEC_amendment_C.md, D-054)
 // ---------------------------------------------------------------------------
-// C1: topological static criteria, coupled.remediation.static. The
-// nonOrthThreshold default stays at 85 (D-047/D-051); 65 and 60 are
-// benchmark variants only.
-constexpr bool wallStarvedEnabled = true;        // coupledFoam switch
-constexpr label maxWallInternalFaces = 2;
-constexpr bool procAMIEnabled = true;            // keyword procAMI
-constexpr bool volumeJumpEnabled = true;         // coupledFoam switch
-constexpr doubleScalar volJumpThreshold = 0.98;  // volume ratio > 50
+// C1: the topological static criteria are in the remediation categories
+// above (D-066). The nonOrthThreshold default stays at 85 (D-047/D-051);
+// 65 and 60 are benchmark variants only.
 // C6: write-time diagnostic fields, coupled.diagnosticFields
 constexpr bool diagnosticFieldsEnabled = true;
 // ---------------------------------------------------------------------------

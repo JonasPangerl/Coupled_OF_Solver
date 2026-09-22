@@ -10,6 +10,7 @@
 #include "OSspecific.H"
 #include "IFstream.H"
 #include "surfaceFields.H"
+#include "PstreamReduceOps.H"
 #include <limits>
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
@@ -30,6 +31,29 @@ Foam::coupledState::coupledState
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
+bool Foam::coupledState::presentOnAllRanks
+(
+    const bool found,
+    const word& what,
+    const fileName& where
+)
+{
+    const bool all = returnReduceAnd(found);
+    const bool any = returnReduceOr(found);
+    if (any && !all)
+    {
+        FatalErrorInFunction
+            << what << " exists on some ranks only (this rank: "
+            << (found ? "present" : "missing") << ") in " << where
+            << ": incomplete time directory (e.g. a job killed while"
+            << " writing). Restart from an earlier complete time or remove"
+            << " " << what << " from all processor directories."
+            << exit(FatalError);
+    }
+    return all;
+}
+
+
 bool Foam::coupledState::read(dictionary& state) const
 {
     IOobject io
@@ -47,7 +71,13 @@ bool Foam::coupledState::read(dictionary& state) const
     // parallel restart every rank got the state of rank 0 - its dynamic
     // set labels in particular (T0 np4: the lid-corner cells of ranks 2
     // and 3 lost their remediation, R jumped from 5.6e-5 to 1.3e-2)
-    if (!io.typeHeaderOk<localIOdictionary>(true))
+    if
+    (
+        !presentOnAllRanks
+        (
+            io.typeHeaderOk<localIOdictionary>(true), io.name(), io.path()
+        )
+    )
     {
         return false;
     }
@@ -63,7 +93,10 @@ bool Foam::coupledState::read(dictionary& state) const
         IFstream is(io.objectPath(), IOstreamOption(IOstreamOption::ASCII));
         if (!is.good())
         {
-            return false;
+            // Present on all ranks (checked above): a rank-local false
+            // would desynchronise the ranks (D-069 F5)
+            FatalErrorInFunction
+                << "Cannot open " << io.objectPath() << exit(FatalError);
         }
         dictionary d(is);
         d.remove("FoamFile");
@@ -198,7 +231,13 @@ Foam::tmp<Foam::surfaceScalarField> Foam::coupledState::readQ() const
         IOobject::NO_REGISTER
     );
 
-    if (!io.typeHeaderOk<surfaceScalarField>(true))
+    if
+    (
+        !presentOnAllRanks
+        (
+            io.typeHeaderOk<surfaceScalarField>(true), io.name(), io.path()
+        )
+    )
     {
         return nullptr;
     }
@@ -219,7 +258,13 @@ Foam::tmp<Foam::volScalarField> Foam::coupledState::readD() const
         IOobject::NO_REGISTER
     );
 
-    if (!io.typeHeaderOk<volScalarField>(true))
+    if
+    (
+        !presentOnAllRanks
+        (
+            io.typeHeaderOk<volScalarField>(true), io.name(), io.path()
+        )
+    )
     {
         return nullptr;
     }
@@ -264,7 +309,13 @@ Foam::tmp<Foam::volTensorField> Foam::coupledState::readDT() const
         IOobject::NO_REGISTER
     );
 
-    if (!io.typeHeaderOk<volTensorField>(true))
+    if
+    (
+        !presentOnAllRanks
+        (
+            io.typeHeaderOk<volTensorField>(true), io.name(), io.path()
+        )
+    )
     {
         return nullptr;
     }

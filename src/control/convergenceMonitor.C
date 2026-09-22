@@ -15,7 +15,7 @@
 
 Foam::convergenceMonitor::convergenceMonitor(const dictionary& coupledDict)
 :
-    mode_("any"),
+    mode_(coupledDefaults::convergenceMode),
     window_(coupledDefaults::forceCoeffsWindow),
     forceTol_(coupledDefaults::forceCoeffsTol),
     residualTol_(precisionProfile::current().residualTol),   // D7
@@ -29,7 +29,10 @@ Foam::convergenceMonitor::convergenceMonitor(const dictionary& coupledDict)
     foName_()
 {
     const dictionary& d = coupledDict.subOrEmptyDict("convergence");
-    mode_ = d.getOrDefault<word>("mode", "any");
+    mode_ = d.getOrDefault<word>("mode", mode_);
+    // Force-coefficient function object (D-066): empty = the first one
+    // that provides Cd and Cl
+    foRequested_ = d.getOrDefault<word>("forceCoeffs", word::null);
     window_ = d.getOrDefault<label>("forceCoeffsWindow", window_);
     forceTol_ = d.getOrDefault<doubleScalar>("forceCoeffsTol", forceTol_);
     residualTol_ = d.getOrDefault<doubleScalar>("residualTol", residualTol_);
@@ -228,7 +231,8 @@ void Foam::convergenceMonitor::record(const Time& runTime)
         {
             if
             (
-                props.hasResultObjectEntry(name, "Cd")
+                (foRequested_.empty() || name == foRequested_)
+             && props.hasResultObjectEntry(name, "Cd")
              && props.hasResultObjectEntry(name, "Cl")
             )
             {
@@ -389,6 +393,7 @@ void Foam::convergenceMonitor::writeSettings(dictionary& dict) const
 {
     dictionary d;
     d.add("mode", mode_);
+    d.add("forceCoeffs", foRequested_);
     d.add("forceCoeffsWindow", window_);
     d.add("forceCoeffsTol", forceTol_);
     d.add("residualTol", residualTol_);

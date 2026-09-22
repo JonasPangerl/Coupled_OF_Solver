@@ -95,6 +95,10 @@ private:
         //- Name of the forceCoeffs object used (empty: none found yet)
         word foName_;
 
+        //- Requested function object (convergence.forceCoeffs; empty:
+        //  auto-detect)
+        word foRequested_;
+
 
     // Private Member Functions
 

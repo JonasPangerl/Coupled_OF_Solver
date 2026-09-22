@@ -289,6 +289,7 @@ void Foam::startupControl::writeSettings(dictionary& dict) const
     dict.add("startupRampStart", rampStart_);
     dict.add("startupRampLength", rampLength_);
     dict.add("startupRampStartMax", rampStartMax_);
+    dict.add("startupStagnationTrigger", stagnationTrigger_);
     dict.add("startupStagnationFactor", stagnationFactor_);
     dict.add("startupStagnationWindow", stagnationWindow_);
     dict.add("startupFastFactor", fastFactor_);

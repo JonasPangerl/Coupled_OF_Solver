@@ -40,51 +40,74 @@ Foam::staticCriteria::settings::settings()
 {}
 
 
-Foam::staticCriteria::settings::settings(const dictionary& staticDict)
-:
-    settings()
+void Foam::staticCriteria::settings::check(const dictionary& errDict) const
 {
-    wallStarved = staticDict.getOrDefault<bool>("wallStarved", wallStarved);
-    maxWallInternalFaces = staticDict.getOrDefault<label>
-    (
-        "maxWallInternalFaces",
-        maxWallInternalFaces
-    );
-    procAMI = staticDict.getOrDefault<bool>("procAMI", procAMI);
-    volumeJump = staticDict.getOrDefault<bool>("volumeJump", volumeJump);
-    volJumpThreshold = staticDict.getOrDefault<scalar>
-    (
-        "volJumpThreshold",
-        volJumpThreshold
-    );
-
     if (maxWallInternalFaces < 0)
     {
-        FatalIOErrorInFunction(staticDict)
-            << "remediation.static.maxWallInternalFaces must be >= 0, got "
+        FatalIOErrorInFunction(errDict)
+            << "remediation.wall.maxWallInternalFaces must be >= 0, got "
             << maxWallInternalFaces << exit(FatalIOError);
     }
     // Negated comparison also rejects non-finite input
     if (!(volJumpThreshold > 0 && volJumpThreshold < 1))
     {
-        FatalIOErrorInFunction(staticDict)
-            << "remediation.static.volJumpThreshold must be in (0, 1), got "
+        FatalIOErrorInFunction(errDict)
+            << "remediation.badMesh.volJumpThreshold must be in (0, 1), got "
             << volJumpThreshold << exit(FatalIOError);
     }
 }
 
 
-void Foam::staticCriteria::settings::write(dictionary& staticDict) const
+// * * * * * * * * * * * * * * * * Functions * * * * * * * * * * * * * * * * //
+
+Foam::scalar Foam::staticCriteria::limitedNonOrthCoeff
+(
+    const dictionary& coupledDict
+)
 {
-    staticDict.add("wallStarved", wallStarved);
-    staticDict.add("maxWallInternalFaces", maxWallInternalFaces);
-    staticDict.add("procAMI", procAMI);
-    staticDict.add("volumeJump", volumeJump);
-    staticDict.add("volJumpThreshold", volJumpThreshold);
+    const dictionary& r = coupledDict.subOrEmptyDict("remediation");
+    const scalar legacy =
+        r.subOrEmptyDict("static").getOrDefault<scalar>
+        (
+            "nonOrthLimiter",
+            scalar(coupledDefaults::limitedNonOrthCoeff)
+        );
+    const scalar c = r.getOrDefault<scalar>("limitedNonOrthCoeff", legacy);
+    if
+    (
+        r.found("limitedNonOrthCoeff")
+     && r.subOrEmptyDict("static").found("nonOrthLimiter")
+     && !(c == legacy)
+    )
+    {
+        FatalIOErrorInFunction(r)
+            << "remediation.limitedNonOrthCoeff and the deprecated"
+            << " remediation.static.nonOrthLimiter are both given, with"
+            << " different values (D-066)" << exit(FatalIOError);
+    }
+    // Negated comparison also rejects non-finite input
+    if (!(c >= 0 && c <= 1))
+    {
+        FatalIOErrorInFunction(r)
+            << "remediation.limitedNonOrthCoeff must be in [0, 1], got " << c
+            << exit(FatalIOError);
+    }
+    return c;
 }
 
 
-// * * * * * * * * * * * * * * * * Functions * * * * * * * * * * * * * * * * //
+Foam::string Foam::staticCriteria::limitedGradScheme
+(
+    const dictionary& coupledDict
+)
+{
+    return coupledDict.subOrEmptyDict("remediation").getOrDefault<string>
+    (
+        "limitedGradScheme",
+        string(coupledDefaults::limitedGradScheme)
+    );
+}
+
 
 bool Foam::staticCriteria::hasImplicitNeighbour
 (
@@ -244,13 +267,9 @@ Foam::staticCriteria::counts Foam::staticCriteria::apply
 (
     const polyMesh& mesh,
     const settings& s,
-    labelList& bits,
-    boolList& isStatic
+    labelList& bits
 )
 {
-    bits.resize_nocopy(mesh.nCells());
-    bits = 0;
-
     counts c;
 
     auto add = [&bits](const boolList& mark, const label bit, label& n)
@@ -290,59 +309,12 @@ Foam::staticCriteria::counts Foam::staticCriteria::apply
         );
     }
 
-    forAll(bits, celli)
-    {
-        if (bits[celli])
-        {
-            if (!isStatic[celli])
-            {
-                ++c.nNew;
-            }
-            isStatic[celli] = true;
-        }
-    }
-
     // Unconditional on every rank
     reduce(c.nWallStarved, sumOp<label>());
     reduce(c.nProcAMI, sumOp<label>());
     reduce(c.nVolumeJump, sumOp<label>());
-    reduce(c.nNew, sumOp<label>());
 
     return c;
-}
-
-
-void Foam::staticCriteria::report
-(
-    const settings& s,
-    const counts& c,
-    const label nTotal
-)
-{
-    // GUARD: nTotal >= 1
-    const scalar percentPerCell = scalar(100.0/max(scalar(nTotal), scalar(1)));
-
-    auto item = [&](const bool on, const label n)
-    {
-        if (on)
-        {
-            Info<< n << " cells (" << percentPerCell*scalar(n) << " %)";
-        }
-        else
-        {
-            Info<< "off";
-        }
-    };
-
-    Info<< "remediation: static topological criteria (C1): wallStarved"
-        << " (<= " << s.maxWallInternalFaces << " internal faces, 3D): ";
-    item(s.wallStarved, c.nWallStarved);
-    Info<< ", procAMI: ";
-    item(s.procAMI, c.nProcAMI);
-    Info<< ", volumeJump>" << s.volJumpThreshold << ": ";
-    item(s.volumeJump, c.nVolumeJump);
-    Info<< "; not marked by the quality criteria: " << c.nNew << " cells"
-        << endl;
 }
 
 

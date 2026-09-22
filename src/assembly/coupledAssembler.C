@@ -6,6 +6,7 @@
 #include "coupledAssembler.H"
 #include "coupledConstants.H"
 #include "coupledDefaults.H"
+#include "staticCriteria.H"
 #include "doubleReduce.H"
 #include "fvCFD.H"
 #include "laplacianScheme.H"
@@ -51,12 +52,12 @@ Foam::coupledAssembler::coupledAssembler
             "nonOrthLimiter",
             coupledDefaults::nonOrthLimiter
         ),
-        coupledDict.subOrEmptyDict("remediation").subOrEmptyDict("static")
-            .getOrDefault<scalar>
-            (
-                "nonOrthLimiter",
-                scalar(coupledDefaults::staticNonOrthLimiter)
-            )
+        staticCriteria::limitedNonOrthCoeff(coupledDict),      // D-066
+        coupledDict.getOrDefault<scalar>
+        (
+            "orthogonalityTolerance",
+            scalar(coupledDefaults::orthogonalityTolerance)
+        )
     ),
     rc_(mesh, coupledDict),
     mrfPtr_(mrfPtr),
@@ -68,6 +69,14 @@ Foam::coupledAssembler::coupledAssembler
         (
             "clampValue",
             coupledDefaults::clampValue
+        )
+    ),
+    refFluxBalanceTol_
+    (
+        coupledDict.subOrEmptyDict("guards").getOrDefault<doubleScalar>
+        (
+            "refFluxBalanceTol",
+            coupledDefaults::refFluxBalanceTol
         )
     ),
     needRef_(false),
@@ -89,7 +98,8 @@ Foam::coupledAssembler::coupledAssembler
     residualL2_(0),
     rU_(0),
     rp_(0),
-    nClamped_(0)
+    nClamped_(0),
+    nNonFinite_(0)
 {
     // GUARD: the clamp must be representable in blockScalar, otherwise a
     // clamped value would still overflow on narrowing (9.2)
@@ -161,14 +171,14 @@ void Foam::coupledAssembler::checkReferenceFluxBalance
     if
     (
         std::abs(sums[0])
-      > coupledDefaults::refFluxBalanceTol*max(sums[1], cfVSmall<reduceScalar>())
+      > refFluxBalanceTol_*max(sums[1], cfVSmall<reduceScalar>())
     )
     {
         WarningInFunction
             << "Closed domain (pressure reference, D-021) but the boundary"
             << " fluxes do not balance: sum U_b.S_f = " << sums[0]
             << ", sum |U_b.S_f| = " << sums[1] << " (relative tolerance "
-            << coupledDefaults::refFluxBalanceTol << "). The continuity"
+            << refFluxBalanceTol_ << "). The continuity"
             << " equation of the reference cell is dropped, so the"
             << " imbalance is silently absorbed there." << endl;
     }
@@ -177,10 +187,14 @@ void Foam::coupledAssembler::checkReferenceFluxBalance
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-void Foam::coupledAssembler::setStaticCells(const boolList& isStatic)
+void Foam::coupledAssembler::setLimitedCells
+(
+    const boolList& gradLimited,
+    const boolList& nonOrthLimited
+)
 {
-    noc_.setStaticCells(isStatic);
-    rc_.setStaticCells(isStatic);
+    noc_.setLimitedCells(nonOrthLimited);
+    rc_.setGradLimitedCells(gradLimited);
 }
 
 
@@ -204,6 +218,7 @@ void Foam::coupledAssembler::assembleMomentum
     Ax_ = Zero;
     b_ = Zero;
     nClamped_ = 0;
+    nNonFinite_ = 0;
 
     const scalarField& V = mesh_.V();
     const surfaceScalarField& w = mesh_.weights();

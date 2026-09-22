@@ -71,7 +71,11 @@ Foam::blockSolver::blockSolver
     diag_(nullptr)
 {
     const word preconName =
-        dict.getOrDefault<word>("preconditioner", "none");
+        dict.getOrDefault<word>
+        (
+            "preconditioner",
+            word(coupledDefaults::preconditioner)
+        );
 
     if (preconName != "none")
     {
@@ -122,6 +126,13 @@ bool Foam::blockSolver::converged
     const label nIter
 ) const
 {
+    // An exactly zero residual (e.g. a zero right-hand side on the coarsest
+    // level with tolerance 0) is converged: nothing to reduce, and the
+    // Krylov scalars would be 0/0 (D-069 F8)
+    if (residual == 0)
+    {
+        return true;
+    }
     if (nIter < minIter_)
     {
         return false;

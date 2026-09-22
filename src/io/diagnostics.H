@@ -415,7 +415,9 @@ class diagPhase
 
 public:
 
-    diagPhase();
+    //- Construct from coupled.diagnostics (stallWindow,
+    //  asymptoticResidualFactor, asymptoticForceFactor; D-066)
+    explicit diagPhase(const dictionary& diagDict);
 
     //- Record R of this iteration and classify. forceRatio: spread of
     //  the Cd/Cl window over its tolerance (< 0: not available).

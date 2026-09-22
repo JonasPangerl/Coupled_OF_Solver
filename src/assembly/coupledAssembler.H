@@ -131,6 +131,10 @@ private:
         //- Clamp for the narrowing to blockScalar (9.2)
         const doubleScalar clampValue_;
 
+        //- Relative flux-balance tolerance of a closed domain (D-021;
+        //  guards.refFluxBalanceTol)
+        const doubleScalar refFluxBalanceTol_;
+
         //- Pressure reference
         bool needRef_;
         label pRefCell_;
@@ -171,6 +175,8 @@ private:
         reduceScalar rU_;
         reduceScalar rp_;
         label nClamped_;
+        //- NaN coefficients of the last assembly (D-069 F9)
+        label nNonFinite_;
 
 
     // Private Member Functions
@@ -210,7 +216,7 @@ private:
         //- Narrow with clamping and counting
         blockScalar store(const doubleScalar v)
         {
-            return toBlock(v, clampValue_, nClamped_);
+            return toBlock(v, clampValue_, nClamped_, nNonFinite_);
         }
 
         //- True if the patch carries no flux by construction
@@ -243,8 +249,15 @@ public:
 
         // Set-up
 
-            //- Static remediation cells (8.1): per-face limiter selection
-            void setStaticCells(const boolList& isStatic);
+            //- Limited remediation cells (8.1, categories D-066): cells
+            //  whose p gradient in the Rhie-Chow terms uses the limited
+            //  scheme, and cells whose faces use the limited non-orthogonal
+            //  coefficient. Collective.
+            void setLimitedCells
+            (
+                const boolList& gradLimited,
+                const boolList& nonOrthLimited
+            );
 
             //- SFD forcing (7.6) of the next assemblies: a_P += chi V_P,
             //  b_P += chi V_P Ubar_P on the momentum rows; chi = 0 or
@@ -303,6 +316,9 @@ public:
             const rhieChow& rc() const noexcept { return rc_; }
             const nonOrthCorrection& noc() const noexcept { return noc_; }
 
+            //- Effective clamp value of the block coefficients (9.2)
+            doubleScalar clampValue() const noexcept { return clampValue_; }
+
             const scalarField& abar() const noexcept { return abar_; }
 
             //- Continuity row scale s_p (5.3f)
@@ -318,6 +334,9 @@ public:
 
             //- Clamped coefficients of the last assembly (this rank)
             label nClamped() const noexcept { return nClamped_; }
+
+            //- NaN coefficients of the last assembly (this rank)
+            label nNonFinite() const noexcept { return nNonFinite_; }
 
             const List<boundaryCoupling::patchKind>& kinds() const noexcept
             {

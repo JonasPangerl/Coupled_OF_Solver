@@ -36,6 +36,11 @@
 cd "${0%/*}" || exit 1
 . "${WM_PROJECT_DIR:?}"/bin/tools/RunFunctions
 
+# Scotch 7 partitions with several threads and is then not reproducible run
+# to run (different decompositions, hence different np>1 results); one
+# thread makes decomposePar deterministic (FABLE_REVIEW 5, D-069)
+export SCOTCH_PTHREAD_NUMBER="${SCOTCH_PTHREAD_NUMBER:-1}"
+
 solver=coupledFoam
 np=10
 model=""

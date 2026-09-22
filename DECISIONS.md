@@ -1763,6 +1763,60 @@ earlier iteration from which they consider it converged. Decision details:
   criteria. Table `convergence_choice` lists automatic and user points side
   by side; the load plots mark the user point with a solid line.
 
+## D-061 - Mild treatment of pre-selected cells; wallStarved off by default (user, 2026-09-22)
+
+With the amendment-C static criteria (C1), T4a failed its Cl check.
+Measured on T4a (354k cells, 10 ranks, 800 iterations, D-042 window means)
+against the simpleFoam reference Cd 0.3964 / Cl 0.0768 (Cl tolerance
+max(2 %, 0.01) abs):
+
+| run | Cd | Cl | Cl check |
+|---|---|---|---|
+| main 6acc150 default (static set incl. C1 wallStarved, full treatment) | 0.4026 | 0.0630 | FAIL |
+| same, tensorial Rhie-Chow off | 0.4025 | 0.0602 | FAIL (not the cause) |
+| same, wallStarved off | 0.4010 | 0.0818 | pass |
+
+The 12 wallStarved cells sit on the body surface, where the forces are
+integrated. The full static treatment moves Cl by -18 %: upwind (beta 0),
+the forced gradient limiter, the non-orthogonal limiter and the halved
+step.
+
+User decision:
+- wallStarved is **off** by default.
+- Cells that are selected in advance by criteria that are not really cell
+  quality get a much **milder** treatment than cells that actually
+  misbehave. This covers wall cells found by topology or by patch, and
+  processor-boundary cells.
+
+The mild treatment is a full convection scheme (beta 1), no forced
+gradient limiter, no non-orthogonal limiter, and half the local step
+(cflFactor 0.5).
+
+The pre-release implementation of this decision (a separate `mild` tier)
+was replaced before it reached main. The categories of D-066 implement it:
+the `processor` and `wall` categories are mild by default, and
+`meshQuality` and `badMesh` keep the full treatment.
+
+T4a with the D-066 build (rem-cat, 10 ranks, CF_MPI_BIND=none on a loaded
+machine, so the times are not benchmark times):
+
+| run | settings | static cells (mQ/bM/proc/wall) | Cd | Cl | dCd | dCl abs | rollbacks | wall [s] | CPU-h |
+|---|---|---|---|---|---|---|---|---|---|
+| (a) default | wall.wallStarved no | 2655 (2655/526/0/0) | 0.40097 | 0.08184 | 1.15 % | 0.0051 | 0 | 1479 | 4.05 |
+| (b) wsMild | wall.wallStarved yes, mild | 2667 (2655/526/0/12) | 0.40076 | 0.07927 | 1.10 % | 0.0025 | 0 | 1210 | 3.35 |
+| (c) wsFull | wall.wallStarved yes, beta 0, both limiters | 2667 (2655/526/0/12) | 0.40265 | 0.06299 | 1.58 % | 0.0138 (FAIL) | 0 | 1143 | 3.17 |
+
+All three runs are stationary from iteration 450.
+- (a) reproduces main with wallStarved off **bit for bit** (Cd
+  0.400973343261846, Cl 0.08183868934854022).
+- (c) reproduces main's default bit for bit (Cd 0.40264586623459353, Cl
+  0.06299018718761695). The category machinery is therefore exact, and the
+  full treatment of the 12 wall cells alone is what shifts Cl.
+- With the mild treatment (b), the 12 wallStarved cells no longer degrade
+  Cl. It is even the closest of the three runs to the reference.
+
+The mild defaults (beta 1, cflFactor 0.5, no limiters) are kept.
+
 ## D-062 - Amendment D (full single precision) adopted with deviations (user, 2026-09-22)
 
 The user supplied amendment set D (SPEC_amendment_D.md, verbatim) and asked
@@ -1963,3 +2017,492 @@ with 12 digits, FTZ on, FPE traps on).**
 5. Cosmetic, pre-existing: "Attempt to add entry relTol which already
    exists" in the effective-settings dictionary (linear solver and
    Eisenstat-Walker both add relTol), DP and SP.
+## D-066 - Remediation cell categories; every tunable is a run-time keyword (user, 2026-09-22)
+
+User request (D-063): the pre-selected remediation cells get separate,
+switchable and tunable settings per category, as in the user's previous
+solver. Nothing a user may want to change may need a recompile.
+
+**Categories.** `coupled.remediation.{meshQuality, badMesh, processor, wall}`
+replace `remediation.static` and the pre-release mild tier of D-061:
+
+| category | criteria | default treatment |
+|---|---|---|
+| meshQuality | the 8.1 quality criteria (nonOrth 85, skew 6, volRatio 30, aspect 2000; D-047) | full: beta 0, cflFactor 0.5, gradLimiter yes, nonOrthLimiter yes |
+| badMesh | C1 volumeJump (0.98); open cells, closednessThreshold 1e-6 (the checkMesh value, new); optional severe nonOrthThreshold/skewThreshold (0 = off, new) | full |
+| processor | C1 procAMI; optional `nLayers` layers from the processor patches (default 0, new) | mild: beta 1, cflFactor 0.5, no limiters |
+| wall | C1 wallStarved (default **off**, D-061); optional `patches` (wordRes) + `nLayers` (new) | mild |
+
+Every category has `enabled` and the four treatment keywords.
+- Precedence: a cell in several categories gets min beta, min cflFactor and
+  the OR of the two limiter switches.
+- The dynamic set (8.2, D-055) always overrides with beta 0 and
+  dynamic.cflFactor. The zonal factors (8.3/B6/C5) multiply on top.
+- The limiter values are `remediation.limitedNonOrthCoeff` (0.2, the former
+  static.nonOrthLimiter) and `remediation.limitedGradScheme`
+  ("cellLimited Gauss linear 1", D-018; before this it was a string
+  literal).
+- `coupledAssembler::setLimitedCells(gradLimited, nonOrthLimited)` replaces
+  setStaticCells(isStatic): the per-cell gradient-limiter switch goes to
+  rhieChow, the non-orthogonal switch to nonOrthCorrection.
+
+Why closedness: primitiveMeshTools::cellClosedness is already evaluated for
+the aspect ratio, so the check is free. An open cell (|sum S_f|/sum|S_f| >
+1e-6) fails checkMesh and makes the Gauss sums inconsistent. It marks 0
+cells on T0-T4a.
+
+Backward compatibility:
+- `remediation.static.*` still works and prints one deprecation note. The
+  mapping is in docs/KEYWORDS.md. static.wallStarved now means the mild
+  wall treatment.
+- The same setting in both layouts with different values is a
+  FatalIOError. An old-style override must not be silently ignored by an
+  explicit new-layout template value.
+- The pre-release `remediation.mild` is rejected.
+- The case templates use the new layout, and run_bench E-nonOrth60/65 set
+  meshQuality.nonOrthThreshold.
+
+Output:
+- remediationFlag bits: 1 static (any category), 2 dynamic,
+  4 wallStarved, 8 procAMI, 16 volumeJump (as C1), 32 meshQuality,
+  64 badMesh, 128 processor, 256 wall, 512 closedness, 1024 severe quality,
+  2048 processor layer, 4096 wall layer. The pre-release bit 32 "mild" of
+  the D-061 WIP is gone.
+- cellSets remediationStatic (union), remediationDynamic,
+  remediationMeshQuality, remediationBadMesh, remediationProcessor,
+  remediationWall. They are also written into `<iter>_lastValid`.
+- One log line per category. summary.json `staticCategories`, and at
+  diagnostics level >= 1 `controls.remediation.nStatCat`.
+- `nStat`/`staticCells` stay the union of all categories, so the T4/T5
+  static-set limit (1.5 %, D-047) keeps its meaning.
+- Built-in zonal sets `_remediationMeshQuality`, `_remediationBadMesh`,
+  `_remediationProcessor`, `_remediationWall`.
+- Restart state is unchanged: the sets are rebuilt from the mesh at every
+  start (test_restart[T1] passes).
+
+Verification (serial, CF| lines without timings compared with main 6acc150
+built in a private platform):
+- T0 Re100, T0 Re1000, T1, T2, T3-SST and T3-GEKO are **bit-identical**:
+  none of them has a wallStarved, procAMI or open cell.
+- On the T4a mesh the categories give meshQuality 2655 and badMesh 526
+  (all of them inside meshQuality) = 2655 static cells. This equals main
+  with wallStarved off; main with wallStarved on had 2667.
+- Parallel (10 ranks) the counts are the same. processor nLayers 2 marks
+  50383 cells; wall patches (motorBikeGroup) nLayers 2 marks 80136. Both are
+  opt-in.
+- T4a, 10 ranks (D-061 table): the defaults reproduce main with
+  wallStarved off bit for bit. wall.wallStarved yes with the full treatment
+  reproduces main's default bit for bit.
+- Unit (block4Ops, blockMatrix, blockGAMG V/K np1+np4), T0-T3,
+  test_diagnostics and test_restart[T1] pass. Two failures are unchanged
+  from main 6acc150 (same assertion, same numbers):
+  - T3-GEKO, the Cd deviation.
+  - test_blockGAMG_cycles, "K <= W <= V" (K 11, W 7).
+
+**Configurability audit.** Every constant of coupledDefaults.H and every
+numeric or string literal in src/ and applications/coupledFoam was checked.
+Newly read from the dictionaries:
+- `sc.blockGAMG`: tuneRhoHigh/Low/Demote/Fail, tuneConsecutiveWindows,
+  nPostSweepsMin, coarsestPreconditioner, coarsestAbsTolerance,
+  coarsestMinIter, coarsestMaxRestarts.
+- `sc.restartLarge` and `sc.restartLargeCells`. This implements the B7 rule
+  "restart 6 above 40 M cells", which had been declared but never applied.
+- `sc.nSweeps`, `sc.smoother` of the smoother preconditioner.
+- `coupled.guards.refFluxBalanceTol`, `coupled.UrefFallbackFactor`,
+  `coupled.orthogonalityTolerance` (default 0 = the exact test,
+  FABLE_REVIEW item 1).
+- `coupled.rhieChow.pinvMaxSweeps` and `coupled.rhieChow.warnInterval`.
+- `coupled.anderson.maxCells` and `coupled.anderson.rankTol`.
+- `coupled.diagnostics.stallWindow`, `asymptoticResidualFactor`,
+  `asymptoticForceFactor` and `topLimited`.
+- `coupled.sfd.nHold` (default ptc.nHold).
+- `coupled.convergence.forceCoeffs`: the function object to use; empty =
+  auto-detect.
+- `remediation.limitedGradScheme`.
+
+The string defaults (cflStrategy, convergence mode, preconditioner,
+cycleType, agglomerator, processorAgglomerator, smoother, coarsestSolver,
+smootherPreconSmoother, simpleMode) are now constants in coupledDefaults.H.
+Their values are unchanged.
+
+Other changes:
+- `kCycleMaxSteps` outside {1, 2} is now a FatalIOError. Before, values
+  above 2 were silently treated as 2.
+- The clamp warning prints the effective `guards.clampValue`.
+- `startupStagnationTrigger` and `diagnostics.topLimited` appear in the
+  effective settings.
+- `maxCopAttempts` was never used and was removed.
+
+Stay compile-time, with the reason listed in docs/KEYWORDS.md:
+- kernelChunk and the SIMD/alignment/block layout constants: performance
+  and data layout.
+- The Test-kernelBandwidth gates: test thresholds, which change only by a
+  user decision.
+- diagMaxLevel: the number of implemented diagnostics levels.
+- The remediationFlag bit values: output format.
+- The "Gauss linear uncorrected" momentum Laplacian: the design of D-014.
+- The guard epsilons: amendment D replaces them with typed constants.
+- The coupledFieldCompare tolerances: a utility, not the solver.
+
+docs/KEYWORDS.md is the complete reference, with keyword, default, range,
+meaning, decision and constant. tests/test_keywords.py fails if a
+coupledDefaults.H constant has no entry there.
+## D-067 - Report conventions: mean-field deltas, SP verdict, placeholders (report-d, 2026-09-22)
+
+Report generator and papers (branch report-d); no solver or test change.
+
+- **Mean-field deltas (D-063).** The 3D delta figures show signed
+  differences coupledFoam minus simpleFoam of the window-mean fields from
+  coupledFieldCompare: dU_x/U_inf (UMeanDelta_x) and dC_p = dp/(0.5
+  U_inf^2) (CpMeanDelta) on the mid-plane and the wheel-height plane
+  (render_<case>_delta_slices.png) and dC_p on the body
+  (render_<case>_delta_surface.png). Diverging map RdBu_r (the map of the
+  2D delta panels), white at zero, fixed symmetric limits +-0.2 for all
+  runs (comparable between runs, not scaled to the data). The earlier
+  |dU|/U_inf figure render_<case>_delta.png is removed. A render kept with
+  --allow-stale carries a caption note (\cfrenderflag).
+- **Single-precision verdict (D11, reference DP per D-062).** "SP usable"
+  if the monitored quantity of coupledFoam (Cd; dp for T1, x_r/h for T2,
+  i.e. the quantity of the case's test, not only Cd) is within 0.5 % of DP
+  and the checkMesh gate passed (no check failing only in SP, no
+  SP-geometry-fail). "Undetermined" if the gate or the DP value is not
+  recorded. The "other" column of the per-iteration breakdown is the
+  remainder of the iteration (incl. I/O) unless a record carries t_io.
+- **Speed-up of the test records (harness review M1).** Implemented by
+  branch harness-fix (D-068 item 4, make_report._speed_record); report-d
+  keeps the main version of that function and only states the common
+  criterion in the text. The motorbike table wake_speedup reads the
+  record fields of D-068 item 5 (speedupWall/Cpu, *_perRun,
+  referenceSingleConfig, referenceNoPotentialStart,
+  referenceTimingConditionsUnknown).
+- **Pending placeholders.** A missing generated figure or table is one
+  numbered line with its caption (\cfpendingitem), not a floating box.
+
+## D-068 - Harness fixes of the harness review: common averaging window, distinct benchmark configurations, failed runs, equal criteria (lead, 2026-09-22; to be confirmed by the user)
+
+Source: the read-only review of the test harness and benchmark (findings
+C1, C2, M1-M3, M6, M7, M9 and minor items). Branch harness-fix. Items 1
+and 2 change what the report states; the lead decided them overnight and
+the user confirms or reverts them in the morning.
+
+### 1. One averaging window per wake case (review C1)
+
+Problem: D-042 addendum 2 derived the window from each run's own budget,
+W = max(300, n/2). iters_to_stationary scans from N = W, so the earliest
+possible convergence point of a run was set by its budget: simpleFoam
+(n = 3000 / 4000) could not converge before iteration 1550 / 2050,
+coupledFoam (n = 800) from iteration 400. The wake-case speed-up came from
+this rule, not from the solvers.
+
+Decision: ONE window W per case for both solvers,
+run_bench.CASES[case]["statWindow"] = max(STAT_WINDOW_MIN, coupledFoam
+budget // 2) = 400 on T4a, T4b and T5 (capped at the iterations run).
+stat_window(n, case), stationary_eval(hist, case=...),
+iters_to_stationary(hist, case=...) and field_average_start(n, case)
+take the case (a CASES key or a run name such as T4a_np10 or
+ref_T4a_np10, run_bench.case_of_run); without a case they keep the
+per-run rule (backward compatible). The per-run window stays in the
+records as an informational sensitivity value: W_perRun,
+iters_to_stationary_perRun, stationary_perRun, <q>_mean_perRun and the
+times to it (bench: wall_to_conv_s_perRun / cpu_to_conv_h_perRun; tests:
+wallToConv_s_perRun / cpuHoursToConv_perRun, speedupWall_perRun /
+speedupCpu_perRun). The stationarity drift tolerance and the comparison
+tolerances are unchanged. The reference continuation keeps its per-run
+length (T4a 1500, T4b 2000; default_n_extra), because the existing
+continuations are reused and a longer reference mean field is the better
+estimate; the report must say that the reference mean fields cover that
+continuation while coupledFoam's cover its last 400 iterations.
+
+Recomputed read-only from the existing run directories (same numeric
+criterion; np10; all timings "under load", NOT the final timing
+measurement; coupledFoam including potentialFoam):
+
+| run | window | coupledFoam N / wall / CPU-h | simpleFoam N / wall / CPU-h | speed-up wall / CPU |
+|---|---|---|---|---|
+| T4a, main run/T4a_np10 (13:40) | common W 400 | 600 / 561 s / 1.557 | 450 / 233 s / 0.647 | 0.42 / 0.42 |
+| same | per run (400 / 1500) | 600 / 561 s / 1.557 | 1550 / 783 s / 2.175 | 1.40 / 1.40 |
+| T4a, D-057 default run (cf_start) | common W 400 | 450 / 401 s / 1.113 | 450 / 233 s / 0.647 | 0.58 / 0.58 |
+| same | per run (400 / 1500) | 450 / 401 s / 1.113 | 1550 / 783 s / 2.175 | 1.95 / 1.95 |
+| T4b, D-057 run (cf_start) | common W 400 | 450 / 2117 s / 5.880 | 450 / 1296 s / 3.600 | 0.61 / 0.61 |
+| same | per run (400 / 2000) | 450 / 2117 s / 5.880 | 2050 / 5942 s / 16.504 | 2.81 / 2.81 |
+
+Window means under the common window: ref_T4a Cd 0.39648 / Cl 0.07708
+(per run 0.39640 / 0.07675); ref_T4b Cd 0.40022 / Cl 0.06734 (per run
+0.39962 / 0.06568); T4b coupledFoam Cd 0.40777 / Cl 0.06550, i.e. Cd
++1.89 % (PASS within 2 %; under the per-run window +2.04 %, a marginal
+FAIL). On the wake cases coupledFoam is therefore SLOWER than simpleFoam
+to a stationary 400-iteration window mean (0.4-0.6x) with the present
+settings; the earlier 2-2.8x came from the window rule. The report must
+state this.
+
+### 2. Benchmark configurations redefined (review C2)
+
+Problem: since D-043 every template runs a V-cycle with autoTune off. C
+(the template), E (sets V + autoTune no) and H (sets autoTune no only) were
+the same run on T1-T5, labelled "K with controller", "fixed V" and "fixed
+K". E-sfd on T3 set sfd.enabled yes, which the T3 template already has
+(D-058). On T1, A and B are identical: the pitzDaily tutorial is SIMPLEC
+with p unrelaxed and U, k, omega 0.9, which is B.
+
+New definitions (bench/run_bench.py COUPLED_CONFIGS, E_VARIANTS,
+CONFIG_SCOPE):
+
+| config | solver | settings on top of the template | scope |
+|---|---|---|---|
+| A | simpleFoam | tutorial settings (T3: consistent no) | T1, T2, T3-SST, T3-GEKO, T4a |
+| B | simpleFoam | SIMPLEC, p 1 / U 0.9 / .* 0.9 | T2, T3-SST, T3-GEKO, T4a (T1: == A) |
+| C | coupledFoam | none: V-cycle, autoTune off (D-043), adaptive relTol | T1, T2, T3-SST, T3-GEKO, T4a, T4b |
+| D | coupledFoam | preconditioner blockDiagonal | T1, T2, T3-SST, T3-GEKO |
+| F | coupledFoam | adaptiveRelTol no (B10) | T1, T3-SST |
+| G | coupledFoam | anderson on (B10) | T1, T3-SST |
+| H | coupledFoam | cycleType K, autoTune no: the fixed K-cycle; H vs C is the cycle comparison | T1, T2, T3-SST, T3-GEKO, T4a |
+| H-tune | coupledFoam | cycleType K, autoTune yes: the pre-D-043 default controller; H-tune vs H isolates it | T1, T2 |
+| E-rcScalar | coupledFoam | C + rhieChow.tensorial no | T2 |
+| E-algPair | coupledFoam | C + agglomerator algebraicPair, weights pressure | T2 |
+| E-eta07 | coupledFoam | C + etaMax 0.7, minIter 2 | T2 |
+| E-noSFD | coupledFoam | C + sfd.enabled no (was E-sfd, a no-op) | T3-SST, T3-GEKO |
+| E-nonOrth60 / 65 | coupledFoam | C + static nonOrthThreshold 60 / 65 | none (only the snappyHexMesh meshes have such cells; --no-scope) |
+
+- E is no longer a configuration; "E" on the command line is an alias of
+  C (with a note). The E-* variants are variants of the defaults C (the
+  names are kept from amendment C7).
+- Scope follows D-063: T4a only A, B, C, H; T4b only C; T5 none; the heavy
+  cases run one repeat (MAX_REPEATS, D-059) unless --no-scope.
+- b10_evaluate compares every coupledFoam configuration with C; H-tune also
+  with H (dWall_X_vs_H). The E-vs-H and X-vs-E columns are gone.
+- HARNESS_VERSION 4: every configuration hash changes, earlier benchmark
+  records are stale.
+- tests/test_harness.py reads the templates (tests/cflib/foamdict.py, no
+  OpenFOAM needed) and checks that the configurations in the scope of every
+  case differ in the settings the solver actually uses
+  (run_bench.effective_settings) and in their hashes.
+
+### 3. Failed runs are failures, not timings (review M3)
+
+- run_bench.run_one checks the Allrun rc, the solver log (normal "End",
+  no FOAM FATAL; cflib.case.run_failure), the whole budget run (the
+  solver's own stop is disabled in the benchmark) and complete timing
+  reports. A failed run is written with failed true, the reasons
+  (failure) and the log tail, and without any time to convergence. The
+  next invocation reruns it (it is not skipped as "exists"). load_current
+  leaves failed records out; load_failed lists them; summary.json lists
+  "failed" and "missing" (expected case/config/run without a successful
+  record); run_bench exits with rc 4 if a run of the invocation failed.
+  make_report.load_bench lists failed runs in the missing-results
+  appendix. Older records count as failed if rc != 0 or they carry an
+  "error" without a time.
+- rank_times no longer raises KeyError when every report of an
+  application is incomplete; it returns what it can with complete false
+  and incompleteReports.
+- Test helpers: a run that failed without output (e.g. mpirun refused an
+  invalid --cpu-set: rc 1, nothing else) raises with the tail of log.Allrun
+  and of the solver log (refcase.coupled, test_T4.run_solver, T0). Any
+  other failure is flagged in the record (failed, failure, logTail); the
+  T4/T5 tests write the record with pass false and fail loudly
+  (fail_if_failed); the T0-T2 and scaling asserts show the log tail.
+
+### 4. Speed-up figure: both solvers timed to the same criterion (review M1)
+
+make_report._speed_record (numbers SpeedWall*/SpeedCpu*, figure
+speed_time_to_conv) took coupledFoam at its residual target and
+simpleFoam at its residualControl stop (1e-8) or its whole run, and T3/T4
+always as "not conv.". Now (speed_criterion):
+- T0-T2: the test's R target (T0 1e-8, T1 1e-5, T2 1e-5). coupledFoam:
+  first R < target. simpleFoam: first iteration at which EVERY initial
+  residual in its log (p, Ux, Uy, k, omega, ...) is below the target (the
+  D-024 definition already used by T2). The two residuals are normalised
+  differently (paper Section 3.2); this is the closest common definition.
+  Times: solver only, wall-clock fraction of the run up to the iteration.
+- T3: spec 12.3(ii) (100-iteration Cd/Cl window, 0.2 %) on both force
+  histories; a D-060 user point takes precedence; coupledFoam's own stop
+  counts if the window is not met.
+- T4/T5: the D-042 point under the common window (item 1), from the test
+  record (rank timing incl. potentialFoam) or recomputed from the run
+  directories for older records; per-run values as *_perRun.
+The records carry it_cf_conv / it_sf_conv (convergence iterations of both)
+and n_cf / n_sf. Read-only check on main's records and runs: T1 1.04x
+(was about 1.4x), T0 Re100 18x, Re1000 5x, T2 >= 12.9x (simpleFoam never
+reaches 1e-5), T3 from the old 3000-iteration runs 0.07x / 0.02x
+(coupledFoam never met 12.3(ii) there; rerun pending), T4a 0.42x (per-run
+window 1.40x).
+
+### 5. T4b/T5 speed-up against the cached reference as data (review M2)
+
+The D-059 comparison (T4b and T5 are benchmarked with C only; their
+simpleFoam side is the cached test reference) was produced nowhere. Now
+the T4/T5 test records carry speedupWall / speedupCpu (common window) and
+speedupWall_perRun / speedupCpu_perRun, speedupBasis, referenceTimingDate
+and the fairness flags of run_bench.reference_timing_flags, which the
+report must state: referenceNoPotentialStart (the references ran without
+the tutorial's potentialFoam start; true for ref_T4a/T4b/T5),
+referenceTimingConditionsUnknown (the cached reference records have no
+machine state; true for all three) and referenceSingleConfig (one native
+configuration, not the best of A/B). make_report._speed_record passes the
+same flags for T4a/T4b/T5. run_solver now records the machine state
+before every run (machineBefore) and nativePotentialStart, so a
+reference computed from now on has known timing conditions.
+
+### 6. T3 test requires convergence and compares window means (review M6)
+
+tests/test_T3_airFoil.py compared the LAST Cd/Cl samples, without any
+convergence requirement: a limit cycle passed whenever its last sample fell
+within the tolerance. Now both solvers must be converged - coupledFoam: the
+12.3(ii) window (100 iterations, 0.2 % on Cd and Cl) at the end of the run
+or the solver's own stop (summary converged); simpleFoam: its
+residualControl stop or the 12.3(ii) window at the end of its run - and
+the compared coefficients are the final 100-iteration window means.
+Tolerance unchanged (5 %, D-058). The record carries itersToConv (first
+12.3(ii) window, or the solver's stop) of both solvers, converged,
+finalWindowOk, the last samples and the window ranges. Evidence on main's
+old runs (before D-058, read-only): ref_T3_kOmegaSST and ref_T3_GEKO are
+converged (final window range 0.01 % / 0.03 % of Cd); the old coupledFoam
+runs T3_kOmegaSST_np1 (Cd range 300 % of the mean) and T3_GEKO_np1 (10 %)
+would now fail on convergence.
+
+### 7. The reference continuation is not part of the reference (review M7)
+
+ref_T4a has 4500 force samples (3000 original + 1500 continuation). The
+test evaluated t <= 3000, but user_convergence and the plots used all of
+them (W from 4500, user iterations up to 4500 accepted, means including
+the continuation). Now run_bench.reference_t_max(case) (reference.json
+continuation.startTime) and run_bench.force_history(case) (cut there by
+default) are the one way to read a run's force history for evaluation;
+user_convergence.force_hist uses it, so a user iteration beyond the
+original budget is ignored and flagged (D-060) and the N..end means stop
+at the original end. make_report._speed_record reads through it.
+plot_histories (owned by the figures agent) still reads all samples; the
+change it needs is given to the lead.
+
+### 8. Staleness guard: build id, guarded run reads, overwritten run directories (review M9)
+
+- Build: Guard.check_run rejects a coupledFoam run whose starts used more
+  than one build, whose build id differs from the report's build
+  (Guard.build_id: $CF_REPORT_BUILD_ID, else the coupledFoam on PATH when
+  make_report runs in an OpenFOAM environment, else the first coupledFoam
+  run checked, so that all runs of a report share one build), or whose
+  binary / libcoupledFoam.so at the recorded path was rebuilt since the
+  run (stale binary). The report should run in the same environment as the
+  campaign (cfenv sys) so that the install on PATH is the freeze build.
+- Record identity: results.write stores runFingerprint (provenance start
+  date, commit and build id of the run directory, size of its solver logs).
+  Guard.check_record rejects a record whose directory was re-run or whose
+  solver log changed afterwards, or whose run started at another commit
+  than the record's. Guard.check_record_run(case, rec, run_dir) does the
+  same for a consumer that reads a record's run directory; for records
+  without a fingerprint it compares the run start (provenance) or the
+  solver-log time with the record timestamp. Verified on main:
+  results/tests/T4a_np10.json (11:20) vs run/T4a_np10 (log.coupledFoam
+  13:40) is detected.
+- Guarded reads: user_convergence.evaluate / auto_iteration (and so
+  apply_test, apply_bench and make_report.table_convergence, which calls
+  evaluate) and make_report._speed_record read a run directory only if it
+  passes check_record_run (run/ref_* exempt from the commit check).
+- user_convergence.apply_test keeps Cd_mean / Cl_mean / *_std of the
+  coupledFoam record consistent with a user point (they were updated on
+  the reference side only).
+
+### 9. Minor items (review m2, m7, m10, m12, m13)
+
+- T5 hash: the configuration hash of T5 used CF_T5_MESH of the process
+  that computed it, so make_report without the variable dropped the
+  coarse records as stale. Bench records now store meshVariant and
+  is_current hashes T5 records with it (run_bench.case_args,
+  mesh_variant).
+- T5 run names: run_bench.t5_run_name (T5_np10 fine, T5_coarse_np10
+  coarse) is used by tests/test_T5_ahmed.py and by make_report.SPEED_CASES
+  (the variant with a test record; CF_T5_MESH first).
+- run_bench.foam_dictionary uses -disableFunctionEntries on fvSolution only
+  (CLAUDE.md rule; controlDict WITHOUT it). Checked with the system
+  foamDictionary on copies of the T4/T5/T1 controlDicts: only the set
+  entries change (T1: $inletP is expanded in place, as with
+  cflib.case.set_entry).
+- test_fpe: startupUpwindIters 0 had no effect under the default hybrid
+  start-up (D-048); the torture start now sets coupled.startupMode none
+  (no ramp: full second order and the full CFL0 200 from iteration 1).
+  Smoke run on the current main build (T1, 1 rank): converged to R < 1e-5
+  in 140 iterations, no trap, no rollback.
+- Docstrings and the T4/T5 controlDict comment no longer say
+  max(1000, n/2); the run_bench configuration list matches item 2.
+## D-069 - Solver-source review fixes F1-F10, F12 and FABLE 5 (branch solver-fix, 2026-09-22)
+
+A read-only review of src/ and coupledFoam (main 6acc150) found the defects
+below; each is fixed in its own commit on branch solver-fix. Tests at 1 rank
+unless stated, machine shared (load 20-32), so wall/CPU numbers are
+validation, not benchmark timings.
+
+| item | change | effect |
+|---|---|---|
+| F1 | `p.boundaryFieldRef().updateCoeffs()` before every assembleMomentum and before the restart phi check (as the native fvMatrix constructor for U) | mixed p conditions (freestreamPressure, inletOutlet) had their constructor valueFraction (zeroGradient) in the first assembly of every start and restart, and the flux update evaluated p_b with a valueFraction different from the solved row. Only T3 has a mixed p. |
+| F2 | `turbulence->validate()` on fresh starts only | nut of iteration 1 is the model's nut, not 0/nut; restarts keep the nut of the file (exactness) |
+| F3 | sentinel store/restore/check/lastValid for every turbulence field (registered AUTO_WRITE volScalarFields except p, or `sentinel.turbulenceFields`) | epsilon, nuTilda, ReThetat, gammaInt were ignored |
+| F4 | restart state carries the GAMG agglomeration (face weights of the matrix-weighted agglomeration, `gamgAggWeights`, and `gamgUpdates`), `linFails`, `consecutiveRollbacks`, `dynamicPending` | the restarted run rebuilt the hierarchy from another matrix on a shifted schedule |
+| F5 | restart files agreed over all ranks (`coupledState::presentOnAllRanks`, FatalError if the ranks disagree) | partial time directories gave rank-dependent collectives (hang) |
+| F6 | rollback restores the U and p boundary values verbatim | the far-field state after a rollback was neither n-1 nor the rejected step |
+| F7 | startupDone follows the D-048 probe decision; sfd.begin() not while probing | diagnostics/EW flag of iteration 1 only (SFD could not start early: begin() ran before the probe) |
+| F8 | residual == 0 is converged (blockSolver::converged) | zero right-hand side gave 0/0 in BiCGStab and inf*0 in (F)GMRES |
+| F9 | NaN coefficients counted (toBlock overload, warning); K-cycle/scaleCorrection coefficients narrowed with non-finite -> 0 and clamp 1e30 | NaN passed the clamp uncounted; |a| > FLT_MAX became inf |
+| F10 | blockGMRES/blockBiCGStab reject scaleCorrection (FatalIOError), an iterative coarsest level (FatalError, opt-out `blockGAMG.allowVariableCoarsest yes`) and the K cycle (also as autoTune promotion) | variable preconditioner with a non-flexible Krylov method |
+| F12 | FGMRES/GMRES work vectors kept across solves; ILU0 uses the caller's residual scratch; sentinel extrema in one allreduce | no per-solve allocation of 2m+1 vectors |
+| FABLE 5 | Allrun exports `SCOTCH_PTHREAD_NUMBER=1`; dumpLinearSystem works per rank in parallel | Scotch 7.0.4 decomposed differently run to run |
+
+Choices:
+- F4: the review's cheapest option (re-agglomerate after every write) would
+  not make a restart exact against a continuous run that did not write at
+  the split point (test_restart). Storing the face weights of the current
+  agglomeration (one double per internal face and rank, written only at
+  write times, no extra agglomeration) reproduces the hierarchy exactly.
+  Missing keys (older states) fall back to the old behaviour. The Anderson
+  history stays outside the state (D-026).
+- F3: the automatic list is every registered AUTO_WRITE volScalarField except
+  p at sentinel construction (after the turbulence model). applyBounds is
+  unchanged: the native kEpsilon/SA models bound epsilon/nuTilda themselves.
+- F10: Test-blockGAMG sets allowVariableCoarsest for its non-FGMRES runs so
+  that the unit test measures the V/F/W cycles with blockBiCGStab as before.
+- F9: the 1e-30 pivot guard of the block inverses is not changed (SP, D3).
+- F12: the CFL-cut retrial re-assembly (optional) is not cached.
+
+Evidence (commit messages carry the details):
+
+| test | main 6acc150 (same machine, tonight) | solver-fix |
+|---|---|---|
+| T0 Re100 / Re1000 np1 | 65 / 99 its (recorded) | 65 / 99 its, pass |
+| T1 np1 | pass, R 3.28e-6 at 400, dp -0.057 % | pass, R 4.47e-6 at 400 (F2), dp -0.057 % |
+| T2 np1 | pass (recorded: R 8.9e-6, xr +0.685 %) | pass, R 6.4e-6 at 1000, xr +0.683 % |
+| T3-SST np1 | pass, 611 its, Cd +0.14 %, Cl -2.42 % | pass, 555 its, Cd 0.09107 (+0.38 %), Cl 0.2472 (-2.18 %) |
+| T3-GEKO np1 | fail, 482 its, Cd +5.97 %, Cl -5.95 % | fail, 486 its, stalled branch: Cd 0.0786 (+129 %), Cl 0.206 (-75 %) |
+| test_restart[T3-SST] | fail, rel. 2.0e-4 / 5.1e-4 (FABLE 6) | PASS, Cd/Cl rel. diff 0.0 / 0.0 (bitwise), 555 = 555 its |
+| test_restart[T1] | pass, 1.4e-7 | pass, 0.0 |
+| T1 np4 restart 100 + 60 vs 160 | - | bitwise identical final state (deterministic decomposition) |
+| T0 np4, 3 runs | 63/70/73 its, all different | Re100 66/66/66, Re1000 236/236/236, identical histories |
+| coupledState missing on one rank (np4) | hang risk | FatalError on all ranks, no hang |
+| T3 kEpsilon / SA, sentinel.UFactor 1.3 | epsilon/nuTilda not restored | "(epsilon k nut)" / "(nuTilda nut)" detected; rollbacks followed by accepted iterations, then the forced-limit abort with <n>_lastValid incl. epsilon (as D-056) |
+| F10 configurations (T0) | accepted silently | GMRES + iterative coarsest / + scaleCorrection rejected with the messages; FGMRES, dense coarsest and the opt-out run |
+| unit (block4Ops, blockMatrix, blockGAMG np1/np4) | pass | pass; test_blockGAMG_cycles fails as on main (V 11, F 8, W 7, K 11) |
+
+T3 per-step effect: F1 alone gave T3-SST 573 its, Cd +0.44 %, Cl -2.28 %,
+restart rel. diff 1.2e-5 / 5.7e-5; F2 then 555 its (above); F4 made the
+restart exact. T3-GEKO moves to the stalled branch with F1 (T3 is
+multi-stable in coupledFoam, D-052/D-055); it failed the 5 % criterion
+before as well. Probe with sfd.startIter 300 on the fixed build: converged
+at iteration 300 (before SFD starts) on the attached branch, Cd 0.0302
+(-12 %), Cl 0.953 (+14 %) - neither branch is within 5 % of simpleFoam
+(Cd 0.0343, Cl 0.838). Open; no template change made.
+
+F12 timings (T1 np1, base and solver-fix interleaved on one pinned CPU, 3
+pairs of 400 iterations): 155.0/138.0/145.8 vs 151.2/134.2/156.3 ms per
+iteration, wall = CPU, 0.0150-0.0174 CPU-h per run: no difference beyond
+the +-7 % load noise. Unpinned concurrent pairs: T1 170/157 vs 172/165
+ms/it; T3-SST 113/108 vs 122/116 ms/it but 555 instead of 611 iterations,
+total 64-68 s vs 66-69 s wall, 0.0180-0.0189 vs 0.0184-0.0193 CPU-h. The
+removed allocations are below the noise on these meshes.
+
+T4a (np10, 800 its, CF_MPI_BIND=none, coupled.remediation.static.wallStarved
+no per D-061, harness run_solver with the D-042 evaluation, cached mesh of
+main, build of 8ec0223; the later FABLE 5 commit only changes the dump
+condition and the Allrun, neither used by this run): stationary at 450, window means
+Cd 0.4009 (+1.12 % vs simpleFoam 0.3964, std 0.0023), Cl 0.0767 (-0.0001
+absolute vs 0.0768, std 0.0032); main with wallStarved off gave Cd 0.4010,
+Cl 0.0818. Rollbacks 0, static cells 2655 (0.75 %), final R 7.6e-3 at CFL
+500. Wall 858 s / 2.39 CPU-h for 800 iterations, 513 s / ~1.43 CPU-h to
+stationarity (under load, with another agent's T4a np10 running part of
+the time; not a timing measurement).

@@ -106,6 +106,10 @@ class lineSearch
         //  | explicit, cap factor, explicit value
         word stepMode_;
         scalar stepCap_;
+
+        //- Boundary Uref below this fraction of the field maximum: field
+        //  maximum (coupled.UrefFallbackFactor, D-050)
+        scalar UrefFallbackFactor_;
         scalar UstepExplicit_;
 
         //- max |U| of the initial field and the non-coupled boundaries

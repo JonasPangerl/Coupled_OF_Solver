@@ -132,7 +132,7 @@ void Foam::blockILU0::update()
 void Foam::blockILU0::applyInverse
 (
     blockScalarUList& w,
-    const blockScalarUList& r
+    blockScalarUList& r
 ) const
 {
     const label nCells = matrix_.nCells();
@@ -146,10 +146,10 @@ void Foam::blockILU0::applyInverse
     const blockScalar* const __restrict__ rDPtr = rD_.cdata();
 
     // Forward: (D* + L) y = r, y_c = D*_c^-1 (r_c - sum L y_l)
-    // t accumulates r_c - sum L y_l, pushed from owner to neighbour
-    blockScalarList t(r);
+    // t accumulates r_c - sum L y_l, pushed from owner to neighbour; r
+    // itself is the accumulator (the caller's residual scratch, D-069 F12)
     blockScalar* __restrict__ wPtr = w.data();
-    blockScalar* __restrict__ tPtr = t.data();
+    blockScalar* __restrict__ tPtr = r.data();
 
     for (label celli = 0; celli < nCells; ++celli)
     {

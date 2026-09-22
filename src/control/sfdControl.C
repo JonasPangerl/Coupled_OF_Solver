@@ -7,6 +7,7 @@
 #include "coupledConstants.H"
 #include "coupledDefaults.H"
 #include "PstreamReduceOps.H"
+#include "coupledState.H"
 #include <cmath>
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
@@ -46,6 +47,8 @@ Foam::sfdControl::sfdControl
     resetOnFlush_ = d.getOrDefault<bool>("resetOnFlush", resetOnFlush_);
     afterStartup_ = d.getOrDefault<bool>("afterStartup", afterStartup_);
     startIter_ = d.getOrDefault<label>("startIter", startIter_);
+    // Iterations below deactivateBelowR before SFD-off (default ptc.nHold)
+    nHold_ = d.getOrDefault<label>("nHold", nHold_);
 
     // Negated comparisons also reject non-finite input
     if
@@ -280,10 +283,17 @@ void Foam::sfdControl::readState(const dictionary& dict)
         IOobject::NO_WRITE,
         IOobject::NO_REGISTER
     );
+    // Both decisions agreed over all ranks (D-069 F5): a USFD present on
+    // some ranks only is a FatalError, not rank-dependent SFD activity
+    const bool wanted =
+        returnReduceAnd(dict.getOrDefault<bool>("sfdInitialised", false));
     if
     (
-        dict.getOrDefault<bool>("sfdInitialised", false)
-     && io.typeHeaderOk<volVectorField>(true)
+        wanted
+     && coupledState::presentOnAllRanks
+        (
+            io.typeHeaderOk<volVectorField>(true), io.name(), io.path()
+        )
     )
     {
         const volVectorField Ur(io, mesh_);

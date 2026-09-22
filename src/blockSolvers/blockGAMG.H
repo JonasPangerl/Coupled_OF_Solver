@@ -249,6 +249,25 @@ private:
         //- Deep diagnostics (TASK 5; null: off), set by the preconditioner
         mutable diagnostics* diag_;
 
+        //- The outer Krylov solver needs a fixed (linear) preconditioner
+        //  (blockGMRES, blockBiCGStab; set by blockGAMGPrecon through the
+        //  internal key fixedPreconditioner): scaleCorrection, the K cycle
+        //  and an iterative coarsest solve are rejected (D-069 F10)
+        bool fixedPrecon_;
+
+        //- Accept an iterative coarsest solve with a fixed-preconditioner
+        //  solver anyway (keyword allowVariableCoarsest, default no)
+        bool allowVariableCoarsest_;
+
+        //- Finest-level face weights of the current matrix-weighted
+        //  agglomeration (restart state; empty for geometric, D-069 F4)
+        scalarField aggWeights0_;
+
+        //- Restart: weights to rebuild the written run's hierarchy from at
+        //  the first update, and its update count (-1: none)
+        mutable scalarField restoredAggWeights_;
+        mutable label restartUpdates_;
+
 
     // Private Member Functions
 
@@ -482,6 +501,22 @@ public:
 
         //- Number of coefficient updates so far
         label nUpdates() const noexcept { return nUpdates_; }
+
+        //- Face weights of the current matrix-weighted agglomeration
+        //  (empty for geometric weights); restart state (D-069 F4)
+        const scalarField& agglomerationWeights() const noexcept
+        {
+            return aggWeights0_;
+        }
+
+        //- Restart (D-069 F4): the next update rebuilds the hierarchy from
+        //  these weights (the written run's agglomeration) and continues
+        //  the re-agglomeration schedule from nUpdates
+        void setRestartAgglomeration
+        (
+            const scalarField& weights,
+            const label nUpdates
+        ) const;
 
         //- Attach deep diagnostics (null: off)
         void setDiagnostics(diagnostics* d) const noexcept { diag_ = d; }

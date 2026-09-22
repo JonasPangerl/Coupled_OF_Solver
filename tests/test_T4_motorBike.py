@@ -9,8 +9,10 @@ Pass (per mesh), averaged force criterion for the oscillating wake (D-042
 and its addendum, user decisions; the old 12.3(ii) 0.2 % min/max window is
 unsatisfiable for any steady solver here, the simpleFoam reference
 included): both solvers have a stationary window mean of Cd and Cl at the
-end of their run (bench/run_bench.py:stationary_mean - window
-W = max(1000, n/2) capped at n, half-window means differ by
+end of their run (bench/run_bench.py:stationary_mean - ONE window W per
+case for both solvers, run_bench.CASES[case]["statWindow"] = 400 on T4a
+and T4b (D-068; the per-run window max(300, n/2) is recorded as the
+*_perRun sensitivity value), half-window means differ by
 <= max(1 % |mean|, 0.005)); the window means agree with simpleFoam
 (SIMPLEC) on the same mesh: Cd within max(2 %, 0.002 absolute), Cl within
 max(2 %, 0.01 absolute); the mean fields over the same window agree:
@@ -221,21 +223,25 @@ def force_history(case: Path, t_min: float | None = None,
 
 def evaluate_history(rec: dict, case: Path, solver: str,
                      hist: dict[str, list[float]], ranks: dict,
-                     oscillatory: bool = False) -> int | None:
+                     oscillatory: bool = False,
+                     case_name: str | None = None) -> int | None:
     """Convergence, coefficients and time to convergence of a force history
     into `rec`; returns the convergence iteration.
 
     oscillatory (D-042): convergence := stationary final window
-    (run_bench.stationary_eval); the convergence iteration is
-    iters_to_stationary, Cd / Cl are the final-window means (with std, W,
-    half-window drift). Otherwise criterion 12.3(ii) (run_bench.iters_to_conv,
-    window means at convergence)."""
+    (run_bench.stationary_eval with the common window of `case_name`,
+    D-068); the convergence iteration is iters_to_stationary, Cd / Cl are
+    the final-window means (with std, W, half-window drift). The per-run
+    window is evaluated for information (iters_to_stationary_perRun,
+    wallToConv_s_perRun, cpuHoursToConv_perRun). Otherwise criterion
+    12.3(ii) (run_bench.iters_to_conv, window means at convergence)."""
     rec["iterationsRun"] = min((len(h) for h in hist.values()), default=0)
     if hist:
         rec["CdFinal"] = hist["Cd"][-1]
         rec["ClFinal"] = hist["Cl"][-1]
     if oscillatory:
-        st = run_bench.stationary_eval(hist) if rec["iterationsRun"] else \
+        st = run_bench.stationary_eval(hist, case=case_name) \
+            if rec["iterationsRun"] else \
             {"criterion": run_bench.STAT_CRITERION, "stationary": False,
              "iters_to_stationary": None}
         rec.update(st)
@@ -265,6 +271,13 @@ def evaluate_history(rec: dict, case: Path, solver: str,
             tc = run_bench.to_convergence(ranks, frac)
             rec["wallToConv_s"] = tc.get("wall_to_conv_s")
             rec["cpuHoursToConv"] = tc.get("cpu_to_conv_h")
+    it_run = rec.get("iters_to_stationary_perRun") if oscillatory else None
+    if it_run is not None and ranks:
+        # D-068 sensitivity: time to the per-run window's stationary point
+        tc = run_bench.to_convergence(
+            ranks, run_bench.progress_fraction(case, solver, it_run))
+        rec["wallToConv_s_perRun"] = tc.get("wall_to_conv_s")
+        rec["cpuHoursToConv_perRun"] = tc.get("cpu_to_conv_h")
     return it
 
 
@@ -272,7 +285,8 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
                mesh_args: list[str], sets: dict | None = None,
                fpe: bool | None = None,
                extra_env: dict | None = None,
-               oscillatory: bool = False) -> tuple[Path, dict]:
+               oscillatory: bool = False,
+               case_name: str | None = None) -> tuple[Path, dict]:
     """Run one solver on a copy of a cached mesh; returns the case and a
     record with convergence (harness criterion; D-042 stationary mean if
     `oscillatory`), coefficients, wall time, CPU-hours and peak RSS
@@ -280,14 +294,17 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
 
     oscillatory: the fieldAverage function object of the template averages
     UMean/pMean over the force window, timeStart = n - W + 1 with n the
-    endTime of `sets` (run_bench.field_average_start, D-042 addendum)."""
+    endTime of `sets` and W the common window of `case_name` (D-068;
+    run_bench.field_average_start, D-042 addendum). case_name defaults to
+    the run name (run_bench.case_of_run)."""
     info = mesh_info(mesh)
     nprocs = int(info.get("np", "1"))
+    case_name = case_name or run_bench.case_of_run(name)
     case = case_from_mesh(template, mesh, name, sets)
     avg_start = None
     n_budget = (sets or {}).get("system/controlDict", {}).get("endTime")
     if oscillatory and n_budget is not None:
-        avg_start = run_bench.field_average_start(int(n_budget))
+        avg_start = run_bench.field_average_start(int(n_budget), case_name)
         run_bench.set_field_average_start(case, avg_start)
     env = {"CF_RANK_WRAPPER": str(WRAPPER),
            "CF_TIMING_DIR": str(case / "timing")}
@@ -295,6 +312,8 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
     if fpe is None:
         fpe = solver == "coupledFoam"
     args = ["-solver", solver, "-np", str(nprocs)] + list(mesh_args)
+    # timing conditions of the run (load, other jobs; review M2)
+    machine = cfenv.machine_state().as_dict()
     rc = cfcase.allrun(case, args, fpe=fpe, extra_env=env)
 
     ranks = run_bench.rank_times(case, solver)
@@ -302,6 +321,10 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
         "solver": solver, "rc": rc, "nProcs": nprocs, "args": args,
         "meshCells": mesh_cells(mesh), "meshVariant": info.get("variant"),
         "timingAllrun": cfenv.last_timing.as_dict(),
+        "machineBefore": machine,
+        "nativePotentialStart": (extra_env or {}).get(
+            "CF_NATIVE_POTENTIAL") == "yes" if solver != "coupledFoam"
+        else None,
         "ranks": ranks,
         "wallSeconds": ranks.get("wallSeconds"),
         "cpuHours": ranks.get("cpuHours"),
@@ -311,7 +334,24 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
     }
 
     hist = force_history(case)
-    it = evaluate_history(rec, case, solver, hist, ranks, oscillatory)
+    # M3: a failed run must fail loudly, with the log tail. A run that left
+    # nothing to evaluate (e.g. mpirun refused an invalid --cpu-set: rc 1,
+    # no output) raises here; any other failure is flagged in the record
+    # (rec["failed"], rec["failure"], rec["logTail"]) for the caller
+    failure = cfcase.run_failure(case, solver, rc)
+    if ranks and not ranks.get("complete", True):
+        failure.append("incomplete timing reports: "
+                       + ", ".join(ranks.get("incompleteReports") or []))
+    rec["failed"] = bool(failure)
+    rec["failure"] = failure
+    if failure:
+        rec["logTail"] = cfcase.log_tail(case, solver)
+        if not hist:
+            raise AssertionError(
+                f"{solver} run {name} failed ({'; '.join(failure)}) and left "
+                f"no force history:\n{rec['logTail']}")
+    it = evaluate_history(rec, case, solver, hist, ranks, oscillatory,
+                          case_name)
 
     if solver == "coupledFoam":
         log = case / "log.coupledFoam"
@@ -351,46 +391,86 @@ def run_solver(template: str, mesh: Path, name: str, solver: str,
 
 
 def reevaluate_reference(case: Path, rec: dict,
-                         oscillatory: bool = False) -> dict:
+                         oscillatory: bool = False,
+                         case_name: str | None = None) -> dict:
     """Re-evaluate a cached reference record with the current criterion
-    (read-only: reference.json is not rewritten). The force history and
-    the rank timing reports are re-read from the case; records written
-    before the pre-processing split lack solverWallSeconds, so the rank
-    timing is re-parsed when needed."""
+    (read-only: reference.json is not rewritten; the common window of
+    `case_name`, D-068, default the case named by the directory). The force
+    history and the rank timing reports are re-read from the case; records
+    written before the pre-processing split lack solverWallSeconds, so the
+    rank timing is re-parsed when needed."""
+    case_name = case_name or run_bench.case_of_run(Path(case).name)
     rec = dict(rec)
     ranks = rec.get("ranks") or {}
     if ranks and "solverWallSeconds" not in ranks:
         ranks = run_bench.rank_times(case, "simpleFoam") or ranks
         rec["ranks"] = ranks
     for k in ("wallToConv_s", "cpuHoursToConv", "progressFraction", "Cd",
-              "Cl", "itersToConvCdOnly"):
+              "Cl", "itersToConvCdOnly", "wallToConv_s_perRun",
+              "cpuHoursToConv_perRun"):
         rec.pop(k, None)
     # a continuation (continue_reference_with_average) extends the force
     # history; the reference itself is its original run only
     cont = rec.get("continuation") or {}
     hist = force_history(case, t_max=cont.get("startTime"))
-    evaluate_history(rec, case, "simpleFoam", hist, ranks, oscillatory)
+    evaluate_history(rec, case, "simpleFoam", hist, ranks, oscillatory,
+                     case_name)
     return rec
 
 
 def reference(template: str, mesh: Path, name: str, mesh_args: list[str],
               sets: dict | None = None,
-              oscillatory: bool = False) -> tuple[Path, dict]:
+              oscillatory: bool = False,
+              case_name: str | None = None) -> tuple[Path, dict]:
     """simpleFoam (SIMPLEC) reference on the same mesh, cached in
     run/<name> together with its record (reference.json). A cached record
-    is re-evaluated with the current criterion (D-042 for `oscillatory`)."""
+    is re-evaluated with the current criterion (D-042 for `oscillatory`,
+    common window of `case_name`, D-068)."""
     case = cfcase.RUN_ROOT / name
     meta = case / "reference.json"
     if cfcase.solver_ok(case, "simpleFoam") and meta.exists():
         rec = json.loads(meta.read_text())
         if rec.get("meshCells") == mesh_cells(mesh):
-            return case, reevaluate_reference(case, rec, oscillatory)
+            return case, reevaluate_reference(case, rec, oscillatory,
+                                              case_name)
     case, rec = run_solver(template, mesh, name, "simpleFoam", mesh_args,
-                           sets, fpe=False, oscillatory=oscillatory)
+                           sets, fpe=False, oscillatory=oscillatory,
+                           case_name=case_name)
     meta.write_text(json.dumps(results._clean(rec), indent=2) + "\n")
-    assert rec["rc"] == 0 and cfcase.solver_ok(case, "simpleFoam"), \
-        f"simpleFoam reference {name} failed"
+    assert not rec.get("failed"), \
+        (f"simpleFoam reference {name} failed "
+         f"({'; '.join(rec.get('failure') or [])}):\n{rec.get('logTail')}")
     return case, rec
+
+
+def speedup_record(ref_case: Path, ref: dict) -> dict:
+    """Fields that make the speed-up of the test run against the cached
+    simpleFoam reference usable as report data (D-059; review M2): the
+    speed-ups themselves are speedupWall / speedupCpu (common window,
+    D-068) and *_perRun (compare); these are the basis and the fairness
+    flags (run_bench.reference_timing_flags) the report must state."""
+    out = {"speedupBasis": "coupledFoam test run vs the cached simpleFoam "
+                           "reference on the same mesh and ranks (D-059), "
+                           "D-042 stationary point, common window (D-068)",
+           "referenceTimingDate": (json.loads((ref_case / "provenance.json")
+                                              .read_text()).get("date")
+                                   if (ref_case / "provenance.json").exists()
+                                   else None)}
+    out.update(run_bench.reference_timing_flags(ref_case, ref))
+    return out
+
+
+def fail_if_failed(name: str, rec: dict, extra: dict | None = None) -> None:
+    """A failed coupledFoam run: write its record (pass False, with the
+    failure reasons and the log tail) and fail the test loudly."""
+    if not rec.get("failed"):
+        return
+    rec.update(extra or {})
+    rec["pass"] = False
+    results.write("tests", name, rec)
+    pytest.fail(f"coupledFoam run {name} failed "
+                f"({'; '.join(rec.get('failure') or [])}):\n"
+                f"{rec.get('logTail')}", pytrace=False)
 
 
 # ---------------------------------------------------------------------------
@@ -402,9 +482,13 @@ CONTINUATION_CASES = ("T4a", "T4b", "T5")
 
 
 def default_n_extra(case_name: str) -> int:
-    """Continuation length of a cached reference: the averaging window W of
-    its budget (T4a 1500, T4b 2000, T5 2500)."""
-    return run_bench.stat_window(
+    """Continuation length of a cached reference: the per-run window of its
+    budget, max(300, n/2) (T4a 1500, T4b 2000, T5 1000). Deliberately NOT
+    the common force window of D-068 (400): the existing continuations of
+    ref_T4a / ref_T4b have these lengths and are reused (a different
+    length would be refused as chaining), and a longer reference average
+    is the better estimate of the reference mean field."""
+    return run_bench.per_run_window(
         run_bench.CASES[case_name]["iters"]["simpleFoam"])
 
 
@@ -561,7 +645,8 @@ def mean_field_comparison(case: Path, rec: dict, ref_case: Path, ref: dict,
 
 STAT_KEYS = ("W", "iterations_run", "Cd_mean", "Cd_std", "Cl_mean", "Cl_std",
              "Cd_drift", "Cd_driftTol", "Cl_drift", "Cl_driftTol",
-             "stationary", "iters_to_stationary")
+             "stationary", "iters_to_stationary", "windowRule",
+             "W_perRun", "iters_to_stationary_perRun", "stationary_perRun")
 
 
 def compare(rec: dict, ref: dict, tol_cd: float = TOL_CD,
@@ -601,10 +686,14 @@ def compare(rec: dict, ref: dict, tol_cd: float = TOL_CD,
 
 
 def _speedups(out: dict, rec: dict, ref: dict) -> None:
-    if rec.get("wallToConv_s") and ref.get("wallToConv_s"):
-        out["speedupWall"] = ref["wallToConv_s"] / rec["wallToConv_s"]
-    if rec.get("cpuHoursToConv") and ref.get("cpuHoursToConv"):
-        out["speedupCpu"] = ref["cpuHoursToConv"] / rec["cpuHoursToConv"]
+    """Speed-ups simpleFoam / coupledFoam to the common-window stationary
+    point (D-068) and, for information, to the per-run-window points."""
+    for key, sfx in (("", ""), ("_perRun", "_perRun")):
+        w, c = f"wallToConv_s{key}", f"cpuHoursToConv{key}"
+        if rec.get(w) and ref.get(w):
+            out[f"speedupWall{sfx}"] = ref[w] / rec[w]
+        if rec.get(c) and ref.get(c):
+            out[f"speedupCpu{sfx}"] = ref[c] / rec[c]
 
 
 def _compare_mean(rec: dict, ref: dict, field: dict | None = None) -> dict:
@@ -701,12 +790,15 @@ def test_T4(foam, variant):
 
     ref_case, ref = reference(
         TEMPLATE, mesh, f"ref_T4{variant}_np{NP}", mesh_args,
-        budget_sets("simpleFoam", budget["simpleFoam"]), oscillatory=osc)
+        budget_sets("simpleFoam", budget["simpleFoam"]), oscillatory=osc,
+        case_name=f"T4{variant}")
 
     name = f"T4{variant}_np{NP}"
     case, rec = run_solver(
         TEMPLATE, mesh, name, "coupledFoam", mesh_args,
-        budget_sets("coupledFoam", budget["coupledFoam"]), oscillatory=osc)
+        budget_sets("coupledFoam", budget["coupledFoam"]), oscillatory=osc,
+        case_name=f"T4{variant}")
+    fail_if_failed(name, rec, {"case": f"T4{variant}", "reference": ref})
 
     # mean-field delta comparison (D-042 addendum); a cached reference
     # without mean fields is continued once with averaging
@@ -715,6 +807,7 @@ def test_T4(foam, variant):
     cmp = compare(rec, ref, oscillatory=osc, field=field)
     meshing = cfcase.RUN_ROOT / f"T4{variant}_mesh" / "meshing.json"
     rec.update(cmp)
+    rec.update(speedup_record(ref_case, ref))
     rec.update({
         "case": f"T4{variant}", "meshDir": str(mesh),
         "meshing": json.loads(meshing.read_text()) if meshing.exists() else None,
