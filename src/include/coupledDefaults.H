@@ -103,6 +103,11 @@ constexpr label startupUpwindIters = 50;
 constexpr doubleScalar startupSwitchR = 1e-2;    // 7.4, D-008
 constexpr doubleScalar nonOrthLimiter = 0.5;
 
+// Under-relaxation of the block smoother update per sweep (OPUS_TASKS
+// TASK 1d, D-043): x += smootherRelaxation * (smoothed - x). 1 = the
+// undamped smoother, bit-identical to the implementation before D-043.
+constexpr doubleScalar smootherRelaxation = 1.0;
+
 // Orthogonal-mesh shortcut of nonOrthCorrection: the mesh counts as
 // orthogonal if max |k_f| <= this value, k_f the native (dimensionless)
 // non-orthogonal correction vector, |k_f| = tan(non-orthogonality angle).

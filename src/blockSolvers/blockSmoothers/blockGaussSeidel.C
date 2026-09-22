@@ -102,12 +102,26 @@ void Foam::blockGaussSeidel::smooth
                 );
             }
 
-            block4Ops::matVec
-            (
-                rDPtr + celli*blockSize,
-                t,
-                xPtr + celli*blockDim
-            );
+            if (damped_)
+            {
+                // x_c = x_c + relax*(x_GS - x_c)
+                blockScalar xg[blockDim];
+                block4Ops::matVec(rDPtr + celli*blockSize, t, xg);
+                blockScalar* xc = xPtr + celli*blockDim;
+                for (label k = 0; k < blockDim; ++k)
+                {
+                    xc[k] += relax_*(xg[k] - xc[k]);
+                }
+            }
+            else
+            {
+                block4Ops::matVec
+                (
+                    rDPtr + celli*blockSize,
+                    t,
+                    xPtr + celli*blockDim
+                );
+            }
 
             // Push the lower contribution of the updated x into bPrime
             for (label facei = fStart; facei < fEnd; ++facei)

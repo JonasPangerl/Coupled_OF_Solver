@@ -181,9 +181,20 @@ void Foam::blockILU0::smooth
 
         blockScalar* __restrict__ xPtr = x.data();
         const blockScalar* __restrict__ wPtr = w_.cdata();
-        for (label i = 0; i < n; ++i)
+        if (damped_)
         {
-            xPtr[i] += wPtr[i];
+            const blockScalar a = relax_;
+            for (label i = 0; i < n; ++i)
+            {
+                xPtr[i] += a*wPtr[i];
+            }
+        }
+        else
+        {
+            for (label i = 0; i < n; ++i)
+            {
+                xPtr[i] += wPtr[i];
+            }
         }
     }
 }

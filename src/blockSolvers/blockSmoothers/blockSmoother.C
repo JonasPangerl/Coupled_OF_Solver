@@ -5,6 +5,7 @@
 
 #include "blockSmoother.H"
 #include "coupledDefaults.H"
+#include "blockScalar.H"
 
 // * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * //
 
@@ -32,8 +33,27 @@ Foam::blockSmoother::blockSmoother
             coupledDefaults::pivotGuard
         )
     ),
-    nSingular_(0)
-{}
+    nSingular_(0),
+    relax_
+    (
+        narrow
+        (
+            dict.getOrDefault<doubleScalar>
+            (
+                "smootherRelaxation",
+                coupledDefaults::smootherRelaxation
+            )
+        )
+    ),
+    damped_(relax_ != blockScalar(1))
+{
+    if (!(relax_ > 0) || relax_ > 1)
+    {
+        FatalIOErrorInFunction(dict)
+            << "smootherRelaxation must be in (0, 1], got " << relax_
+            << exit(FatalIOError);
+    }
+}
 
 
 // * * * * * * * * * * * * * * * * Selectors * * * * * * * * * * * * * * * * //
