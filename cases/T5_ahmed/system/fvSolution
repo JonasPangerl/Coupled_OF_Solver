@@ -23,7 +23,7 @@ solvers
     {
         solver          blockFGMRES;
         preconditioner  blockGAMG;
-        tolerance       1e-8;
+        tolerance       1e-10;          // below R1*residualTol (D-022, D-038)
         relTol          0.05;
         adaptiveRelTol  yes;
         etaMin          1e-3;
@@ -32,7 +32,7 @@ solvers
         alphaEW         2;
         minIter         1;
         maxIter         200;
-        restart         10;
+        restart         30;             // GMRES(10) stagnates (D-038); 6 above 40 M cells (B7)
         blockGAMG
         {
             agglomerator          faceAreaPair;
@@ -42,7 +42,7 @@ solvers
             cycleType             K;
             kCycleThreshold       0.25;
             kCycleMaxSteps        2;
-            smoother              blockGaussSeidel;
+            smoother              blockILU0;  // block GS keeps CFL at 1-2 (D-028, D-038)
             nPreSweeps            1;
             nPostSweeps           2;
             nFinestSweeps         2;

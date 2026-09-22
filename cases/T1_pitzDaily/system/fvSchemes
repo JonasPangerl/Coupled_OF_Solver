@@ -33,8 +33,8 @@ divSchemes
     div(phi,U)_upwind   bounded Gauss upwind;
 
     turbulence      bounded Gauss limitedLinear 1;
-    div(phi,k)      $turbulence;
-    div(phi,omega)  $turbulence;
+    div(phi,k)      bounded Gauss upwind;   // D-038: no steady state with limitedLinear
+    div(phi,omega)  bounded Gauss upwind;   // D-038
 
     div((nuEff*dev2(T(grad(U)))))   Gauss linear;
 }

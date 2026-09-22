@@ -22,7 +22,7 @@ solvers
     {
         solver          blockFGMRES;    // blockFGMRES | blockGMRES | blockBiCGStab
         preconditioner  blockGAMG;      // blockDiagonal | blockGAMG
-        tolerance       1e-8;
+        tolerance       1e-10;          // below R1*residualTol = 6e-3*1e-6 (D-022); 1e-8 stalls T1 at R 1.6e-6
         relTol          0.05;           // used only if adaptiveRelTol no
         adaptiveRelTol  yes;            // Eisenstat-Walker (amendment B2)
         etaMin          1e-3;
@@ -31,7 +31,7 @@ solvers
         alphaEW         2;
         minIter         1;
         maxIter         200;
-        restart         10;             // 6 above 40 M cells (B7)
+        restart         30;             // T1: GMRES(10) stagnates, CFL capped ~50 (2026-09-22 T1 study); 6 above 40 M cells (B7)
         blockGAMG
         {
             agglomerator          faceAreaPair;
@@ -40,7 +40,7 @@ solvers
             cycleType             K;
             kCycleThreshold       0.25;
             kCycleMaxSteps        2;
-            smoother              blockGaussSeidel;
+            smoother              blockILU0;  // T1: GS keeps CFL at 1-2 (D-028)
             nPreSweeps            1;
             nPostSweeps           2;
             nFinestSweeps         2;

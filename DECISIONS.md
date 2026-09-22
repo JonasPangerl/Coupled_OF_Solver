@@ -549,3 +549,43 @@ additional boost". Before, beta was read but unused.
 - potentialFoam `-writep` needs `div(div(phi,U))`; it was added to the
   fvSchemes of T1-T5, where every coupledFoam run failed at potentialFoam
   before.
+
+## D-038 - T1 study: linear-solver defaults and T1 k/omega scheme (2026-09-22)
+
+Study: 17 serial runs on T1 (pitzDaily, kOmegaSST, 12225 cells). The
+logs are in run/exp_T1_*; the summary is run/exp_T1_results.txt.
+
+Findings:
+1. With the tutorial's second-order k/omega convection (limitedLinear 1)
+   T1 has no convergent steady state for EITHER solver:
+   - simpleFoam's p residual stalls at 6e-4 and dp wanders by +-0.07 %.
+   - linearUpwind k/omega stalls at 1e-3.
+   - With upwind k/omega simpleFoam converges to 1e-8 in 769 iterations
+     (72 s).
+2. FGMRES restart 10 caps CFL: GMRES(10) stagnates, the linear solve
+   fails at CFL ~50-70, and each failure cuts CFL and holds it. With
+   restart 30, CFL reaches 500 without cuts. Block Gauss-Seidel keeps CFL
+   at 1-2 (confirms D-028).
+3. An absolute linear tolerance of 1e-8 cannot reach R < 1e-6 when the
+   normaliser R1 is 6e-3. The linear tolerance must stay below
+   R1*residualTol, as for T0 (D-022).
+4. Eisenstat-Walker is not the cause. Fixed relTol 0.1 or 0.01 was no
+   better, and with frozen turbulence tighter solves made R grow.
+5. The block-GAMG preconditioner is weak on graded, high-aspect-ratio
+   meshes. rho (the first application) is often > 1, and a 0.5 reduction
+   needs 20-60 FGMRES iterations. This leaves coupledFoam about 5x SLOWER
+   than simpleFoam in wall time on T1 (converging configuration: 483 its,
+   364 s; simpleFoam 72 s). Open: FABLE_REVIEW.md item 2.
+
+Decisions:
+- T1-T5 defaults: smoother blockILU0, FGMRES restart 30 (B7: restart 6
+  above 40 M cells stays) and linear tolerance 1e-10. T0 is unchanged
+  (validated).
+- T1 uses `bounded Gauss upwind` for div(phi,k) and div(phi,omega) for
+  BOTH solvers, and relaxes k/omega by 0.95 in coupledFoam.
+  - Spec 14 still holds: both solvers use identical schemes.
+  - The pass criteria are unchanged; they compare against simpleFoam on
+    the same case files.
+  - The upwind k/omega answer differs from the limitedLinear one by
+    0.95 % in dp (stalled limitedLinear simpleFoam as the reference).
+  - The paper reports this deviation from the tutorial.

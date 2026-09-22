@@ -5,7 +5,7 @@ relaxationFactors
 {
     equations
     {
-        k               0.7;
-        omega           0.7;
+        k               0.95;   // D-038 (T1 study)
+        omega           0.95;
     }
 }
