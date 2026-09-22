@@ -217,7 +217,9 @@ def read_sf(case: Path) -> dict | None:
         n = len(ex)
         for f in set(res) | set(cur_r):
             for store, cur in ((res, cur_r), (fin, cur_f), (nit, cur_n)):
-                lst = store.setdefault(f, [np.nan] * (n - 1))
+                lst = store.get(f)
+                if lst is None:      # first appearance: NaN before it
+                    lst = store[f] = [np.nan] * (n - 1)
                 lst.append(cur.get(f, np.nan))
 
     with open(log, errors="replace") as fh:
@@ -1329,17 +1331,20 @@ def tex_section(run, title, made, info, status) -> str:
         L += [r"\begin{itemize}\setlength{\itemsep}{0pt}\small"]
         L += [rf"\item {x}." for x in s]
         L += [r"\end{itemize}", ""]
+    marker = ("dash-dot: iterations to a stationary window (D-042)"
+              if _oscillatory(run) else
+              "dash-dot-dot: criterion 12.3(ii) met")
     caps = {
         "loads": "monitored quantities per outer iteration (left) and over "
                  "wall-clock time (right), both solvers on the same axes; "
                  "thin line or light band: per-iteration values (long runs: "
                  "min--max per bin with the bin median), dashed with band: "
-                 "running mean $\\pm$RMS over the D-042 window $W$, shaded: "
-                 "final averaging window, dash-dot: iterations to a "
-                 "stationary window, solid: user convergence point (D-060); "
-                 "triangles at the axis edge mark start-up values outside "
-                 "the plotted range; runs of very different length get a "
-                 "second row per quantity zoomed on the shorter run",
+                 "running mean $\\pm$RMS over the averaging window $W$, "
+                 f"shaded: final averaging window, {marker}, solid: user "
+                 "convergence point (D-060, if set); triangles at the axis "
+                 "edge mark start-up values outside the plotted range; runs "
+                 "of very different length get zoom panels on the shorter "
+                 "run (an extra column, or a second row per quantity)",
         "residuals": "residuals per outer iteration (left, each solver on its "
                      "own iteration axis) and over wall-clock time (right, "
                      "same axis for both solvers; inset: zoom on the shorter "

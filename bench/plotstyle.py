@@ -157,12 +157,15 @@ def decimate(x, y, nmax: int = 1500):
     x, y = np.asarray(x, float), np.asarray(y, float)
     if len(x) <= nmax:
         return x, y
-    e = _edges(len(x), nmax)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        bx = np.array([np.nanmean(x[a:b]) for a, b in zip(e[:-1], e[1:])])
-        by = np.array([np.nanmean(y[a:b]) for a, b in zip(e[:-1], e[1:])])
-    return bx, by
+    starts = _edges(len(x), nmax)[:-1]
+
+    def binmean(v):
+        fin = np.isfinite(v)
+        s = np.add.reduceat(np.where(fin, v, 0.0), starts)
+        c = np.add.reduceat(fin.astype(float), starts)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.where(c > 0, s / np.maximum(c, 1.0), np.nan)
+    return binmean(x), binmean(y)
 
 
 def _edges_xlog(x: np.ndarray, nbins: int) -> np.ndarray:
