@@ -61,7 +61,7 @@ heavy_lane() {
     say "heavy lane start"
     for t in "test_T4_motorBike.py::test_T4[a]" "test_T4_motorBike.py::test_T4[b]" "test_T5_ahmed.py::test_T5"; do
         say "heavy: $t"
-        CF_FORCE_HEAVY=1 CF_HEAVY_NP=10 CF_MPI_CPUSET=0-19 CF_T5_MESH=coarse nice -n 19 $PY -m pytest "tests/$t" --heavy -q -p no:cacheprovider \
+        CF_FORCE_HEAVY=1 CF_HEAVY_NP=10 CF_MPI_CPUSET=0-9 CF_T5_MESH=coarse nice -n 19 $PY -m pytest "tests/$t" --heavy -q -p no:cacheprovider \
             > $R/run/final_heavy_$(echo $t | tr -c 'A-Za-z0-9' '_').log 2>&1
         say "heavy: $t -> $(grep -E 'passed|failed' $R/run/final_heavy_$(echo $t | tr -c 'A-Za-z0-9' '_').log | tail -1)"
     done
@@ -103,9 +103,9 @@ fi
 if has bench; then
     say "benchmark start"
     # D-059: heavy cases 1 repetition; T4a every configuration, T4b/T5 only E
-    CF_HEAVY_NP=10 CF_MPI_CPUSET=0-19 nice -n 19 $PY bench/run_bench.py --cases T4a --no-scope --repeats 1 > $R/run/final_bench_T4a.log 2>&1
+    CF_HEAVY_NP=10 CF_MPI_CPUSET=0-9 nice -n 19 $PY bench/run_bench.py --cases T4a --no-scope --repeats 1 > $R/run/final_bench_T4a.log 2>&1
     say "benchmark T4a rc $?"
-    CF_HEAVY_NP=10 CF_MPI_CPUSET=0-19 CF_T5_MESH=coarse nice -n 19 $PY bench/run_bench.py --cases T4b,T5 --configs E --repeats 1 > $R/run/final_bench_T4bT5.log 2>&1
+    CF_HEAVY_NP=10 CF_MPI_CPUSET=0-9 CF_T5_MESH=coarse nice -n 19 $PY bench/run_bench.py --cases T4b,T5 --configs E --repeats 1 > $R/run/final_bench_T4bT5.log 2>&1
     say "benchmark T4b/T5 rc $?"
 fi
 
