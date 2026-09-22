@@ -20,11 +20,29 @@ directive: the fastest solver, not the fewest iterations).
 Figures whose data is missing are skipped with a note (the report lists
 them), so the generator runs at every stage of the project.
 
-Usage: bench/make_report.py            (no OpenFOAM environment needed)
+Staleness guard (OPUS_TASKS TASK 6): every table row, figure and number
+comes only from results whose gitCommit is the target commit (--commit,
+default `git rev-parse HEAD`) and from run directories whose
+provenance.json names that commit (tests/cflib/provenance.py; simpleFoam
+reference directories are exempt, they are produced by the system
+OpenFOAM). Everything else is left out - the papers show their "pending"
+placeholders - and is listed in tables/missing_results.tex, the appendix
+"Missing or stale results" of both papers. Before generating, the guard
+removes every previously generated figure, table and numbers.tex, so no
+output of an earlier run survives. --allow-stale restores the old
+behaviour (use whatever exists, keep earlier outputs); the stale items are
+still listed and both title pages carry a warning. results/exploratory
+(historical studies of run/exp_*, no commit recorded) are stale unless
+--allow-historical is given (then used and listed as historical).
+
+Usage: bench/make_report.py [--commit SHA] [--allow-stale]
+                            [--allow-historical]
+       (no OpenFOAM environment needed)
 """
 
 from __future__ import annotations
 
+import argparse
 import functools
 import json
 import subprocess
@@ -40,7 +58,7 @@ import numpy as np  # noqa: E402
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tests"))
 sys.path.insert(0, str(REPO / "bench"))
-from cflib import logs, post  # noqa: E402
+from cflib import logs, post, provenance  # noqa: E402
 import run_bench  # noqa: E402
 
 RESULTS = REPO / "results"
@@ -85,6 +103,164 @@ plt.rcParams.update({
 notes: list[str] = []
 numbers: dict[str, str] = {}
 figures: list[tuple[str, str]] = []
+
+# --------------------------------------------------------------------------- #
+# staleness guard (TASK 6)
+# --------------------------------------------------------------------------- #
+
+# The guard of this report run (set in main from --commit/--allow-stale)
+GUARD = provenance.Guard(None, enabled=False)
+ALLOW_HISTORICAL = False
+
+# Result records the final re-run produces (TASK 6 step 3; fnmatch
+# patterns over results/tests/*.json stems). A pattern without any record
+# is listed as missing in the appendix.
+EXPECTED_TESTS = [
+    "T0_Re100_np1", "T0_Re100_np4", "T0_Re1000_np1", "T0_Re1000_np4",
+    "T1_np1", "T1_np4", "T2_np1", "T2_np4",
+    "T3_kOmegaSST_np1", "T3_kOmegaSST_np4", "T3_GEKO_np1", "T3_GEKO_np4",
+    "T4a_np*", "T4b_np*", "T5_np*",
+    "T-restart_T1", "T-restart_T3-SST", "T-fpe_*", "T_scaling_T4b",
+    "diagnostics_*", "Test-*", "test_env",
+]
+# results/exploratory records the report quotes
+EXPLORATORY_USED = ("re1000", "linsolver", "symbol", "decisions")
+
+
+def guard_tests(tests: dict) -> dict:
+    """Test records at the target commit (all of them with --allow-stale);
+    rejected and missing ones go to the appendix."""
+    import fnmatch  # noqa: PLC0415
+    ok = {n: d for n, d in tests.items() if GUARD.check_record(n, d)}
+    for pat in EXPECTED_TESTS:
+        if not any(fnmatch.fnmatch(n, pat) for n in tests):
+            GUARD.missing(pat.replace("*", "<n>") if pat.endswith("_np*")
+                          else pat, "result record")
+    return ok
+
+
+def guard_bench(rows: list[dict]) -> list[dict]:
+    ok = [d for d in rows if GUARD.check_record(
+        f"bench {d.get('case')} {d.get('config')} run {d.get('run', '?')}", d)]
+    if not rows:
+        GUARD.missing("benchmark A-H", "results/bench/*.json")
+    return ok
+
+
+def run_ok(case: Path) -> bool:
+    """A coupledFoam run directory may be read (provenance at the target
+    commit, or --allow-stale)."""
+    return GUARD.check_run(case)
+
+
+def purge_generated() -> int:
+    """Remove every output of earlier report runs (figures, tables,
+    numbers.tex, REPORT.md figures) so that nothing of another commit can
+    survive: what is not regenerated becomes 'pending'. The ParaView
+    renders are pruned separately (prune_renders), because pvbatch may be
+    unavailable."""
+    n = 0
+    for d, pats in ((FIG_PDF, ("*.pdf", "*.png", "*.tex", "*.json")),
+                    (FIG_PNG, ("*.png",)), (TABLES, ("*.tex",))):
+        if not d.is_dir():
+            continue
+        for pat in pats:
+            for f in d.glob(pat):
+                if f.name.startswith("render_"):
+                    continue
+                f.unlink()
+                n += 1
+    for f in (PAPER / "numbers.tex",):
+        if f.exists():
+            f.unlink()
+            n += 1
+    return n
+
+
+RENDER_PROVENANCE = "render_provenance.json"
+
+
+def prune_renders() -> None:
+    """ParaView renders: keep a render_*.png only if
+    figures/render_provenance.json (written by bench/render_fields.py)
+    says its coupledFoam panels came from a run at the target commit, or it
+    has no coupledFoam panels. Without --allow-stale the others are
+    deleted (pending); with it they are kept and listed."""
+    pf = FIG_PDF / RENDER_PROVENANCE
+    try:
+        prov = json.loads(pf.read_text()) if pf.exists() else {}
+    except json.JSONDecodeError:
+        prov = {}
+    for f in sorted(FIG_PDF.glob("render_*.png")):
+        p = prov.get(f.name)
+        if p is None:
+            ok = GUARD.check_record(f.stem, {}, "ParaView render "
+                                    "(no render provenance)")
+        elif not p.get("cfUsed"):
+            ok = True       # simpleFoam reference and geometry only
+        else:
+            ok = GUARD.check_record(
+                f.stem, {"gitCommit": p.get("cfCommit"),
+                         "timestamp": p.get("date")},
+                f"ParaView render of run/{p.get('cfRun')}")
+        if not ok:
+            f.unlink()
+            notes.append(f"render {f.name}: stale, removed (pending)")
+
+
+def write_missing_table() -> None:
+    """tables/missing_results.tex: the appendix 'Missing or stale results'
+    of both papers (always written, also when nothing is missing)."""
+    TABLES.mkdir(parents=True, exist_ok=True)
+    tgt = (GUARD.target or "unknown")[:7]
+    rows = GUARD.rows()
+    mode = ("\\texttt{-{}-allow-stale}: the items marked ``used (stale)'' "
+            "ARE INCLUDED in this document although they do not come from "
+            "the target commit" if GUARD.allow_stale else
+            "items not produced at the target commit are left out and "
+            "shown as ``pending'' in the text")
+    head = [
+        "% Generated by bench/make_report.py - do not edit",
+        rf"Target commit \texttt{{{tgt}}} (\texttt{{{tex_escape(GUARD.target or '')}}}); "
+        + mode + ". A result counts when its record "
+        r"(\texttt{results/*/<name>.json}, field \texttt{gitCommit}) or its "
+        r"run directory (\texttt{provenance.json}, written by the test "
+        r"harness at the start of every run) names this commit and a clean "
+        r"source tree. The \code{simpleFoam} reference runs are exempt from "
+        r"the run check (untouched system OpenFOAM, cached). "
+        rf"Items listed: {len(rows)}.",
+        "",
+    ]
+    if not rows:
+        body = [r"\noindent All results used in this document were produced "
+                rf"at commit \texttt{{{tgt}}}; nothing is missing.", ""]
+    else:
+        body = [
+            r"{\small",
+            r"\begin{longtable}{@{}p{0.21\linewidth}p{0.31\linewidth}"
+            r"p{0.15\linewidth}p{0.1\linewidth}p{0.1\linewidth}@{}}",
+            r"\caption{Missing or stale results (generated).}"
+            r"\label{tab:missing}\\",
+            r"\toprule case / record & item (reason) & found commit & date "
+            r"& status\\ \midrule\endfirsthead",
+            r"\toprule case / record & item (reason) & found commit & date "
+            r"& status\\ \midrule\endhead",
+            r"\bottomrule\endlastfoot",
+        ]
+        for r in rows:
+            found = str(r["found"])
+            found = found if found == "none" else found[:15]
+            date = str(r["date"] or "").replace("T", " ")[:16]
+            body.append(
+                " & ".join([
+                    r"\texttt{" + tex_escape(r["case"]) + "}",
+                    tex_escape(r["item"]) + r" \newline{\footnotesize ("
+                    + tex_escape(r["reason"]) + ")}",
+                    r"{\footnotesize\texttt{" + tex_escape(found) + "}}",
+                    tex_escape(date).replace(" ", r"\newline "),
+                    tex_escape(r["status"])]) + r"\\")
+        body += [r"\end{longtable}", "}", ""]
+    (TABLES / "missing_results.tex").write_text("\n".join(head + body))
 
 
 # --------------------------------------------------------------------------- #
@@ -214,6 +390,9 @@ def fig_T0_profiles() -> None:
     for re_ in (100, 1000):
         cp = RUN / f"T0_Re{re_}_np1"
         rp = RUN / f"ref_T0_Re{re_}"
+        if cp.is_dir() and not run_ok(cp):
+            notes.append(f"T0 Re{re_} profiles: run {cp.name} stale, pending")
+            continue
         try:
             cv = post.read_xy(post.sets_file(cp, "centreLines", "vertical"))
             ch = post.read_xy(post.sets_file(cp, "centreLines", "horizontal"))
@@ -692,7 +871,7 @@ def _gamg_record(name: str, d: dict) -> dict:
     level, ratios, coarsest solver, cycle after autoTune)."""
     g = dict(d.get("gamg") or {})
     log = RUN / name / "log.coupledFoam"
-    if log.exists():
+    if log.exists() and run_ok(RUN / name):
         for k, v in logs.gamg_log_stats(log).items():
             if g.get(k) is None:
                 g[k] = v
@@ -805,7 +984,7 @@ def cf_timeline(case: Path) -> dict | None:
     (cumulative tIter, scaled so that its end equals the solver wall time of
     postProcessing/coupledFoam/summary.json when it exists)."""
     log = case / "log.coupledFoam"
-    if not log.exists() or _busy(case):
+    if not log.exists() or _busy(case) or not run_ok(case):
         return None
     rows = [r for r in logs.parse_cf(log) if "R" in r and "tIter" in r]
     if not rows:
@@ -1149,6 +1328,10 @@ def fig_fields() -> None:
         cmd = ["nice", "-n", "19", pv, "--force-offscreen-rendering",
                str(REPO / "bench" / "render_fields.py"),
                "--out", str(FIG_PDF)]
+        if GUARD.enabled:
+            cmd += ["--commit", GUARD.target]
+            if GUARD.allow_stale:
+                cmd.append("--allow-stale")
         try:
             p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
                                timeout=3600)
@@ -1162,6 +1345,8 @@ def fig_fields() -> None:
                     notes.append("3D renders: " + n)
         except (OSError, subprocess.TimeoutExpired) as e:
             notes.append(f"3D renders failed: {e}")
+    if GUARD.enabled:
+        prune_renders()
 
 
 def fig_iteration_histories() -> None:
@@ -1191,6 +1376,24 @@ def exploratory_numbers() -> None:
     if not ex:
         notes.append("exploratory numbers: run bench/exploratory_numbers.py")
         return
+    # staleness guard: these records describe historical studies of
+    # run/exp_* and carry no gitCommit; used only with --allow-historical
+    for k in EXPLORATORY_USED:
+        d = ex.get(k)
+        if d is None:
+            GUARD.missing(f"exploratory {k}", f"results/exploratory/{k}.json")
+            continue
+        if GUARD.matches(d.get("gitCommit")):
+            continue
+        if ALLOW_HISTORICAL:
+            GUARD.historical(f"exploratory {k}",
+                             f"results/exploratory/{k}.json",
+                             d.get("gitCommit"), d.get("timestamp"),
+                             "historical study (run/exp_*), accepted by "
+                             "--allow-historical")
+        elif not GUARD.check_record(f"exploratory {k}", d,
+                                    f"results/exploratory/{k}.json"):
+            ex.pop(k)
     re1 = (ex.get("re1000") or {}).get("runs") or {}
     for run, keys in (
         ("default", (("cflCutsTotal", "{}"), ("iterations", "{}"),
@@ -1247,9 +1450,52 @@ def exploratory_numbers() -> None:
 # main
 # --------------------------------------------------------------------------- #
 
-def main() -> int:
-    tests = load_json("tests")
-    bench = load_bench()
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--commit", default=None,
+                    help="target commit (sha, tag, branch); default: "
+                    "git rev-parse HEAD")
+    ap.add_argument("--allow-stale", action="store_true",
+                    help="use results of other commits too (old behaviour); "
+                    "they are listed and the title pages carry a warning")
+    ap.add_argument("--allow-historical", action="store_true",
+                    help="use results/exploratory (historical studies "
+                    "without a commit) and list them as historical")
+    return ap.parse_args(argv)
+
+
+def setup_guard(a: argparse.Namespace) -> None:
+    global GUARD, ALLOW_HISTORICAL
+    rev = a.commit or "HEAD"
+    target = provenance.git_resolve(rev)
+    if target is None:
+        # a commit not in this clone (e.g. a short sha of another clone)
+        if a.commit and len(a.commit) >= 7:
+            target = a.commit
+        else:
+            sys.exit(f"make_report: cannot resolve commit {rev!r}")
+    GUARD = provenance.Guard(target, allow_stale=a.allow_stale)
+    provenance.ACTIVE = GUARD
+    ALLOW_HISTORICAL = a.allow_historical
+    dirty = provenance.git_dirty_files()
+    if dirty and target == provenance.git_head():
+        print(f"make_report: note: working tree has modified tracked files "
+              f"({len(dirty)}); results are matched against the commit "
+              f"{target[:7]} only", flush=True)
+    if a.allow_stale:
+        print("#" * 72 + "\n# make_report: --allow-stale: results of OTHER "
+              "commits are used; the PDFs\n# carry a warning on the title "
+              "page\n" + "#" * 72, flush=True)
+    else:
+        n = purge_generated()
+        print(f"make_report: guard on commit {target[:7]}: removed {n} "
+              "previously generated outputs", flush=True)
+
+
+def main(argv: list[str] | None = None) -> int:
+    setup_guard(parse_args(argv))
+    tests = guard_tests(load_json("tests"))
+    bench = guard_bench(load_bench())
 
     fig_T0_profiles()
     fig_histories(tests)
@@ -1269,14 +1515,32 @@ def main() -> int:
     fig_fields()
     fig_iteration_histories()
 
-    t0 =tests.get("T0_Re100_np1", {})
-    num("T0 Re100 iterations", t0.get("iterations"), "{}")
-    num("T0 Re100 l2u", t0.get("l2rel_u"), "{:.1e}")
-    num("T0 Re100 l2v", t0.get("l2rel_v"), "{:.1e}")
-    num("T0 Re100 native iterations",
-        (t0.get("reference") or {}).get("iterations"), "{}")
-    num("commit", git_commit())
+    t0 = tests.get("T0_Re100_np1")
+    if t0 is not None:      # no record: the macros stay undefined (pending)
+        num("T0 Re100 iterations", t0.get("iterations"), "{}")
+        num("T0 Re100 l2u", t0.get("l2rel_u"), "{:.1e}")
+        num("T0 Re100 l2v", t0.get("l2rel_v"), "{:.1e}")
+        num("T0 Re100 native iterations",
+            (t0.get("reference") or {}).get("iterations"), "{}")
+    num("commit", GUARD.target[:7] if not GUARD.allow_stale
+        else git_commit())
+    num("target commit", GUARD.target[:7])
     num("b7 anderson GB", 320 * B7_CELLS / 1e9, "{:.1f}")
+
+    # staleness guard: appendix table and title-page notes
+    write_missing_table()
+    nrej = GUARD.n_rejected
+    num("missing count", nrej, "{}")
+    if GUARD.allow_stale and nrej:
+        num("stale warning",
+            rf"WARNING: built with \texttt{{-{{}}-allow-stale}}. {nrej} results "
+            r"from other commits or without provenance are INCLUDED; they "
+            r"are listed in Appendix~\ref{app:missing}.")
+    elif nrej:
+        num("missing note",
+            rf"{nrej} results are missing or stale for commit "
+            rf"\texttt{{{GUARD.target[:7]}}} and are shown as pending "
+            r"(Appendix~\ref{app:missing}).")
 
     PAPER.mkdir(parents=True, exist_ok=True)
     (PAPER / "numbers.tex").write_text(
@@ -1336,12 +1600,35 @@ def main() -> int:
            "bench/exploratory_numbers.py", "bench/make_report.py",
            "cd report/paper && latexmk -pdf paper.tex",
            "```", ""]
+    grows = GUARD.rows()
+    md += ["## Missing or stale results", "",
+           f"Target commit `{GUARD.target}`"
+           + (" (**--allow-stale: stale items are INCLUDED**)"
+              if GUARD.allow_stale else "") + ".", ""]
+    if grows:
+        md += ["| case | item | found commit | date | status | reason |",
+               "|---|---|---|---|---|---|"]
+        md += [f"| {r['case']} | {r['item']} | {r['found']} | {r['date']} "
+               f"| {r['status']} | {r['reason']} |" for r in grows]
+    else:
+        md += ["Nothing missing."]
+    md += [""]
     if notes:
         md += ["## Generator notes", ""] + [f"- {n}" for n in notes] + [""]
     (REPORT / "REPORT.md").write_text("\n".join(md))
     print(f"figures: {len(figures)}, numbers: {len(numbers)}, notes: {len(notes)}")
     for n in notes:
         print("note:", n)
+    print(f"staleness guard: target {GUARD.target[:7]}, "
+          f"{GUARD.n_rejected} missing/stale item(s)"
+          + (" INCLUDED (--allow-stale)" if GUARD.allow_stale else
+             " rendered as pending"))
+    for r in grows:
+        print(f"  {r['status']:>17}  {r['case']:<34} {r['item']:<40} "
+              f"found {r['found']}")
+    if GUARD.allow_stale and GUARD.n_rejected:
+        print("#" * 72 + "\n# WARNING: --allow-stale: the report contains "
+              f"{GUARD.n_rejected} stale item(s)\n" + "#" * 72)
     return 0
 
 
