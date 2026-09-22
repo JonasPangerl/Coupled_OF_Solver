@@ -249,6 +249,16 @@ private:
         //- Deep diagnostics (TASK 5; null: off), set by the preconditioner
         mutable diagnostics* diag_;
 
+        //- The outer Krylov solver needs a fixed (linear) preconditioner
+        //  (blockGMRES, blockBiCGStab; set by blockGAMGPrecon through the
+        //  internal key fixedPreconditioner): scaleCorrection, the K cycle
+        //  and an iterative coarsest solve are rejected (D-069 F10)
+        bool fixedPrecon_;
+
+        //- Accept an iterative coarsest solve with a fixed-preconditioner
+        //  solver anyway (keyword allowVariableCoarsest, default no)
+        bool allowVariableCoarsest_;
+
         //- Finest-level face weights of the current matrix-weighted
         //  agglomeration (restart state; empty for geometric, D-069 F4)
         scalarField aggWeights0_;

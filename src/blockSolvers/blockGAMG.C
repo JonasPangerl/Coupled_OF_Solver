@@ -416,6 +416,11 @@ Foam::blockGAMG::blockGAMG
     nCoarsestIters_(0),
     hierarchyVersion_(0),
     diag_(nullptr),
+    fixedPrecon_(dict.getOrDefault<bool>("fixedPreconditioner", false)),
+    allowVariableCoarsest_
+    (
+        dict.getOrDefault<bool>("allowVariableCoarsest", false)
+    ),
     aggWeights0_(),
     restoredAggWeights_(),
     restartUpdates_(-1)
@@ -478,6 +483,15 @@ Foam::blockGAMG::blockGAMG
                 << exit(FatalIOError);
         }
         dict_.set("scaleCorrection", sc);
+        if (fixedPrecon_ && scaleMode_ != 0)
+        {
+            FatalIOErrorInFunction(dict)
+                << "scaleCorrection " << sc << " makes the block-GAMG cycle"
+                << " a variable (data-dependent) preconditioner: it requires"
+                << " solver blockFGMRES; blockGMRES and blockBiCGStab assume"
+                << " a fixed preconditioner (D-069 F10). Use scaleCorrection"
+                << " none or solver blockFGMRES." << exit(FatalIOError);
+        }
     }
     if
     (
@@ -638,6 +652,25 @@ void Foam::blockGAMG::buildHierarchy()
             << ranksPerLevel_.last() << " rank(s)): "
             << (anyDense ? "dense LU" : dict_.get<word>("coarsestSolver"))
             << endl;
+
+        // An iterative coarsest solve (Krylov to a relative tolerance) is
+        // a nonlinear, iteration-dependent operator (D-069 F10)
+        const bool anyIterative =
+            returnReduceOr(hasLevel(L_) && !useDenseLU_, fine_.comm());
+        if (fixedPrecon_ && anyIterative && !allowVariableCoarsest_)
+        {
+            FatalErrorInFunction
+                << "blockGAMG: the coarsest level (" << cellsPerLevel_.last()
+                << " cells, " << ranksPerLevel_.last() << " rank(s)) is"
+                << " solved iteratively (" << dict_.get<word>("coarsestSolver")
+                << "), which makes the cycle a variable preconditioner;"
+                << " blockGMRES and blockBiCGStab assume a fixed one"
+                << " (D-069 F10). Use solver blockFGMRES, a coarsest level"
+                << " that fits the dense LU (one rank, at most "
+                << denseLUMaxCells_ << " cells: nCellsInCoarsestLevel,"
+                << " processorAgglomerator masterCoarsest), or set"
+                << " blockGAMG.allowVariableCoarsest yes." << exit(FatalError);
+        }
     }
 
     allocateWork();
@@ -2223,6 +2256,12 @@ bool Foam::blockGAMG::setCycleType(const cycleKind c) const
     }
     if (c == cycleKind::K)
     {
+        // A fixed-preconditioner Krylov solver cannot take the K cycle
+        // (autoTune promotion refused, D-069 F10)
+        if (fixedPrecon_)
+        {
+            return false;
+        }
         // K workspace may not have been allocated for the start-up cycle
         allocateKWork();
     }
