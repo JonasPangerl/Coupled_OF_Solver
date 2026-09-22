@@ -1594,3 +1594,23 @@ osc-memory, merged):
 3. **T3 Cd/Cl tolerance 2 % -> 5 %** (tests/test_T3_airFoil.py; history:
    0.5 % spec -> 2 % D-046 -> 5 % D-058). User-approved relaxation, not an
    agent loosening.
+
+## D-059 - 12-hour budget of the final re-run (user, 2026-09-22)
+
+The full final re-run (TASK 6) was estimated at 18-24 h, dominated by the
+heavy benchmark (simpleFoam A/B on T4b and T5 alone about 4-5 h) and by
+strong scaling on T4b (serial run several hours). The user asked for about
+12 h and decided:
+
+- **No SMT**: all timing runs on physical cores only (max 16 ranks).
+- **One repetition** of the heavy benchmark cases (T1-T3: 3 repetitions).
+- **T-scaling on T4a** instead of T4b, ranks 1, 2, 4, 8, 12, 16, 150
+  iterations per run with the first 50 excluded
+  (CF_SCALING_MESH=a, CF_SCALING_ITERS=150; results/tests/T_scaling_T4a.json).
+  The pass criterion (coupledFoam efficiency >= 0.8 x simpleFoam) is
+  unchanged.
+- **Heavy benchmark scope**: T4a runs every configuration (A-H and the C7
+  E variants, --no-scope). T4b and T5 run configuration E only; their
+  simpleFoam comparison uses the simpleFoam references of the T4/T5 tests
+  (run/ref_*, same system simpleFoam and tutorial settings, unchanged by
+  coupledFoam commits), which the final re-run keeps.

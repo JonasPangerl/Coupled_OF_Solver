@@ -128,7 +128,10 @@ CASES = {
             "monitor": "forces",
             "iters": {"simpleFoam": 4000, "coupledFoam": 800}, "np": HEAVY_NP,
             "oscillatory": True},
-    "T5": {"template": "T5_ahmed", "args": [], "monitor": "forces",
+    # CF_T5_MESH=coarse: development mesh as in tests/test_T5_ahmed.py (D-059)
+    "T5": {"template": "T5_ahmed",
+           "args": ["-mesh", os.environ.get("CF_T5_MESH", "fine")],
+           "monitor": "forces",
            "iters": {"simpleFoam": 2000, "coupledFoam": 800}, "np": HEAVY_NP,  # user: 2000 for now (D-042 add. 3)
            "oscillatory": True},
 }

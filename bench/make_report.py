@@ -120,7 +120,7 @@ EXPECTED_TESTS = [
     "T1_np1", "T1_np4", "T2_np1", "T2_np4",
     "T3_kOmegaSST_np1", "T3_kOmegaSST_np4", "T3_GEKO_np1", "T3_GEKO_np4",
     "T4a_np*", "T4b_np*", "T5_np*",
-    "T-restart_T1", "T-restart_T3-SST", "T-fpe_*", "T_scaling_T4b",
+    "T-restart_T1", "T-restart_T3-SST", "T-fpe_*", "T_scaling_T4a",
     "diagnostics_*", "Test-*", "test_env",
 ]
 # results/exploratory records the report quotes
@@ -758,7 +758,7 @@ def fig_scaling(tests: dict) -> None:
     ax[2].set_xlabel("ranks")
     ax[2].set_ylabel(f"CPU-h per run ({d.get('iterations', '?')} it.)")
     ax[0].legend(fontsize=7)
-    save(fig, "scaling", "Strong scaling (T-scaling on T4b).")
+    save(fig, "scaling", f"Strong scaling (T-scaling on {d.get('mesh', 'T4b')}).")
     num("scaling ranks max", d.get("efficiencyRanks"), "{}")
     num("scaling rel efficiency", d.get("relativeEfficiency"), "{:.2f}")
 

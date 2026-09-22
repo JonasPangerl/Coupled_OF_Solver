@@ -1194,8 +1194,9 @@ relative on integral quantities. Native references are produced with
   to $R<10^{-5}$.
 \item[T-mrf.] \code{mixerVessel2D} (MRF, SST), torque against
   \code{simpleFoam}; informational, since no threshold is specified (D-009).
-\item[T-scaling.] Strong scaling on T4b with 1, 2, 4, 8 and 10 ranks instead
-  of the specified 1--16 (10-core cap, D-031; recorded as
+\item[T-scaling.] Strong scaling on T4a with 1, 2, 4, 8, 12 and 16 ranks on
+  physical cores, 150 iterations per run, instead of the specified T4b with
+  300 iterations (12-hour budget of the final re-run, D-059; recorded as
   \code{specRanks=false}). Pass: the parallel efficiency of coupledFoam at
   the largest rank count is at least 80\,\% of that of \code{simpleFoam}
   (unchanged threshold; Figure~\ref{fig:scaling}).
@@ -1601,7 +1602,7 @@ time and CPU-hours to convergence.}{fig:benchcycles}
 \cffigure{anderson}{Anderson acceleration on and off (T1, T3-SST): outer
 iterations, wall time and CPU-hours to convergence.}{fig:anderson}
 
-\cffigure{scaling}{Strong scaling on T4b with 1, 2, 4, 8 and 10 ranks (D-031):
+\cffigure{scaling}{Strong scaling on T4a with 1, 2, 4, 8, 12 and 16 ranks (D-059):
 wall time per iteration, parallel efficiency and CPU-hours of the fixed
 iteration count, coupledFoam and simpleFoam. Pass: the parallel efficiency
 of coupledFoam at the largest rank count is at least 80\,\% of that of
