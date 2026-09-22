@@ -143,7 +143,7 @@ int main(int argc, char *argv[])
             "maxLinFails",
             coupledDefaults::maxLinFails
         );
-    // B4 failure definition (D-049): strict = not converged to eta within
+    // B4 failure definition (linFailPolicy): strict = not converged to eta within
     // maxIter; reduction = a capped solve is accepted if it is finite and
     // reduced the true residual to at most linAcceptReduction times the
     // initial one

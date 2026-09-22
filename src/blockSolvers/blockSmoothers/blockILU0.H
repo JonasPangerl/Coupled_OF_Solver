@@ -49,13 +49,13 @@ class blockILU0
 {
     // Private Data
 
-        //- Inverse of the modified diagonal blocks D*^-1, 16 per cell
         //- Pivot-growth limit (0: safeguard off)
         const doubleScalar pivotGrowthLimit_;
 
         //- Cells with the pivot fallback at the last update
         label nPivotFallback_;
 
+        //- Inverse of the modified diagonal blocks D*^-1, 16 per cell
         blockScalarList rD_;
 
         //- Work vectors

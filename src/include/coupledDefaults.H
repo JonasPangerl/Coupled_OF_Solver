@@ -153,7 +153,7 @@ constexpr doubleScalar betaMax = 1.5;
 constexpr doubleScalar betaExp = 1.1;
 constexpr label nHold = 10;
 constexpr label maxLinFails = 3;                 // B4
-// B4 failure definition (D-049): "strict" = not converged to eta within
+// B4 failure definition (linFailPolicy): "strict" = not converged to eta within
 // maxIter is a failure; "reduction" = accepted if finite and the true
 // residual dropped to at most linAcceptReduction * initial
 constexpr const char* linFailPolicy = "strict";
