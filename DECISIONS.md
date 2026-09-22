@@ -679,3 +679,25 @@ exp_T3_nutcap). NOT resolved by this alone: T3-SST still limit-cycles
 (R 1e-3..1e-2) - tracked in FABLE_REVIEW (suspects: PTC aggressiveness
 vs a case simpleFoam needs 20000 relaxed iterations for; k bounding
 firing every iteration; freestream mixed-BC switching).
+
+## D-041 - Hot loops are hand-written; expression templates out of scope (B11 6.5.7)
+
+The block kernels (Amul, residual, smoothers, restriction/prolongation,
+all Krylov vector operations) are hand-written loops over flat
+blockScalar* arrays with __restrict__, `#pragma omp simd` (-fopenmp-simd,
+no OpenMP runtime) and 64-byte aligned storage (alignedList), plus fused
+kernels (axpy_dot, update_residual_norm, fused modified Gram-Schmidt)
+that read each operand once (blockKernels.H). An expression-template
+layer over block fields is explicitly NOT introduced: the dominant
+kernels are a handful of already single-pass, bandwidth-bound loops
+(gate phase_A: Amul 85.6 %, axpy_dot 141.5 % of the STREAM triad on a
+5 M-cell system, results/gates/phase_A.json), OpenFOAM field algebra is
+under 30 % of iteration time and lives in core, and a template layer
+would hide the precision crossings D-001/D-012 require to be explicit.
+The 4x4 matvec uses an explicit 4-wide vector product with an
+in-register transpose that preserves the scalar summation order
+(bit-identical); SIMD reductions reorder double partial sums, which is
+accepted (D-012 keeps accumulation in double; unit tests hold at their
+tolerances) - measured effect: T0 Re100 56 -> 57 outer iterations, i.e.
+inside the trajectory scatter of FABLE_REVIEW item 1, for ~37 % less
+solve time per linear iteration.

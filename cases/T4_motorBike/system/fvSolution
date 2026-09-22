@@ -36,8 +36,10 @@ solvers
         blockGAMG
         {
             agglomerator          faceAreaPair;
+            agglomerationWeights  combined;   // matrix-based (D-039)
+            reagglomerateInterval 50;         // D-039
             mergeLevels           2;
-            nCellsInCoarsestLevel 200;
+            nCellsInCoarsestLevel 20;   // D-039
             processorAgglomerator masterCoarsest;
             cycleType             K;
             kCycleThreshold       0.25;
@@ -45,13 +47,13 @@ solvers
             smoother              blockILU0;  // block GS keeps CFL at 1-2 (D-028, D-038)
             nPreSweeps            1;
             nPostSweeps           2;
-            nFinestSweeps         2;
+            nFinestSweeps         1;    // ILU0 diverges with more (D-039)
             coarsestSolver        blockBiCGStab;
             coarsestTolerance     1e-3;
             coarsestMaxIter       50;
             maxOperatorComplexity 1.5;
             cacheAgglomeration    true;
-            autoTune              yes;
+            autoTune              no;   // unscaled rho misleads it (D-039)
             tuneInterval          50;
             nPostSweepsMax        4;
         }
