@@ -162,6 +162,8 @@ constexpr doubleScalar sfdDeactivateBelowR = 1e-4; // SFD-off after nHold its
 // Ubar = U whenever the Anderson history is flushed (C3); no = keep the
 // filter state (variant)
 constexpr bool sfdResetOnFlush = true;
+// Activation after the start-up phase (D-052); no = from iteration 1
+constexpr bool sfdAfterStartup = true;
 
 // Remediation, static (spec 8.1)
 constexpr bool staticEnabled = true;

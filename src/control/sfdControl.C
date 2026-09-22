@@ -24,6 +24,7 @@ Foam::sfdControl::sfdControl
     Lref_(coupledDefaults::sfdLref),
     deactivateBelowR_(coupledDefaults::sfdDeactivateBelowR),
     resetOnFlush_(coupledDefaults::sfdResetOnFlush),
+    afterStartup_(coupledDefaults::sfdAfterStartup),
     nHold_(nHold),
     UbarPtr_(nullptr),
     chiStar_(0),
@@ -41,6 +42,7 @@ Foam::sfdControl::sfdControl
     deactivateBelowR_ =
         d.getOrDefault<scalar>("deactivateBelowR", deactivateBelowR_);
     resetOnFlush_ = d.getOrDefault<bool>("resetOnFlush", resetOnFlush_);
+    afterStartup_ = d.getOrDefault<bool>("afterStartup", afterStartup_);
 
     // Negated comparisons also reject non-finite input
     if
@@ -117,9 +119,13 @@ void Foam::sfdControl::setReference(const scalar Uref)
 }
 
 
-void Foam::sfdControl::begin(const volVectorField& U)
+void Foam::sfdControl::begin
+(
+    const volVectorField& U,
+    const bool startupDone
+)
 {
-    if (!enabled_ || initialised_)
+    if (!enabled_ || initialised_ || !on_ || (afterStartup_ && !startupDone))
     {
         return;
     }
@@ -127,12 +133,14 @@ void Foam::sfdControl::begin(const volVectorField& U)
     Ub.primitiveFieldRef() = U.primitiveField();
     Ub.boundaryFieldRef() == U.boundaryField();
     initialised_ = true;
+    Info<< "coupledFoam: SFD active from iteration "
+        << mesh_.time().timeIndex() << endl;
 }
 
 
 void Foam::sfdControl::reset(const volVectorField& U)
 {
-    if (!active() || !resetOnFlush_ || !initialised_)
+    if (!active() || !resetOnFlush_)
     {
         return;
     }
@@ -149,7 +157,7 @@ void Foam::sfdControl::update
     const scalarField& rDeltaTV
 )
 {
-    if (!active() || !initialised_)
+    if (!active())
     {
         return;
     }
@@ -288,6 +296,7 @@ void Foam::sfdControl::writeSettings(dictionary& dict) const
     s.add("Lref", Lref_);
     s.add("deactivateBelowR", deactivateBelowR_);
     s.add("resetOnFlush", resetOnFlush_);
+    s.add("afterStartup", afterStartup_);
     s.add("nHold", nHold_);
     dict.add("sfd", s);
 }

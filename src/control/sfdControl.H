@@ -25,8 +25,9 @@ Description
     dt_P = V_P/(V_P/dt_P) of the accepted assembly (after the local limit):
         Ubar_P <- Ubar_P + dt_P/(Delta* + dt_P) (U_P - Ubar_P)
 
-    Ubar (volVectorField USFD) is initialised to U at activation (first
-    iteration), reset to U whenever the Anderson history is flushed (7.5,
+    Ubar (volVectorField USFD) is initialised to U at activation: the first
+    outer iteration after the start-up phase (beta 0 -> 1, D-008/D-048;
+    afterStartup no: the first outer iteration), reset to U whenever the Anderson history is flushed (7.5,
     includes the rollback of 9.3; resetOnFlush no keeps the filter state as
     a variant), written at write times (C6) and read back on restart
     together with the coupledState entries sfdOn, sfdQuiet.
@@ -36,7 +37,7 @@ Description
     stays in the state.
 
     Dictionary: coupled.sfd { enabled chi Delta Lref deactivateBelowR
-    resetOnFlush }.
+    resetOnFlush afterStartup }.
 
 SourceFiles
     sfdControl.C
@@ -69,6 +70,7 @@ class sfdControl
         scalar Lref_;
         scalar deactivateBelowR_;
         bool resetOnFlush_;
+        bool afterStartup_;
         label nHold_;
 
         // State
@@ -110,8 +112,11 @@ public:
 
         bool enabled() const noexcept { return enabled_; }
 
-        //- Forcing active (enabled, reference set, not switched off)
-        bool active() const noexcept { return enabled_ && on_; }
+        //- Forcing active (enabled, activated, not switched off)
+        bool active() const noexcept
+        {
+            return enabled_ && on_ && initialised_;
+        }
 
         //- chi* if active, else 0
         scalar chiStar() const noexcept { return active() ? chiStar_ : 0; }
@@ -124,9 +129,9 @@ public:
         //- chi*, Delta* from Uref (7.2); prints the parameter guidance
         void setReference(const scalar Uref);
 
-        //- Initialise Ubar = U unless initialised or restored (start of an
-        //  outer iteration)
-        void begin(const volVectorField& U);
+        //- Activation: Ubar = U unless initialised or restored (start of an
+        //  outer iteration); with afterStartup only once startupDone
+        void begin(const volVectorField& U, const bool startupDone);
 
         //- Anderson flush: Ubar = U (if active and resetOnFlush)
         void reset(const volVectorField& U);

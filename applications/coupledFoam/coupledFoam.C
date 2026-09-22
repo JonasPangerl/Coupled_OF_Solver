@@ -590,7 +590,7 @@ int main(int argc, char *argv[])
         {
             sfd.setReference(ls.Uref());
         }
-        sfd.begin(U);
+        sfd.begin(U, startupDone);
         assembler.setSFD
         (
             sfd.chiStar(),
