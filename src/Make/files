@@ -41,5 +41,7 @@ io/runInfo.C
 io/coupledState.C
 io/diagnostics.C
 io/diagnosticFields.C
+io/coupledForces.C
+io/coupledForcesFO.C
 
 LIB = $(FOAM_USER_LIBBIN)/libcoupledFoam

@@ -272,6 +272,30 @@ void Foam::convergenceMonitor::record(const Time& runTime)
 }
 
 
+void Foam::convergenceMonitor::record
+(
+    const scalar Cd,
+    const scalar Cl,
+    const scalar Cm,
+    const word& source
+)
+{
+    if (foName_.empty())
+    {
+        foName_ = source;
+        haveCm_ = true;
+        Info<< "convergenceMonitor: using force coefficients of " << foName_
+            << " (Cd, Cl, Cm)" << endl;
+    }
+
+    if (Cd_.size() && Cd == Cd_.last() && Cl == Cl_.last())
+    {
+        return;
+    }
+    addSample(Cd, Cl, Cm);
+}
+
+
 void Foam::convergenceMonitor::writeState(dictionary& dict) const
 {
     // The last window samples are all the criteria and the window

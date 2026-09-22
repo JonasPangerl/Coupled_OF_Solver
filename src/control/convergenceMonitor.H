@@ -123,6 +123,18 @@ public:
         //  produced a new result since the last sample, see the .C file)
         void record(const Time& runTime);
 
+        //- Append Cd, Cl, Cm of a solver-internal evaluation (coupledForces,
+        //  amendment D6) under the source name `source`; a repeated
+        //  (Cd, Cl) pair (evaluation of the restored state after a
+        //  rollback) is not recorded again, as in record(runTime)
+        void record
+        (
+            const scalar Cd,
+            const scalar Cl,
+            const scalar Cm,
+            const word& source
+        );
+
         //- Append one sample directly (record() uses it; unit tests).
         //  Without a force object name yet the source is named "samples".
         void addSample(const scalar Cd, const scalar Cl);
