@@ -610,7 +610,8 @@ def _zoom_ranges(xs: list[float]) -> float | None:
     return 1.04 * min(xs)
 
 
-def _legend_handles(series, marks: dict, extra_label=None, case=None):
+def _legend_handles(series, marks: dict, extra_label=None, case=None,
+                    osc=True):
     """Figure legend of the load plots: per solver the per-iteration data
     and the running mean with its RMS band, then the markers."""
     from matplotlib.lines import Line2D  # noqa: PLC0415
@@ -620,14 +621,18 @@ def _legend_handles(series, marks: dict, extra_label=None, case=None):
         n = len(it)
         W = stat_window(n, case)
         if n > ps.RAW_MAX:
-            h.append(Patch(color=col, alpha=ps.BAND_ALPHA, lw=0))
-            lab.append(f"{solver} per iteration (min-max per bin)")
+            h.append((Patch(color=col, alpha=ps.BAND_ALPHA, lw=0),
+                      Line2D([], [], color=col, lw=ps.LW_RAW)))
+            lab.append(f"{solver} per iteration (line: median per bin, "
+                       "band: min-max per bin)")
         else:
             h.append(Line2D([], [], color=col, lw=ps.LW_RAW))
             lab.append(f"{solver} per iteration")
-        h.append((Patch(color=col, alpha=0.18, lw=0),
-                  Line2D([], [], color=col, lw=ps.LW_MAIN, ls="--")))
-        lab.append(f"{solver} running mean $\\pm$RMS ($W$={W})")
+        if osc:
+            h.append((Patch(color=col, alpha=0.18, lw=0),
+                      Line2D([], [], color=col, lw=ps.LW_MAIN, ls="--")))
+            lab.append(f"{solver} running mean $\\pm$RMS over $W$={W}, "
+                       "from the first stationary window")
     if marks.get("window"):
         h.append(Patch(color="#777777", alpha=0.18, lw=0))
         lab.append("final averaging window")
@@ -723,6 +728,20 @@ def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
                 win = y[n - w:] if w else y
                 info.setdefault("mon", {})[(solver, q)] = (float(np.mean(win)),
                                                            float(np.std(win)))
+        # D-042 running mean only on the wake cases and only from the first
+        # stationary window on (its trailing window then contains no
+        # start-up transient); no running mean on T0-T3 (user, 2026-09-23)
+        its0 = e.get("its") if osc else None
+        for q in list(e["run"]):
+            m, sd = e["run"][q]
+            m, sd = m.copy(), sd.copy()
+            if not osc or not its0:
+                m[:] = np.nan
+                sd[:] = np.nan
+            else:
+                m[:max(int(its0) - 1, 0)] = np.nan
+                sd[:max(int(its0) - 1, 0)] = np.nan
+            e["run"][q] = (m, sd)
         evals[solver] = e
 
     def at_time(it, tt, x):
@@ -788,7 +807,7 @@ def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
                         lw=0, zorder=3 + dz)
                 ax.plot(bx, bm, color=col, lw=ps.LW_MAIN, ls="--",
                         zorder=ps.Z_MEAN + dz)
-                if W >= 2 and n >= W and np.isfinite(x[n - W]):
+                if osc and W >= 2 and n >= W and np.isfinite(x[n - W]):
                     ax.axvspan(x[n - W], np.nanmax(x), color=col, alpha=0.08,
                                lw=0, zorder=ps.Z_SHADE)
                     marks["window"] = True
@@ -834,7 +853,7 @@ def fig_loads(run, title, cf, sf, cfd, sfd, monitor, ph, outdir, info):
     h, lab = _legend_handles(series, marks,
                              "coupledFoam window mean (solver output)"
                              if any(f"{q}Mean" in extra for q in quants) else None,
-                             case=case)
+                             case=case, osc=osc)
     ps.legend_below(fig, h, lab, ncol=2, h_pad=0.6)
     return save(fig, f"hist_{run}_loads", outdir)
 
@@ -1056,6 +1075,19 @@ def fig_overview(group: str, runs: list[str], outdir: Path, log=print) -> str | 
                 W = stat_window(n, case)
                 m = roll(y, W, np.nanmean)
                 m[:max(W - 1, 0)] = np.nan
+                osc_r = run_bench.is_oscillatory(case or "")
+                its0 = None
+                if osc_r:
+                    try:
+                        its0 = run_bench.iters_to_stationary(
+                            {k: list(v) for k, v in qs.items()
+                             if k in ("Cd", "Cl")}, case=case)
+                    except Exception:  # noqa: BLE001
+                        its0 = None
+                if not osc_r or not its0:
+                    m[:] = np.nan
+                else:
+                    m[:max(int(its0) - 1, 0)] = np.nan
                 ok = np.isfinite(tt)
                 x, yy, mm = tt[ok], y[ok], m[ok]
                 tmax = max(tmax, _xmax(x))
@@ -1088,11 +1120,13 @@ def fig_overview(group: str, runs: list[str], outdir: Path, log=print) -> str | 
          Line2D([], [], color=C_COUPLED, lw=ps.LW_MAIN),
          Line2D([], [], color="k", lw=ps.LW_MAIN, ls="--"),
          Line2D([], [], color="k", lw=1.0, ls=":")]
-    lab = ["simpleFoam", "coupledFoam", "running mean over the D-042 window",
-           "final window mean"]
+    lab = ["simpleFoam", "coupledFoam",
+           "running mean over the D-042 window (wake cases, from the first "
+           "stationary window)", "final window mean"]
     if long_any:
         h.append(Patch(color="#777777", alpha=ps.BAND_ALPHA, lw=0))
-        lab.append("per iteration (band: min-max per bin)")
+        lab.append("per iteration (line: median per bin, band: min-max "
+                   "per bin)")
     ps.legend_below(fig, h, lab, ncol=3, h_pad=0.7)
     stem = f"loads_overview_{group}"
     save(fig, stem, outdir)
@@ -1347,13 +1381,17 @@ def tex_section(run, title, made, info, status) -> str:
               ", dash-dot: iterations to a stationary window (D-042)"
               if _oscillatory(run) else
               ", dash-dot-dot: criterion 12.3(ii) met")
+    osc_cap = ("dashed with band: running mean $\\pm$RMS over the "
+               "averaging window $W$, drawn from the first stationary window "
+               "on (D-042), shaded: final averaging window"
+               if _oscillatory(run) else "")
     caps = {
         "loads": "monitored quantities per outer iteration (left) and over "
                  "wall-clock time (right), both solvers on the same axes; "
                  "thin line or light band: per-iteration values (long runs: "
-                 "min--max per bin with the bin median), dashed with band: "
-                 "running mean $\\pm$RMS over the averaging window $W$, "
-                 f"shaded: final averaging window{marker}"
+                 "line = bin median, band = min--max per bin)"
+                 + (", " + osc_cap if osc_cap else "")
+                 + f"{marker}"
                  + (", solid: user convergence point (D-060, if set)" if forces_case else "")
                  + "; triangles at the axis "
                  "edge mark start-up values outside the plotted range; runs "
