@@ -2665,3 +2665,16 @@ application does not belong in the papers. Therefore:
    `results/bench/<case>_SPn_<run>.json` / `_SPc_`. No F1/F2 records
    existed at the time of the rename. Older entries of this file keep the
    old names.
+
+## D-072 - Campaign 2026-09-23 reduced (user, 08:45)
+
+- T4a benchmark: configuration A (simpleFoam, tutorial settings) and the
+  coupledFoam configurations C and H only; configuration B (simpleFoam
+  SIMPLEC) is not run on T4a.
+- Strong scaling on T4a with two rank counts only: 1 and 16 (physical
+  cores), 150 iterations (D-059 otherwise unchanged).
+- T4b is not run in this campaign (D-063: T5 deferred as well).
+- The light benchmark T2 was split into one process per configuration on
+  separate physical cores (user request to use the idle machine): up to
+  ten single-rank runs ran concurrently on separate physical cores; the
+  paper discloses this for the light-case timings.
