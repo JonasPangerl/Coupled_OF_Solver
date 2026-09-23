@@ -95,7 +95,7 @@ def complete_timing(record: dict) -> dict:
 
 def _tag(kind: str, name: str) -> str:
     """Test records of an SP run are <name>_sp (cflib.precision, D11); the
-    benchmark has its own SP configurations (F1, F2) and is not tagged."""
+    benchmark has its own SP configurations (SPn, SPc) and is not tagged."""
     from . import precision  # noqa: PLC0415
     return precision.tag(name) if kind == "tests" else name
 

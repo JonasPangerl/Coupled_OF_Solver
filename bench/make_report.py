@@ -1797,15 +1797,15 @@ def exploratory_numbers() -> None:
 # DP record in "dpRecord". Fields used when present: precision, meshShift
 # (vector or {"vector": ...}), checkMeshDiff (list of checks that differ
 # from DP; empty = gate passed), staticSetSizeDiff, Cd_rel_to_DP, and the
-# usual timing/memory fields. Benchmark configurations F1 (simpleFoam SP)
-# and F2 (coupledFoam SP) are compared with their DP counterparts
-# (record field "dpConfig", default A for F1 and C for F2).
+# usual timing/memory fields. Benchmark configurations SPn (simpleFoam SP)
+# and SPc (coupledFoam SP) are compared with their DP counterparts
+# (record field "dpConfig", default B for SPn (A on T1) and C for SPc).
 
 SP_SUFFIX = "_sp"
 SP_TOL = 0.005          # D11 verdict: monitored quantity within 0.5 % of DP
 # DP counterpart of the SP benchmark configurations (amend-d-forces:
 # run_bench.SP_BASE; the record's dpCounterpart.config wins)
-SP_BENCH_DP = {"F1": "B", "F2": "C"}
+SP_BENCH_DP = {"SPn": "B", "SPc": "C"}
 # monitored integral quantity per case family: (label, record keys)
 SP_QUANTITY = (("C_d", ("Cd", "Cd_mean")), ("dp", ("dp",)),
                ("x_r/h", ("xr_over_h",)))
@@ -1909,7 +1909,7 @@ def sp_section(tests: dict, bench: list[dict]) -> None:
     brows = [d for d in bench if d.get("config") in SP_BENCH_DP]
     num("sp n cases", len(pairs), "{}")
     if not pairs and not brows:
-        notes.append("single precision: no SP records (*_sp, F1/F2) yet")
+        notes.append("single precision: no SP records (*_sp, SPn/SPc) yet")
         num("sp status", "No single-precision runs are available for this "
             "document yet; the tables and the figure of this section are "
             "added when the report is regenerated after the SP runs.")
@@ -1953,7 +1953,7 @@ def sp_section(tests: dict, bench: list[dict]) -> None:
             ms, md = _med(bench, c, cfg, "peakRSS_GB_sum"), \
                 _med(bench, c, dpcfg, "peakRSS_GB_sum")
             perf.append([f"bench {c} ({cfg} vs {dpcfg})",
-                         "simpleFoam" if cfg == "F1" else "coupledFoam",
+                         "simpleFoam" if cfg == "SPn" else "coupledFoam",
                          fmt(wd), fmt(ws), ratio(wd, ws), fmt(cd, "{:.3g}"),
                          fmt(cs, "{:.3g}"), ratio(cd, cs), fmt(md, "{:.3g}"),
                          fmt(ms, "{:.3g}"), ratio(md, ms)])
@@ -1996,12 +1996,12 @@ def sp_section(tests: dict, bench: list[dict]) -> None:
     n_ok = 0
     items = [(dpn, sp, dp) for _, sp, dpn, dp in pairs]
     n_tests = len(items)
-    # benchmark F2 (coupledFoam SP): one record per case (D-063: 1 repeat),
+    # benchmark SPc (coupledFoam SP): one record per case (D-063: 1 repeat),
     # compared by its own <m>_rel_to_DP fields
-    for c in sorted({d["case"] for d in brows if d["config"] == "F2"}):
+    for c in sorted({d["case"] for d in brows if d["config"] == "SPc"}):
         r = next(d for d in sorted(brows, key=lambda x: x.get("run", 0))
-                 if d["case"] == c and d["config"] == "F2")
-        items.append((f"bench {c} (F2)", r, None))
+                 if d["case"] == c and d["config"] == "SPc")
+        items.append((f"bench {c} (SPc)", r, None))
     for dpn, sp, dp in items:
         lab, vd, vs, rel = _sp_quantity(sp, dp)
         gate, gtxt = _sp_gate(sp)
@@ -2044,7 +2044,7 @@ def sp_section(tests: dict, bench: list[dict]) -> None:
     nb = len(ver) - n_tests
     num("sp status",
         f"Single-precision results exist for {n_tests} test record(s) and "
-        f"{nb} benchmark case(s) (F2); {n_ok} of these {len(ver)} "
+        f"{nb} benchmark case(s) (SPc); {n_ok} of these {len(ver)} "
         f"{'is' if n_ok == 1 else 'are'} usable by this rule.")
     # ---- convergence floor: R_n in SP against DP
     hist = [(dpn, (dp or {}).get("history", {}).get("R"),

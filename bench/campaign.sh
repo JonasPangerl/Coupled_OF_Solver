@@ -13,7 +13,7 @@
 #   benchlight T1, T2, T3-SST, T3-GEKO: one lane per case, each on its own
 #              physical core, nothing else running (disclosed in the paper)
 #   bencht4a   T4a: A, B, C, H (1 repeat), alone
-#   benchsp    F1/F2 (simpleFoam/coupledFoam SP): T1, T3-SST 3 repeats,
+#   benchsp    SPn/SPc (simpleFoam/coupledFoam SP): T1, T3-SST 3 repeats,
 #              T4a 1 repeat, from an SP shell, alone
 #   scaling    strong scaling on T4a (D-059), alone
 #   t4b        only if the T4a test passed: T4b test + benchmark C, alone
@@ -171,10 +171,10 @@ fi
 if has benchsp; then
     say "benchsp start (SP shell, alone)"
     sp CF_PRECISION=sp CF_MPI_BIND=none /home/jonas/bin/cfenv sp $PY bench/run_bench.py \
-        --cases T1,T3-SST --configs F1,F2 --repeats 3 > $R/run/campaign_benchsp_light.log 2>&1
+        --cases T1,T3-SST --configs SPn,SPc --repeats 3 > $R/run/campaign_benchsp_light.log 2>&1
     say "benchsp light rc $?"
     sp CF_PRECISION=sp CF_HEAVY_NP=10 CF_MPI_CPUSET=0-9 /home/jonas/bin/cfenv sp $PY bench/run_bench.py \
-        --cases T4a --configs F1,F2 --repeats 1 > $R/run/campaign_benchsp_T4a.log 2>&1
+        --cases T4a --configs SPn,SPc --repeats 1 > $R/run/campaign_benchsp_T4a.log 2>&1
     say "benchsp T4a rc $?"
 fi
 

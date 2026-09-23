@@ -1341,8 +1341,8 @@ paper\pro{Deferred correction at high CFL}.
 default smoother is made by a dedicated benchmark on the backward-facing
 step (T2, gate B2 of the specification: ILU(0) must bring at least 15\,\%
 wall-clock gain). Until that is run, the test cases still name
-\code{blockGaussSeidel}; the recommended settings for the F1 case
-(Section~\ref{sec:f1}) already use \code{blockILU0}.
+\code{blockGaussSeidel}, although the finding of this section (D-028)
+favours \code{blockILU0}.
 
 % -----------------------------------------------------------------------------
 \subsection{Eisenstat--Walker: do not over-solve}\label{sec:ew}
@@ -1602,8 +1602,8 @@ on a logarithmic axis.}
 
 \paragraph{What are $C_d$ and $C_l$?}
 The force the air exerts on a body is split into \emph{drag} $F_D$ (along
-the free-stream direction) and \emph{lift} $F_L$ (perpendicular to it; for a
-race car the interesting part is negative lift, i.e.\ downforce). They are
+the free-stream direction) and \emph{lift} $F_L$ (perpendicular to it; a
+lift force directed towards the ground is negative lift). They are
 made dimensionless with the dynamic pressure of the free stream and a
 reference area $A$:
 \begin{equation*}
@@ -1736,13 +1736,14 @@ Table~\ref{tab:tests}.
   sign) within 2\,\% of \code{simpleFoam}, and at least two times fewer
   outer iterations to a residual of $10^{-5}$ (the iteration definition for
   the two solvers is fixed in D-024). \emph{Why this matters:}
-  separation and reattachment are the phenomena that dominate the wake and
-  diffuser of a car.
+  separation and reattachment dominate the wakes of bluff bodies and the
+  flow in diffusers.
 \item[T3, airFoil2D (SST and GEKO).] The 2D airfoil tutorial. Pass: $C_l$
   and $C_d$ within 0.5\,\% of \code{simpleFoam}, for each turbulence model,
   with identical settings; empty dynamic remediation set at convergence.
-  \emph{Why this matters:} lift and drag of a wing profile, which is
-  what front and rear wings are.
+  \emph{Why this matters:} lift and drag of a lifting profile are the
+  standard integral quantities of external aerodynamics, and the pressure
+  peak on the suction side is sensitive to the numerics.
 \item[T4, motorBike.] The OpenFOAM motorbike-with-rider tutorial meshed with
   \code{snappyHexMesh}: a coarse mesh of about 350\,k cells (T4a) and a
   finer mesh (T4b, retargeted to 1--2\,M cells, D-031), run in parallel.
@@ -1751,7 +1752,7 @@ Table~\ref{tab:tests}.
   wake, D-042); static remediation set at most 1\,\% of the cells; no
   rollbacks. \emph{Why this matters:} this is the first case with a
   complex 3D geometry and an automatically generated mesh with real
-  bad cells, the closest test to a car.
+  bad cells and a separated, unsteady bluff-body wake.
 \item[T5, Ahmed body, $25^\circ$ slant.] A simplified car body with a slanted
   rear, the standard automotive bluff-body benchmark~\cite{Ahmed1984}; half
   model, 5--8\,M cells, $U_\infty=\SI{40}{m/s}$, SST with wall functions.
@@ -2458,99 +2459,6 @@ SP.}{tab:spbreak}
 \cffigure{sp_convergence_floor}{The rounding floor: residual of coupledFoam
 in double (solid) and single precision (dashed).}{fig:spfloor}
 \cftable{sp_verdict}{Single-precision verdict per case.}{tab:spverdict}
-
-% =============================================================================
-\section{What this means for the F1 half-car}\label{sec:f1}
-% =============================================================================
-
-The project's readiness check (\code{F1\_READINESS.md}) went through the
-F1 half-car case (the most recent stage, run with \code{simpleFoam} and
-$k$-$\omega$ SST) feature by feature. In plain language:
-
-\begin{center}\small
-\begin{tabular}{>{\raggedright\arraybackslash}p{0.38\linewidth}
-                >{\raggedright\arraybackslash}p{0.55\linewidth}}
-\toprule
-feature of the F1 case & status in coupledFoam\\
-\midrule
-inlet (fixed velocity), outlet (\code{inletOutlet} velocity, fixed pressure)
-  & supported through the generic boundary treatment (Section~\ref{sec:bc})\\
-\code{slip} tunnel walls
-  & supported; on the review list to double-check\\
-no-slip car and driver, moving road, rotating wheel walls
-  & supported\\
-symmetry plane, processor patches
-  & supported (symmetry: zero flux; processor: fully implicit)\\
-MRF zones for the wheels, rear zone with \code{nonRotatingPatches}
-  & MRF implicit (Section~\ref{sec:turb}); \code{nonRotatingPatches} to be
-    verified before the first F1 run\\
-$k$-$\omega$ SST
-  & supported, segregated after each coupled step\\
-\code{bounded Gauss linearUpwind limited} for \code{div(phi,U)}
-  & supported through deferred correction (Section~\ref{sec:dc})\\
-open domain with fixed-pressure outlet
-  & good: no pressure reference needed (Section~\ref{sec:pref})\\
-no \code{cyclicAMI}, no mesh changes during the run
-  & fine; coupledFoam does not support topology changes at run time\\
-force function objects
-  & work; \code{solverInfo} shows empty entries for the block solve (the
-    coupledFoam log line and summary file carry that information)\\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\paragraph{Switching the case over.} The readiness file contains a drop-in
-\code{fvSolution} block. What its main entries mean, in terms of this
-document:
-\begin{itemize}
-\item \code{solver blockFGMRES; preconditioner blockGAMG;}: the Krylov
-  solver and multigrid of Sections~\ref{sec:krylov}--\ref{sec:amg}.
-\item \code{adaptiveRelTol yes;}: Eisenstat--Walker (Section~\ref{sec:ew}).
-\item \code{cycleType K;} with the comment ``use V until the K-cycle fix
-  lands'': see the open items below.
-\item \code{smoother blockILU0;}: the smoother of the learning story
-  (Section~\ref{sec:smoothers}).
-\item \code{autoTune yes;}: the cycle-efficiency controller.
-\item The \code{coupled} dictionary with \code{potentialInit yes}: start
-  from a \code{potentialFoam} solution; the \code{convergence} entries set
-  a residual target and the force-window criterion (100 iterations,
-  0.2\,\%). By default the run stops when \emph{either} criterion is met
-  (D-005).
-\item The turbulence solvers for $k$ and $\omega$ stay as they are.
-\end{itemize}
-
-\paragraph{What to watch in the log.} coupledFoam prints one line per
-outer iteration starting with \code{CF|}, containing the CFL number, the
-line-search factor $\omega$, the number of CFL cuts, $R$, $r_U$, $r_p$,
-the Eisenstat--Walker tolerance, linear iterations and residual, the times
-for assembly, solve and turbulence, the sizes of the remediation sets, the
-rollback count and the number of clamped values. For a first F1 run, the
-useful questions are: does the CFL number climb and stay high
-(Section~\ref{sec:ptc})? Is $\omega$ mostly one (Section~\ref{sec:ls})? Do
-the remediation sets stay small (Section~\ref{sec:remediation})? Do the
-linear solves reach their tolerance (Section~\ref{sec:smoothers})? And,
-finally, do the force coefficients settle? At the end, a JSON summary with
-iterations, wall and CPU time and peak memory is written.
-
-\paragraph{Open items before a production F1 run.} The readiness check
-lists, at the time of writing: the verification of the \code{slip}
-linearisation and of MRF \code{nonRotatingPatches}; an open issue in
-parallel runs with the K-cycle that is being investigated (hence the
-comment to use the V-cycle until it is fixed); the formal smoother decision
-on T2; and the validation on T3 and T4. The results of T3 and T4 and of the
-benchmark in this document (Sections~\ref{sec:t1t5} and~\ref{sec:perf}) are
-exactly the evidence those items require.
-
-\begin{whyitmatters}{what to expect on the F1 case}
-  The motorbike cases T4a and T4b are the closest to the F1 half-car in the
-  present campaign (the Ahmed body T5 is deferred, D-063): complex
-  3D geometry, \code{snappyHexMesh} meshes with bad cells, separated wakes,
-  and parallel runs. Their rows in Tables~\ref{tab:speedups}
-  and~\ref{tab:summary} and the memory figure are the best available
-  predictor of what coupledFoam will do on the F1 case. The F1 case adds
-  rotating MRF wheels and a moving ground, which T-mrf covers only
-  informally.
-\end{whyitmatters}
 
 % Comparison with commercial and other open-source solvers (bd128a7)
 \input{solver_comparison_tutorial}

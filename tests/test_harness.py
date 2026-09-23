@@ -128,9 +128,9 @@ def test_configurations_distinct(case):
     solver actually uses (template + sets), and in their config hash."""
     cfgs = _in_scope(case)
     eff = {c: run_bench.effective_settings(case, c) for c in cfgs}
-    # F1/F2 (D11) differ from B/C by the build precision only (SP shell)
+    # SPn/SPc (D11) differ from B/C by the build precision only (SP shell)
     for c in cfgs:
-        eff[c] = dict(eff[c], precision="sp" if c in ("F1", "F2") else "dp")
+        eff[c] = dict(eff[c], precision="sp" if c in ("SPn", "SPc") else "dp")
     for i, a in enumerate(cfgs):
         for b in cfgs[i + 1:]:
             assert eff[a] != eff[b], f"{case}: {a} and {b} are the same run"
@@ -166,7 +166,7 @@ def test_t3_sfd_variant_is_not_a_noop():
 
 
 def test_scope_d063():
-    assert set(_in_scope("T4a")) == {"A", "B", "C", "H", "F1", "F2"}
+    assert set(_in_scope("T4a")) == {"A", "B", "C", "H", "SPn", "SPc"}
     assert _in_scope("T4b") == ["C"]
     assert _in_scope("T5") == []
     assert run_bench.MAX_REPEATS["T4a"] == run_bench.MAX_REPEATS["T4b"] == 1

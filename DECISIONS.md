@@ -2643,3 +2643,25 @@ measures precision and not stopping artefacts (D-064/D-065 findings):
    "Boundary openness"` and the record carries the override - the report
    must present that run as informational until the user decides.
 All four apply to SP runs only (tests/cflib/precision.py); DP is unchanged.
+
+## D-071 - No application-specific content in the papers; SP benchmark configurations renamed (user, 2026-09-23)
+
+The user: the project develops the coupled solver only; its later
+application does not belong in the papers. Therefore:
+
+1. Every reference to the Formula-1 half-car application is removed from
+   `report/paper/*.tex`: the tutorial section "What this means for the F1
+   half-car" (sec:f1) and all references to it, the application box of the
+   solver comparison (replaced by a neutral summary box without the
+   half-car recommendation), and motorsport wording in the test-case
+   justifications and in the vendor statements (these stay in neutral form,
+   e.g. "industrial use according to the vendor").
+2. The comparison groups of the solver-comparison section are numbered
+   1-6 (items 1.1 ... 6.1) instead of A-F (A1 ... F1).
+3. The single-precision benchmark configurations F1/F2 (D11) are renamed
+   `SPn` (simpleFoam SP, settings of B) and `SPc` (coupledFoam SP, settings
+   of C) in run_bench.py, make_report.py, campaign.sh, SCHEMA_precision.md
+   and the harness tests. Record file names become
+   `results/bench/<case>_SPn_<run>.json` / `_SPc_`. No F1/F2 records
+   existed at the time of the rename. Older entries of this file keep the
+   old names.

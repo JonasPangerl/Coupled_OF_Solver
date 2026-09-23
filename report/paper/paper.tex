@@ -1896,8 +1896,8 @@ geometry, the scalar matrices of the turbulence equations and the files
 written, so its expected gain is confined to assembly, turbulence and I/O,
 about 15--20\,\% of the wall-clock time according to the amendment (D12).
 \code{simpleFoam}, whose linear solvers work in double in the DP build, is
-run in SP as well. In the benchmark the SP configurations are F1
-(\code{simpleFoam}, settings of B) and F2 (coupledFoam, settings of C);
+run in SP as well. In the benchmark the SP configurations are SPn
+(\code{simpleFoam}, settings of B) and SPc (coupledFoam, settings of C);
 each solver is compared with itself in the other precision, never across
 precisions.
 

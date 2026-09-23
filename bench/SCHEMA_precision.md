@@ -10,11 +10,11 @@ amendment says `Cd_rel_to_SPDP`, the key is `Cd_rel_to_DP`.
 | kind | DP record | SP record |
 |---|---|---|
 | test | `results/tests/<name>.json` | `results/tests/<name>_sp.json` |
-| benchmark | `results/bench/<case>_<cfg>_<run>.json`, cfg A..H, E-* | `results/bench/<case>_F1_<run>.json` (simpleFoam SP, settings of B), `<case>_F2_<run>.json` (coupledFoam SP, settings of C) |
+| benchmark | `results/bench/<case>_<cfg>_<run>.json`, cfg A..H, E-* | `results/bench/<case>_SPn_<run>.json` (simpleFoam SP, settings of B), `<case>_SPc_<run>.json` (coupledFoam SP, settings of C) |
 | run directory | `run/<name>` | `run/<name>_sp` (holds `spHarness.json`, `constant/meshShift`, `log.checkMesh.dp`, `log.checkMesh.sp`) |
 
-F1/F2 scope (D-063): T1, T3-SST, T4a; one repeat by default. The DP
-counterpart of F1 is B, of F2 is C (same case). A precision-harness
+SPn/SPc scope (D-063): T1, T3-SST, T4a; one repeat by default. The DP
+counterpart of SPn is B, of SPc is C (same case). A precision-harness
 self-test (SP procedure with the DP build, `CF_SP_ALLOW_DP_BUILD=1`) writes
 `precision = "dp-shifted"`; it is not an SP result.
 
@@ -45,7 +45,7 @@ Summary (`results/bench/summary.csv`/`.json`, per case and configuration):
 `precision`, `Cd_rel_to_DP`, `Cl_rel_to_DP`, `dp_rel_to_DP`,
 `staticSetSizeDiff`, `spGeometry`, `nCheckMeshDiff` (medians over the
 repeats), `speedup_wall_DP_over_SP`, `speedup_cpu_DP_over_SP` (DP
-counterpart median over SP median, F1 and F2 rows).
+counterpart median over SP median, SPn and SPc rows).
 
 ## Force coefficients (D6)
 

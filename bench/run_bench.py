@@ -72,12 +72,12 @@ scope is empty (run them with --no-scope). --no-scope runs every
 requested configuration on every requested case with --repeats repeats.
 
 Single precision (amendment D11, D-065):
-    F1   simpleFoam in single precision: the settings of B (SIMPLEC),
+    SPn  simpleFoam in single precision: the settings of B (SIMPLEC),
          SP build. Compared with B (T1: with A, as B == A there).
-    F2   coupledFoam in single precision: the settings of C, SP
+    SPc  coupledFoam in single precision: the settings of C, SP
          build. Compared with C.
          Scope T1, T3-SST, T4a (D-063: SP vs DP on a few cases
-         only), one repeat. F1/F2 run from a shell with the SP
+         only), one repeat. SPn/SPc run from a shell with the SP
          OpenFOAM environment and the SP private install (refused
          in a DP shell, and the DP configurations in an SP shell);
          the case is prepared by tests/cflib/precision.py (mesh in
@@ -203,21 +203,21 @@ E_VARIANTS = {
 }
 
 CONFIGS = (("A", "B") + tuple(COUPLED_CONFIGS) + tuple(E_VARIANTS)
-           + ("F1", "F2"))
-NATIVE_CONFIGS = frozenset({"A", "B", "F1"})
+           + ("SPn", "SPc"))
+NATIVE_CONFIGS = frozenset({"A", "B", "SPn"})
 # Names accepted on the command line for a configuration of another name:
 # the old E (fixed V-cycle, autoTune no) is the template default C since
 # D-043
 CONFIG_ALIASES = {"E": "C"}
 
 # Amendment D11: single-precision configurations and their DP counterpart
-# (same settings, DP build); Cd_rel_to_DP etc. are relative to it. F1
+# (same settings, DP build); Cd_rel_to_DP etc. are relative to it. SPn
 # falls back to A where B is out of scope (T1: B == A).
-SP_BASE = {"F1": "B", "F2": "C"}
-SP_BASE_FALLBACK = {"F1": "A"}
+SP_BASE = {"SPn": "B", "SPc": "C"}
+SP_BASE_FALLBACK = {"SPn": "A"}
 SP_CONFIGS = frozenset(SP_BASE)
 # Repeats of the SP configurations (D-063: a few cases, 1 repeat)
-CONFIG_REPEATS = {"F1": 1, "F2": 1}
+CONFIG_REPEATS = {"SPn": 1, "SPc": 1}
 
 LIGHT_CASES = frozenset({"T1", "T2", "T3-SST", "T3-GEKO"})
 
@@ -245,8 +245,8 @@ CONFIG_SCOPE = {
     "E-noSFD": frozenset({"T3-SST", "T3-GEKO"}),   # SFD is on only in T3
     "E-eta07": frozenset({"T2"}),
     # D11 single precision, scoped per D-063
-    "F1": frozenset({"T1", "T3-SST", "T4a"}),
-    "F2": frozenset({"T1", "T3-SST", "T4a"}),
+    "SPn": frozenset({"T1", "T3-SST", "T4a"}),
+    "SPc": frozenset({"T1", "T3-SST", "T4a"}),
 }
 
 # Repeats of the heavy cases (D-059: one); the light cases use --repeats
@@ -358,7 +358,7 @@ def config_sets(cfg: str, spec: dict, name: str | None = None
                 ) -> tuple[str, dict, dict]:
     """(solver, foamDictionary sets, files to write) of a configuration,
     including the per-case overrides of CASE_OVERRIDES for case `name`.
-    F1/F2 (D11) have the settings of their DP counterpart SP_BASE."""
+    SPn/SPc (D11) have the settings of their DP counterpart SP_BASE."""
     solver = solver_of(cfg)
     cfg = SP_BASE.get(cfg, cfg)
     n = spec["iters"][solver]
@@ -1131,7 +1131,7 @@ D11_METRICS = ("Cd", "Cl", "dp", "Cd_final", "Cl_final", "dp_final")
 
 def dp_counterpart(name: str, cfg: str) -> list[dict]:
     """Current records of the DP configuration of an SP configuration
-    (F1 -> B, F2 -> C) on case `name`."""
+    (SPn -> B, SPc -> C) on case `name`."""
     for base in (SP_BASE.get(cfg), SP_BASE_FALLBACK.get(cfg)):
         if base is None:
             continue
@@ -1427,7 +1427,7 @@ def summary_rows(recs: list[dict]) -> list[dict]:
         if b and cc and b["wall_perRun_median"] and cc["wall_perRun_median"]:
             t["speedup_wall_B_over_C_perRun"] = (b["wall_perRun_median"]
                                                  / cc["wall_perRun_median"])
-        # D11: DP counterpart over SP (F1 vs B, F2 vs C)
+        # D11: DP counterpart over SP (SPn vs B, SPc vs C)
         base = (by.get((t["case"], SP_BASE.get(t["config"], "")))
                 or by.get((t["case"], SP_BASE_FALLBACK.get(t["config"], ""))))
         if base:
@@ -1699,7 +1699,7 @@ def main() -> int:
         sp_cfgs = [c for c in cfgs if c in SP_CONFIGS]
         if sp_cfgs and len(sp_cfgs) != len(cfgs):
             if "--configs" in " ".join(sys.argv):
-                ap.error("run the SP configurations (F1, F2) separately, "
+                ap.error("run the SP configurations (SPn, SPc) separately, "
                          "from a shell with the SP environment")
             # default list: keep what the sourced build can run
             sp_env = precision.build_precision() == "SP"
