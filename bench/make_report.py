@@ -2441,6 +2441,10 @@ def table_remediation_categories(tests: dict) -> None:
                 or h.get("nDyn")):
             continue
         for k in c:
+            # internal keys of the JSON writer (e.g. _nonFinite) are no
+            # categories
+            if k.startswith("_"):
+                continue
             if k not in cats:
                 cats.append(k)
         recs.append((n, d, c, h))
@@ -2478,7 +2482,7 @@ def table_remediation_categories(tests: dict) -> None:
         + ["static total", "static [%]", "dynamic max", "dynamic final"],
         rows,
         "Remediation cells per test run: the pre-selected cells per category"
-        + (" (" + ", ".join(cats) + ")" if cats else
+        + (" (" + ", ".join(tex_escape(k) for k in cats) + ")" if cats else
            " (records of this commit carry no per-category counts yet)")
         + ", the pre-selected total and its share of the mesh, and the "
         "largest and final size of the dynamic set.",
