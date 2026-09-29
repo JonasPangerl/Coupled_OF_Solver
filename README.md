@@ -57,8 +57,8 @@ in four categories with their own switches and treatment
 `docs/KEYWORDS.md`). Keywords added after the spec (all with their defaults
 in `src/include/coupledDefaults.H`) include:
 
-- `coupled.startupMode upwind | hybrid | none` (D-048, default `upwind`,
-  the original behaviour): `hybrid` ramps the convection blending beta
+- `coupled.startupMode upwind | hybrid | none` (D-048, default `hybrid`;
+  `upwind` is the original behaviour): `hybrid` ramps the convection blending beta
   linearly from 0 to 1 over `startupRampLength` iterations from a ramp
   start chosen by the residual history (`startupRampStart`,
   `startupRampStartMax`, `startupSwitchR`, `startupStagnationFactor`,
