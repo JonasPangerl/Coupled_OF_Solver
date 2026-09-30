@@ -116,13 +116,14 @@ is rejected, because it has been replaced by the categories.
 |---|---|---|---|---|---|
 | `c.maxIter` | 2000 | >= 1 | outer iterations | 11 | `outerMaxIter` |
 | `c.potentialInit` | yes | bool | potentialFoam start fields expected | 7.4 | `potentialInit` |
-| `c.potentialClip` | 0 | 0 or >= 1 | clip the potential start to f Uref (0 off) | D-057 | `potentialClip` |
+| `c.potentialClip` | 0 | 0 or >= 1 | clip \|U\| of the potential start to f Uref (0 off); U only since D-077 | D-057, D-077 | `potentialClip` |
+| `c.potentialPressure` | keep | keep, bernoulli | p of the potential start: as read, or H - \|U\|^2/2 in every cell after the clip (H from the fixed-p boundary) | D-077 | `potentialPressure` |
 | `c.nonOrthLimiter` | 0.5 | [0, 1] | limitedSnGrad coefficient of the non-orthogonal correction | 5.3, D-014 | `nonOrthLimiter` |
 | `c.orthogonalityTolerance` | 0 | >= 0 | mesh counts as orthogonal if max \|k_f\| <= value (0: exact test) | FABLE item 1, D-066 | `orthogonalityTolerance` |
 | `c.ftz` | yes | bool | flush-to-zero/denormals-are-zero | 9.1 | `ftz` |
 | `c.writeState` | yes | bool | write the restart state | 10 | `writeState` |
 | `c.dumpLinearSystem` | () | list of iterations | dump the linear system (serial, Test-blockSystem) | D-039 | - |
-| `c.Uref` | boundary | boundary, field, value | velocity scale of the classification | D-050 | `UrefMode` |
+| `c.Uref` | boundary | boundary, field, value | velocity scale of the classification; boundary = largest PRESCRIBED boundary velocity (D-074) | D-050, D-074 | `UrefMode` |
 | `c.UrefFallbackFactor` | 1e-6 | [0, 1] | boundary Uref below this fraction of the field maximum: field maximum | D-050, D-066 | `UrefFallbackFactor` |
 | `c.UrefStep` | reference | reference, fieldCapped, field, value | velocity scale of the step limits | D-057 | `UrefStepMode` |
 | `c.UrefStepCap` | 4 | > 0 | cap of fieldCapped, in Uref | D-057 | `UrefStepCap` |
@@ -143,7 +144,7 @@ is rejected, because it has been replaced by the categories.
 
 | keyword | default | range | meaning | ref | constant |
 |---|---|---|---|---|---|
-| `c.ptc.cflStrategy` | mRDM | mRDM, EXP, SER | global CFL update rule | 7.1 | `cflStrategy` |
+| `c.ptc.cflStrategy` | mRDM | mRDM, EXP, SER, EFF | global CFL update rule; EFF: hold the linear solve at its optimal share of the wall time (D-083) | 7.1, D-083 | `cflStrategy` |
 | `c.ptc.CFL0` | 5 | > 0 | start CFL | 7.1 | `CFL0` |
 | `c.ptc.CFLmin` | 1 | > 0 | lower CFL bound | 7.1 | `CFLmin` |
 | `c.ptc.CFLmax` | 500 | >= CFLmin | upper CFL bound | 7.1 | `CFLmax` |
@@ -151,6 +152,13 @@ is rejected, because it has been replaced by the categories.
 | `c.ptc.betaMax` | 1.5 | > 1 | max CFL growth per iteration | 7.1 | `betaMax` |
 | `c.ptc.betaExp` | 1.1 | > 1 | EXP growth factor | 7.1 | `betaExp` |
 | `c.ptc.nHold` | 10 | >= 0 | iterations without growth after a cut | 7.1 | `nHold` |
+| `c.ptc.continuityFactor` | 1 | >= 0 | continuity pseudo-time term c V/(dtau Uref^2) on the p-p diagonal of the increment system, in the static and dynamic remediation cells only (0 off) | D-075 | `ptcContinuityFactor` |
+| `c.ptc.failCeiling` | 0 | [0, 1) | after a failed linear solve the CFL may not grow above this x the failed CFL (0 off) | D-081 | `ptcFailCeiling` |
+| `c.ptc.ceilingRelax` | 1.02 | >= 1 | growth of that ceiling per accepted iteration | D-081 | `ptcCeilingRelax` |
+| `c.ptc.effTol` | 0.02 | [0, 1) | EFF: relative band around effSolveShare in which the CFL is kept | D-083 | `ptcEffTol` |
+| `c.ptc.effSolveShare` | 0.6 | (0, 1) | EFF: target share of the linear solve in the wall time of an iteration; below it the CFL goes up, above it down (step from effExponent) | D-083 | `ptcEffSolveShare` |
+| `c.ptc.effWindow` | 4 | >= 1 | EFF: iterations averaged at one CFL before a decision (the first after a change is skipped) | D-083 | `ptcEffWindow` |
+| `c.ptc.effExponent` | 1.6 | > 0 | EFF: exponent b of the solve cost ~ CFL^b, sets the step towards the target share (clamped x0.5..x2) | D-083 | `ptcEffExponent` |
 | `c.ptc.maxLinFails` | 3 | >= 1 | consecutive linear failures before the abort | B4 | `maxLinFails` |
 | `c.ptc.linFailPolicy` | strict | strict, reduction | what counts as a linear failure | B4 | `linFailPolicy` |
 | `c.ptc.linAcceptReduction` | 0.9 | (0, 1) | accepted reduction of a capped solve | B4 | `linAcceptReduction` |
@@ -172,6 +180,8 @@ is rejected, because it has been replaced by the categories.
 | `c.lineSearch.kappa` | 0.5 | (0, 1) | CFL cut factor | 7.2 | `kappa` |
 | `c.lineSearch.maxCflCuts` | 3 | >= 0 | CFL cuts per iteration | 7.2 | `maxCflCuts` |
 | `c.lineSearch.beta` | 1.0 | (0, 1] | line-search blending | D-036 | `lineSearchBeta` |
+| `c.lineSearch.mode` | global | global, local | global: one omega, the smallest over all cells; local: omega is the localFraction quantile, the few cells over the bounds go into the dynamic set | D-079 | `lineSearchMode` |
+| `c.lineSearch.localFraction` | 0.0005 | [0, 1] | local mode: omega is the quantile at which at most this fraction of the cells violate the bounds; they go into the dynamic set | D-079 | `lineSearchLocalFraction` |
 
 ### c.remediation (spec 8, D-066)
 
@@ -306,6 +316,7 @@ is rejected, because it has been replaced by the categories.
 | `sc.maxIter` | 200 | >= 1 | Krylov iterations | 6.1 | `maxIter` |
 | `sc.minIter` | 1 | >= 0 | minimum iterations | B1 | `minIter` |
 | `sc.maxRestarts` | 3 | >= 0 | BiCGStab breakdown restarts | 6.2 | `maxRestarts` |
+| `sc.stagnationRatio` | 0 | [0, 1) | FGMRES: stop unconverged when a restart cycle leaves the true residual above this x the previous cycle's (0 off) | D-080 | `stagnationRatio` |
 | `sc.restart` (alias `gmresRestart`) | 10 | >= 1 | (F)GMRES restart | B1 | `restart` |
 | `sc.restartLarge` | 6 | >= 1 | restart above restartLargeCells unless restart is given | B7, D-066 | `restartLarge` |
 | `sc.restartLargeCells` | 40000000 | >= 1 | cell count of the B7 rule | B7, D-066 | `restartLargeCells` |

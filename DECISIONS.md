@@ -2678,3 +2678,332 @@ application does not belong in the papers. Therefore:
   separate physical cores (user request to use the idle machine): up to
   ten single-rank runs ran concurrently on separate physical cores; the
   paper discloses this for the light-case timings.
+
+## D-073 - New workstation; heavy runs on 48 of 64 cores (user, 2026-09-29)
+
+The project continues on an AWS EC2 `c7a.16xlarge` (AMD EPYC 9R14, 64
+physical cores, no SMT, one NUMA node, 128 GB RAM, Ubuntu 24.04, OpenFOAM
+v2606 from the ESI apt repository). The user's directive replaces the
+10-core cap of D-031:
+
+1. Every coupledFoam test and benchmark uses **at most 48 ranks**; the
+   remaining cores stay free for other work (Formula-1 automation). The
+   `CF_HEAVY_NP` default 10 -> 48 in `tests/test_T4_motorBike.py`,
+   `tests/test_unit.py` (procAgglom) and `bench/run_bench.py`; the
+   docstrings of `tests/test_scaling.py`, `tests/test_T5_ahmed.py` and
+   `tests/conftest.py` follow. 48 ranks leave the cores 48-63 (16 of 64)
+   free. Core binding of a heavy run: `CF_MPI_CPUSET=0-47` (core ids, see
+   the pitfall in `SETUP_NEW_WORKSTATION.md` section 8).
+
+2. **Consequence for the results.** Every timing of the campaign
+   `campaign-20260923` was measured with 10 ranks on a 16-core machine.
+   Runs with 48 ranks are not comparable with them, neither in wall-clock
+   nor in CPU-hours, and an old and a new number must not appear in the
+   same table without a note. `T-scaling` measures its own baseline and is
+   unaffected. A mixed report needs a re-run of the affected cases.
+
+3. T4a has 354 k cells; at 48 ranks that is about 7.4 k cells per rank,
+   below the range in which parallel efficiency holds up. The rank cap is
+   a resource directive, not a performance claim: the scaling test will
+   show the efficiency drop, and the T4a timings at 48 ranks should not be
+   read as "the solver scales to 48 ranks".
+
+4. The machine costs USD 3.50 per hour and a watchdog shuts it down after
+   30 minutes below load 2.0 and after 6 hours of runtime. No long run
+   without the user's explicit go; heavy tests stay behind `--heavy` and
+   `CF_FORCE_HEAVY=1`.
+
+5. Not on this machine (state 2026-09-29): the `results/` tree of
+   `campaign-20260923` (git-ignored, so it lives only on the previous
+   workstation), the SP OpenFOAM build, LaTeX and ParaView. The report
+   PDFs therefore cannot be rebuilt here until the result JSONs are copied
+   over or the campaign is re-run.
+
+## D-074 - Uref boundary counts prescribed velocities only (2026-09-30)
+
+`Uref boundary` (D-050) took max|U_b| over every non-coupled patch. On a
+patch that does not prescribe U the boundary value is a copy or projection
+of the interior: slip and symmetry take the tangential interior velocity,
+zeroGradient the interior velocity, inletOutlet the interior velocity on
+outflow. After a potential-flow start the interior carries the singular
+peaks at sharp edges, and the F1 half-car (20.6 M cells) got
+**Uref = 321.2 m/s against a free stream of 50**. Uref scales the whole
+safety apparatus - dynamic remediation at cU Uref, the local step limit at
+fLoc Uref, the sentinel at UFactor Uref and pFactor Uref^2/2 - so all of it
+was 6 (pressure: 41) times too lax, `nDyn` stayed 0, and the defect of
+D-075 ran unreported to Cp -180.
+
+Now (`lineSearch.C`, `prescribedMagU`): a patch contributes only what its
+boundary condition prescribes - |U_b| for the fixedValue family
+(fixedValue, noSlip, rotatingWallVelocity, movingWallVelocity,
+flowRateInletVelocity ...), valueFraction |refValue| for mixed types
+(inletOutlet: 0 on outflow), |valueFraction & refValue| for directionMixed,
+nothing for types that do not fix the value. A velocity that only copies
+the interior is in the field maximum already. `setFieldScale` (Ufield0, the
+actual field scale) is unchanged.
+
+F1 half-car: Uref 50.54 (the tread speed of the rotating wheels,
+151.4876 rad/s at the outer radius), where it was 321.2. T0 and T1 are
+unchanged (their Uref is a fixedValue lid or inlet).
+
+## D-075 - Pseudo-time term on the continuity equation (2026-09-30)
+
+The PTC term V/dtau regularised the momentum rows only. p is solved as the
+instantaneous continuity constraint, and with D = V/abar containing the PTC
+term (spec 5.3 (d)), D_f ~ dtau for small dtau: a cell with a mass defect
+gets dp ~ defect/D_f ~ 1/dtau. **Every CFL cut of the sentinel therefore
+made the pressure step larger, not smaller**, and the 4x4 diagonal blocks
+went singular (V/dtau against dtau). Measured on the F1 half-car, cluster of
+cells at skewed symmetry-plane faces at the rear wing:
+
+| CFL of the step | 6 | 1.5 | 0.375 | 0.094 | 0.05 |
+|---|---|---|---|---|---|
+| rejected min p | -78e3 | -224e3 | -224e3* | -224e3* | -796e3 |
+| block-ILU pivot fallbacks | - | 2 | 15 | 56 | 13772 |
+
+(*) held at the value where the line search's fp pstep cap binds, until
+omega reached omegaMin 0.1 and the spike broke through. Physical minimum on
+this geometry, from simpleFoam: Cp -11.7; the rejected steps reached Cp
+-63 to -637.
+
+Now: `c V/(dtau Uref^2)` on the p-p diagonal of the increment system,
+`ptc.continuityFactor c` (default 1, 0 = the old behaviour), with the same
+local dtau as the momentum PTC (local limit and remediation cflFactor
+included), **in the static and dynamic remediation cells only**. It is
+added AFTER the row-3 diagonal has entered A x, exactly like the momentum
+PTC term is added after the momentum residual: it multiplies p - p_old,
+which is 0 at the linearisation point, so it belongs to the operator of
+the increment and not to the residual. The converged solution is
+independent of it; only the path changes. It is the artificial-
+compressibility form of pseudo-time for the pressure, with beta = Uref^2.
+
+**First version on all cells, withdrawn the same day.** On every cell the
+term slowed the global pressure modes: relative to a cell's Rhie-Chow
+diagonal it is only ~1/(2 CFL) + 1/(6 CFL^2) (0.1 % at CFL 500), but the
+smoothest pressure modes see a Laplacian ~N^2 weaker than that diagonal,
+so it dominated them. T0 Re 100 went from 68 outer iterations to more than
+300 (contraction 0.98 per iteration at CFL 500, omega 1). On the F1 case
+the 300-iteration run with it crawled at an effective step CFL*omega of
+1-4. Restricted to the remediation cells (F1: 4858 static + a few
+thousand dynamic of 20.6 M), T0 Re 1000 is bit-identical to before, T0 Re
+100 needs 80 / 69 iterations (np1 / np4, was 68 / 68: the 6 dynamic cells
+at the lid corners), and the F1 case at iteration 35 has R 0.0020 against
+0.0082 with the all-cell version, CFL 12.5 against 5.1, no rollback.
+
+Not chosen: removing the PTC term from abar (a dtau-independent D). That
+fixes the 1/dtau growth too, but changes the converged solution of every
+case (D enters the Rhie-Chow dissipation at convergence) and so every
+verified result; the term above changes none.
+
+## D-076 - A sentinel rollback treats the offending cells in the retry (2026-09-30)
+
+`rem.markDynamic(chk.offending)` on a rollback only set a pending flag, and
+pending cells enter the dynamic set in `updateDynamic` - which runs after
+an ACCEPTED step, and not at all during a start-up with startupReference
+exclude. In a cascade of rollbacks no step is accepted: the cells the
+sentinel had just named were never treated, and every retry was assembled
+like the step that had failed. F1 half-car: nDyn = 0 through five
+consecutive rollbacks; with CFL on its floor (CFLmin 1) the retries were
+identical, R 0.022332884 / 0.022332841, same rejected min p -224401.11 at
+iterations 15-18.
+
+Now `remediation::activatePending(extraLayers)` puts the marked cells into
+the dynamic set immediately, before the retry is assembled (upwind,
+dynamic cflFactor, increment clipping), independent of startupReference
+exclude - that setting concerns the field classification, not cells the
+sentinel has caught. The k-th consecutive rollback grows the region by
+nLayers + k - 1 layers, so no retry repeats the step that failed even with
+the global CFL on its floor. No other cell ages (no step was accepted).
+The rollback line of the log now reports the cells that entered and nDyn.
+
+## D-077 - Potential-flow start: clip U only, pressure from Bernoulli (2026-09-30)
+
+D-057's clip scaled |U| down in the peak cells and added
+(|U|^2 - |Uclip|^2)/2 to p there, "to keep the total head". But
+potentialFoam without -writep leaves p uniform (F1 half-car: p = 0 in every
+cell, measured), so there was no head to keep: the shift put isolated
+spikes of up to 4.4e5 next to p = 0, and the first continuity assembly died
+with SIGFPE (D-078).
+
+Now the clip changes U only, and the new keyword `potentialPressure`
+decides p: `keep` (default, p as read - bitwise the old behaviour without a
+clip) or `bernoulli`, p = H - |U|^2/2 in every cell after the clip. For a
+potential flow U.grad(U) = grad(|U|^2/2), so this is its exact pressure, and
+the first coupled step starts from an inviscid equilibrium instead of from
+p = const. H is the area-weighted mean of p + |U|^2/2 over the faces where p
+is prescribed (a mixed p weighted with its valueFraction; totalPressure
+gives H = p0 exactly); without such a face, H = Uref^2/2 (gauge). In MRF
+zones Bernoulli in the absolute frame is an approximation, as for any
+potential start. A warning is printed for bernoulli without a clip: the
+singular peaks would enter p unclipped.
+
+F1 half-car: 5728 cells clipped to 202.2 (4 Uref, peak 961.0), H 1249.996
+(outlet, p = 0 and |U| ~ 50), p in [-19187, 1250] and smooth.
+
+## D-078 - Overflow-free non-orthogonal limiter (2026-09-30)
+
+`nonOrthCorrection::correctionFromGrad` evaluated the native limitedSnGrad
+limiter as min(lambda |sn| / ((1 - lambda)|c| + cfVSmall), 1), with
+cfVSmall = 1e-300 where native limitedSnGrad uses SMALL = 1e-15. On every
+orthogonal face c is exactly 0, the quotient is lambda |sn| 1e300, and it
+overflows once |sn| > ~1.8e8/lambda. min(inf, 1) = 1 and 0 * 1 = 0 would
+have been harmless, but the overflow raises SIGFPE under FOAM_SIGFPE: the
+D-057 pressure spike (|grad p| ~ 4.4e8 over a millimetre) killed the first
+assembly of the F1 half-car this way. Now the comparison lambda|sn| <
+(1 - lambda)|c| decides first and the quotient is formed only when it is
+< 1. Wherever the old form did not overflow the result is bit-identical
+(1e-300 is below the rounding unit of any denominator it was added to, and
+c = 0 gives c = 0 either way); NaN behaves as before. An audit of the other
+69 cfVSmall guards found no second overflow: their numerators are bounded
+(volumes, fixed limits) or their denominators are never 0 in practice.
+
+## D-079 - Local step control: `lineSearch.mode local` (2026-09-30)
+
+The line search takes one omega for the whole domain, the smallest over
+all cells of fU Ustep/|dU| and fp pstep/|dp|, and cuts the global CFL
+(kappa, with a hold of nHold iterations) whenever omega < omegaMin. On the
+F1 half-car a few of 20.6 M cells therefore set the step for all of them:
+in the 300-iteration run 99 % of the iterations had omega < 1, 5 of them
+cut the CFL (6 cuts, 1/64, ~60 iterations of hold), and the effective step
+CFL*omega stayed at 1-4 with CFLmax 500. mRDM only raises the CFL while
+the residual falls, so the cuts were never recovered.
+
+`lineSearch.mode local` (default `global`, bit-identical to before):
+after the solve the cells whose increment violates the fU/fp bounds are
+found (`lineSearch::limitedCells`). If they are at most
+`lineSearch.localFraction` of all cells (default 0.01), the FULL Newton
+step is taken everywhere (omega 1, no CFL cut, no hold), and those cells
+enter the dynamic remediation set after the accepted step - also during
+startupReference exclude, like the sentinel's cells (D-076) - so from the
+next iteration on they get the dynamic cflFactor and the continuity
+pseudo-time term (D-075): a locally smaller step instead of a globally
+smaller one. A cell whose full step goes unphysical is the sentinel's.
+Above the fraction the step is too big globally and the global path
+applies unchanged. The CF| line reports the count as `nLocStep`.
+
+**First version shortened the offending cells' increments, withdrawn the
+same day.** Scaling dU and dp cell by cell leaves the step no longer a
+solution of the linearised continuity: on the F1 case rp grew twenty-fold
+over iterations 10-24 (0.005 -> 0.093), the dynamic set to 2.4 % of the
+cells, and Cd jumped from 1.36 to 0.23 and -0.19 at iteration 25-26. It
+recovered (Cd 0.970, Cl -2.163 at 100 against simpleFoam's 1.000 / -2.173
+at 1600), but the full-step version keeps every step mass-consistent.
+
+With omega at 1 the CFL grew to 16-23 - and there the linear solver
+failed (iterations 5, 29, 41; 262-266 s each for 400 FGMRES iterations),
+the CFL was halved and held, and climbed back to the same failure: D-080,
+D-081.
+
+**Second version (quantile), the one in the code.** The full step with
+localFraction 1 % let 162 091 cells take an unbounded step at iteration 24
+of an EFF run (Cl -2.6 -> -7.6, stuck at -5.7 afterwards): at 20.6 M cells
+1 % is 200 000 cells, i.e. no line search at all. Now omega is the
+quantile: the largest step fraction at which at most localFraction
+(default now 0.05 %) of the cells violate the fU/fp bounds, from a global
+histogram of the per-cell step fractions (20 bins per decade,
+`Pstream::listReduce`, one collective). Those cells enter the dynamic set;
+every other cell keeps the bounds. Below omegaMin the global path (CFL
+cut) applies.
+
+T0, T1, forces, fpe, diag and keywords pass with the default; the F1
+result of the local mode is in the run's README.
+
+## D-080 - FGMRES stagnation stop (2026-09-30)
+
+`solvers.coupled.stagnationRatio r` (default 0 = off): at the end of each
+restart cycle, stop unconverged when the true residual is above r times
+its value at the end of the previous cycle. A solve that is not going to
+converge then costs one or two cycles instead of maxIter iterations; on
+the F1 half-car each failure had cost 262-266 s for 400 iterations, while
+the successful solves needed 1-23 iterations. The caller's handling of an
+unconverged solve (CFL cut, B4 counting) is unchanged.
+
+## D-081 - CFL ceiling after a failed linear solve (2026-09-30)
+
+`ptc.failCeiling f` (default 0 = off), `ptc.ceilingRelax g` (1.02): when a
+linear solve fails, the CFL may not grow back above f times the CFL of the
+failed attempt; the ceiling rises by the factor g per accepted iteration,
+so the CFL probes upwards again slowly instead of repeating the failure.
+Before, a failure halved the CFL (kappa) with a hold, and mRDM grew it back
+to the same value: the F1 run failed at CFL 15.8, 22.8 and 18.5, i.e. it
+oscillated between ~9 and ~23 and spent 45 % of its wall time in failed
+solves. The ceiling is part of the restart state (`cflCeiling`).
+
+## D-082 - The clipped cells of the potential start begin in the dynamic set (2026-09-30)
+
+The cells potentialClip clips are the singular points of the potential
+start and known before the first step. They are put into the dynamic set
+at iteration 1, with the halo (`remediation::activatePending`), instead of
+being found by the sentinel: on the F1 half-car iteration 1 was rolled
+back in every run before (p -66e3 where the full step overshot), which cut
+the CFL from 5 to 1.25 and held it for nHold iterations. With it: 17 966
+cells start dynamic, iteration 1 is accepted at CFL 5.
+
+## D-083 - EFF: the CFL of the best turnaround, and why the CFL changed (2026-09-30)
+
+User: "the solver should decide itself what is the most efficient" - not
+the highest CFL at the price of many linear iterations - and "the
+controller must not change the CFL too often; it has to wait a few
+iterations and see what efficiency and how many linear iterations come
+out before it decides".
+
+`ptc.cflStrategy EFF` steers the **share of the linear solve in the wall
+time of an iteration**, s = tSolve/tIter. Model: an iteration costs a
+fixed t0 (assembly, turbulence, the rest) plus a solve time ts ~ CFL^b.
+Pseudo-time per second, CFL/(t0 + ts), is largest where s = 1/b. The
+target is `ptc.effSolveShare` (default 0.6, i.e. b ~ 1.6, fitted to the
+F1 EXP run, where the efficiency peak at CFL ~43 sat at a share of 62 %).
+A ratio within one iteration cancels most of the scatter of the wall time
+(turbulence, I/O, other load), which the ratio of two iterations does not.
+
+Decisions happen on a window, not on one iteration: after a CFL change
+the first clean iteration is skipped (the transient of the change), then
+`ptc.effWindow` (default 4) clean iterations at the same CFL are averaged.
+Inside the band effSolveShare*(1 +- effTol) the CFL is kept; outside it
+the step is
+
+    f = [(s*/(1 - s*)) / (s/(1 - s))]^(1/effExponent),  clamped 0.5..2,
+
+large far from the target, small near it. A step up is blocked when the
+residual more than doubled in the deciding iteration. A cut (failed linear
+solve, line-search omega, sentinel rollback) discards the window. Only
+clean iterations are measured: accepted, no cut, no rollback.
+
+History - two earlier versions failed on the F1 case and are replaced:
+hill climbing on CFL/seconds against the previous sample slid down in
+steps below effTol (iterations 88-99: eleven steps, 2.87 -> 1.60 CFL/s);
+against the best sample since the last reversal it was driven by the
++-25 % scatter of the wall time at low CFL (reversals in the start phase,
+step factor collapsed to a few per cent, CFL 2.7 -> 4.7 over 27
+iterations while EXP reached 9.9).
+
+**The CF| line says why the CFL changed** (user: it must be clear whether
+the CFL stays low for efficiency - the linear solver - or for an
+instability): `cflWhy=` joins the reasons of the iteration. EFF logs
+`keep:noCleanSample`, `keep:measuring`, `keep:solverShareOnTarget`,
+`up:solverShareBelowTarget`, `down:solverShareAboveTarget(solverCost)`,
+`noUp:residualJump`; the limits `hold:afterCut`, `capped:failCeiling`,
+`capped:CFLmax`; the cuts `cut:linearSolverFailed`, `cut:lineSearchOmega`,
+`cut:sentinelRollback`; the other strategies `up:residualFell`,
+`noUp:residualRose`, `up:EXP`, `up:SER`, `down:SERresidualRose`. `eff=` is
+CFL per second of the last window, `solveShare=` its mean share (-1 after a
+cut), `ceil=` the D-081 ceiling. So `down:...(solverCost)` is efficiency
+and `cut:...` is an instability or a solver failure - never mixed.
+
+Measured on the F1 case (EXP run, iterations > 30): the fixed cost of a
+coupled iteration is ~5.6 s and the CFL is nearly free up to ~40; the
+efficiency peaks at CFL ~43 (3.7 CFL/s) and drops to 1.4 at CFL 59 (57
+linear iterations, 43 s per iteration). With the share rule (run of
+2026-09-30 14:52, `ceilingRelax` 1.03, effTol 0.10): CFL 5 -> 10 at
+iteration 6, ~24 by 50, ~40 by 105; from there it oscillated between 29
+and 44 on `down:solverShareAboveTarget(solverCost)` and
+`up:solverShareBelowTarget`, at 3.3-4.4 CFL/s - the optimum of the EXP
+table, found without a scan. Its weakness showed in iterations ~230-305: the
+linear solve got dearer at the same CFL, the rule stepped down to CFL 16
+and the efficiency fell to 1.5 CFL/s for ~70 iterations before it
+recovered to CFL 29 - a step is not yet checked
+against the efficiency it bought (next version, `F1_NEXT_STEPS.md`). The
+sentinel rollbacks of that run (58, 115,
+206 at CFL ~24, 32, 44) mark a stability limit at about the same CFL: the
+path to CFL 100 needs both a cheaper linear solve and a more robust
+iteration (`F1_NEXT_STEPS.md`).

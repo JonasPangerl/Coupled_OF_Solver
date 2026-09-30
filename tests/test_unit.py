@@ -18,6 +18,12 @@ Amendment B9:
   test_procAgglom                  (heavy) CF_HEAVY_NP ranks, motorBike mesh:
                                    processorAgglomerator on vs off to 1e-5,
                                    ranks per level follow rule 6.3.4
+
+D-078:
+  test_nonOrthLimiter              Test-nonOrthLimiter on 1 and 4 ranks: no
+                                   SIGFPE on a 1e12 gradient (at least one
+                                   face on which the old guard overflowed),
+                                   bit-identical to the old formula elsewhere
 """
 
 from __future__ import annotations
@@ -151,7 +157,7 @@ def test_blockGAMG(foam, cavity_mesh):
 CYCLES = ("V", "F", "W", "K")
 MERGE_LEVELS = 2
 MIN_RATIO = 3.0                 # coarsening-ratio rule 6.3.1 (W and K)
-PROC_AGGLOM_NPROCS = int(os.environ.get("CF_HEAVY_NP", "10"))
+PROC_AGGLOM_NPROCS = int(os.environ.get("CF_HEAVY_NP", "48"))
 PROC_AGGLOM_CELLS_PER_RANK = 5000   # rule 6.3.4
 PROC_AGGLOM_SINGLE_RANK = 5000      # rule 6.3.4
 RANKS_LINE = "blockGAMG: ranks per level"
@@ -409,3 +415,18 @@ def test_procAgglom(foam):
            "failures": failures, "pass": not failures}
     results.write("tests", "Test-procAgglom", rec)
     assert rec["pass"], failures
+
+
+@pytest.mark.unit
+def test_nonOrthLimiter(foam, cavity_mesh):
+    """D-078: the limited non-orthogonal correction raises no SIGFPE on a
+    steep gradient (the old cfVSmall guard overflowed on faces with c = 0 -
+    the test requires such faces to exist, so it really exercises the bug)
+    and is bit-identical to the old formula wherever that did not overflow."""
+    out = {}
+    for n in RANKS:
+        out[f"np{n}"] = _app(["Test-nonOrthLimiter"], cavity_mesh, n,
+                             cavity_mesh / f"nonOrthLimiter_np{n}.json")
+    passed = all(d.get("rc") == 0 and d.get("pass") for d in out.values())
+    results.write("tests", "Test-nonOrthLimiter", {"runs": out, "pass": passed})
+    assert passed, out

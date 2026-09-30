@@ -92,6 +92,11 @@ class lineSearch
         label maxCflCuts_;
         doubleScalar beta_;
 
+        //- Local step control (D-079): global | local, and the largest
+        //  fraction of cells the local path may shorten
+        word mode_;
+        doubleScalar localFraction_;
+
         //- Uref selection (D-050): boundary | field | explicit
         word UrefMode_;
         scalar UrefExplicit_;
@@ -150,6 +155,10 @@ public:
         doubleScalar kappa() const noexcept { return kappa_; }
         label maxCflCuts() const noexcept { return maxCflCuts_; }
         doubleScalar beta() const noexcept { return beta_; }
+
+        //- Local step control (D-079)
+        bool localMode() const noexcept { return mode_ == "local"; }
+        doubleScalar localFraction() const noexcept { return localFraction_; }
         //- Classification reference of the current iteration (dynamic
         //  set, increment clipping, sentinel, Anderson norm); the frozen
         //  Uref except during a startupReference ramp
@@ -203,6 +212,27 @@ public:
 
         //- Cells violating the omegaMin bound (local labels)
         labelList offendingCells(const blockScalarUList& dx) const;
+
+        //- Quantile step fraction (D-079, second version): the largest
+        //  omega at which at most localFraction of all cells violate the
+        //  fU/fp bounds (from a global histogram of the per-cell step
+        //  fractions, 20 bins per decade down to 1e-8), and the cells that
+        //  still violate them at that omega (local labels). Collective.
+        doubleScalar omegaQuantile
+        (
+            const blockScalarUList& dx,
+            labelList& violating
+        ) const;
+
+        //- Local step control (D-079): the cells whose full increment
+        //  violates the fU/fp bound (local labels) and, per cell, the step
+        //  fraction that brings it back to the bound (same order). No
+        //  collective; the caller reduces the count.
+        labelList limitedCells
+        (
+            const blockScalarUList& dx,
+            scalarField& omegaCell
+        ) const;
 
         //- Diagnostics (rank-local, no reduction): cells whose increment
         //  violates the velocity / pressure limit at the given omega

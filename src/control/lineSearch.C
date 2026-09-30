@@ -9,7 +9,74 @@
 #include "PstreamReduceOps.H"
 #include "DynamicList.H"
 #include "ITstream.H"
+#include "mixedFvPatchFields.H"
+#include "directionMixedFvPatchFields.H"
 #include <cmath>
+
+// * * * * * * * * * * * * * * * Local Functions * * * * * * * * * * * * * * //
+
+namespace
+{
+
+// Largest velocity magnitude a boundary condition PRESCRIBES on its patch,
+// independent of the interior solution; 0 if it prescribes none.
+//
+// Only this may enter Uref = boundary (D-074). The previous rule took
+// max|U_b| over every non-coupled patch, and on a patch that does not
+// prescribe U the boundary value is a copy or projection of the interior:
+// slip and symmetry take the tangential interior velocity, zeroGradient
+// the interior velocity, inletOutlet the interior velocity on outflow. After
+// a potential-flow start the interior carries the singular peaks at sharp
+// edges, so the F1 half-car got Uref = 321 m/s against a free stream of 50,
+// which scaled every safety limit up by 6 (and the pressure ones by 41).
+Foam::scalar prescribedMagU(const Foam::fvPatchVectorField& Up)
+{
+    using namespace Foam;
+
+    if (!Up.fixesValue())
+    {
+        // zeroGradient, slip, symmetry, calculated, ...
+        return 0;
+    }
+
+    scalar m = 0;
+
+    if (const auto* mp = isA<mixedFvPatchVectorField>(Up))
+    {
+        // inletOutlet & co: refValue with weight valueFraction (0 on
+        // outflow faces, where the value is the interior's)
+        const vectorField& rv = mp->refValue();
+        const scalarField& vf = mp->valueFraction();
+        forAll(rv, facei)
+        {
+            m = max(m, vf[facei]*mag(rv[facei]));
+        }
+    }
+    else if (const auto* dp = isA<directionMixedFvPatchVectorField>(Up))
+    {
+        // pressureInletOutletVelocity & co: the prescribed part of refValue
+        // is its projection with the valueFraction tensor
+        const vectorField& rv = dp->refValue();
+        const symmTensorField& vf = dp->valueFraction();
+        forAll(rv, facei)
+        {
+            m = max(m, mag(vf[facei] & rv[facei]));
+        }
+    }
+    else
+    {
+        // fixedValue family (fixedValue, noSlip, rotatingWallVelocity,
+        // movingWallVelocity, flowRateInletVelocity, ...)
+        for (const vector& u : Up)
+        {
+            m = max(m, mag(u));
+        }
+    }
+
+    return m;
+}
+
+} // End anonymous namespace
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
@@ -21,6 +88,8 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
     kappa_(coupledDefaults::kappa),
     maxCflCuts_(coupledDefaults::maxCflCuts),
     beta_(coupledDefaults::lineSearchBeta),
+    mode_(coupledDefaults::lineSearchMode),
+    localFraction_(coupledDefaults::lineSearchLocalFraction),
     UrefMode_(coupledDefaults::UrefMode),
     UrefExplicit_(0),
     Uref_(0),
@@ -164,6 +233,25 @@ Foam::lineSearch::lineSearch(const dictionary& coupledDict)
             << "lineSearch.beta (CFL boost on a full step) must be a finite"
             << " value >= 1, got " << beta_ << exit(FatalIOError);
     }
+
+    mode_ = d.getOrDefault<word>("mode", word(coupledDefaults::lineSearchMode));
+    if (mode_ != "global" && mode_ != "local")
+    {
+        FatalIOErrorInFunction(d)
+            << "lineSearch.mode must be global or local, got " << mode_
+            << exit(FatalIOError);
+    }
+    localFraction_ = d.getOrDefault<doubleScalar>
+    (
+        "localFraction",
+        coupledDefaults::lineSearchLocalFraction
+    );
+    if (!(localFraction_ >= 0 && localFraction_ <= 1))
+    {
+        FatalIOErrorInFunction(d)
+            << "lineSearch.localFraction must be in [0, 1], got "
+            << localFraction_ << exit(FatalIOError);
+    }
 }
 
 
@@ -173,13 +261,15 @@ void Foam::lineSearch::setReference(const volVectorField& U)
 {
     const scalar Ufield = gMax(mag(U.primitiveField())());
 
+    // Only what the boundary conditions prescribe (D-074). A boundary value
+    // that merely copies the interior is already in Ufield.
     scalar Ubnd = 0;
     forAll(U.boundaryField(), patchi)
     {
         const fvPatchVectorField& Up = U.boundaryField()[patchi];
         if (!Up.coupled() && Up.size())
         {
-            Ubnd = max(Ubnd, max(mag(Up)()));
+            Ubnd = max(Ubnd, prescribedMagU(Up));
         }
     }
     reduce(Ubnd, maxOp<scalar>());
@@ -369,6 +459,102 @@ Foam::labelList Foam::lineSearch::offendingCells
 }
 
 
+Foam::doubleScalar Foam::lineSearch::omegaQuantile
+(
+    const blockScalarUList& dx,
+    labelList& violating
+) const
+{
+    // Per-cell step fraction that brings the cell's increment back to the
+    // bounds; histogram of log10 over [1e-8, 1), 20 bins per decade
+    scalarField omCell;
+    const labelList lim(limitedCells(dx, omCell));
+
+    constexpr label nDec = 8, perDec = 20, nBins = nDec*perDec;
+    labelList hist(nBins + 1, Zero);     // last bin: below 1e-8
+    forAll(omCell, k)
+    {
+        const scalar o = max(omCell[k], scalar(1e-30));
+        label b = label(std::floor(-std::log10(o)*perDec));
+        b = min(max(b, label(0)), nBins);
+        ++hist[b];
+    }
+    Pstream::listReduce(hist, sumOp<label>());
+
+    const label nTot = returnReduce(dx.size()/blockDim, sumOp<label>());
+    const scalar allowed = localFraction_*scalar(nTot);
+
+    // Bin b holds omega_P in (10^-(b+1)/perDec, 10^-b/perDec]. Going from
+    // the smallest omega_P upwards, accumulate the cells that would still
+    // violate at omega = the upper edge of the bins above; take the largest
+    // omega whose violator count stays within the allowance.
+    doubleScalar omega = 1;
+    label above = 0;                     // cells with omega_P below the edge
+    for (label b = 0; b <= nBins; ++b)
+    {
+        above += hist[b];
+    }
+    // above = all limited cells: they violate at omega = 1
+    for (label b = 0; b <= nBins && scalar(above) > allowed; ++b)
+    {
+        // Lower the step to the lower edge of bin b: its cells comply now
+        above -= hist[b];
+        omega = std::pow(10.0, -doubleScalar(b + 1)/perDec);
+    }
+
+    DynamicList<label> v;
+    forAll(lim, k)
+    {
+        if (omCell[k] < omega)
+        {
+            v.append(lim[k]);
+        }
+    }
+    violating.transfer(v);
+    return omega;
+}
+
+
+Foam::labelList Foam::lineSearch::limitedCells
+(
+    const blockScalarUList& dx,
+    scalarField& omegaCell
+) const
+{
+    // The bounds of omega(), applied per cell: omega_P brings the cell's
+    // own increment to fU Ustep and fp pstep
+    const label nCells = dx.size()/blockDim;
+    const scalar limU = fU_*UstepEff_;
+    const scalar limp = fp_*pstepEff_;
+
+    DynamicList<label> cells;
+    DynamicList<scalar> om;
+    for (label celli = 0; celli < nCells; ++celli)
+    {
+        const blockScalar* d = dx.cdata() + celli*blockDim;
+        const scalar dU = std::sqrt
+        (
+            sqr(scalar(d[0])) + sqr(scalar(d[1])) + sqr(scalar(d[2]))
+        );
+        const scalar dp = std::abs(scalar(d[blockP]));
+        if (dU > limU || dp > limp)
+        {
+            // GUARD: dU > limU >= 0 or dp > limp >= 0, so the violated
+            // denominator is > 0; the other one is guarded
+            const scalar o = min
+            (
+                limU/max(dU, cfVSmall<scalar>()),
+                limp/max(dp, cfVSmall<scalar>())
+            );
+            cells.append(celli);
+            om.append(min(o, scalar(1)));
+        }
+    }
+    omegaCell.transfer(om);
+    return labelList(std::move(cells));
+}
+
+
 void Foam::lineSearch::countViolations
 (
     const blockScalarUList& dx,
@@ -414,6 +600,8 @@ void Foam::lineSearch::writeSettings(dictionary& dict) const
     d.add("kappa", kappa_);
     d.add("maxCflCuts", maxCflCuts_);
     d.add("beta", beta_);
+    d.add("mode", mode_);
+    d.add("localFraction", localFraction_);
     dict.add("lineSearch", d);
     if (UrefMode_ == "explicit")
     {

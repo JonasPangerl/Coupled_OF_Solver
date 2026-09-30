@@ -19,12 +19,15 @@ Description
                            deferred correction, transpose stress, limited
                            non-orthogonal correction), implicit MRF, pressure
                            gradient column; momentumResidual() available
-      assembleContinuity(rDeltaTV)
+      assembleContinuity(rDeltaTV, rBeta)
                            PTC diagonal V/dt, abar, D, D_f, row 3 (divergence,
                            Rhie-Chow Laplacian, explicit RC source), pressure
                            reference, continuity row scaling (5.3f, applied
                            in double before the narrowing to blockScalar),
-                           residual and norms
+                           residual and norms, then the continuity
+                           pseudo-time term rBeta_P V/dt on the p-p diagonal
+                           of the remediation cells (D-075; after the
+                           residual, like the momentum PTC)
 
     Diagonal blocks are accumulated in double; every off-diagonal block is
     complete after its own face and narrowed once. The residual b - A x is
@@ -295,8 +298,18 @@ public:
             }
 
             //- Stage 2: PTC, D, continuity row, scaling, residual
-            //  rDeltaTV = V_P/dt_P per cell (after the local limit)
-            void assembleContinuity(const scalarField& rDeltaTV);
+            //  rDeltaTV = V_P/dt_P per cell (after the local limit).
+            //  rBeta = per-cell c/Uref^2 of the continuity pseudo-time term
+            //  (D-075), 0 where it is off; empty = off everywhere (the
+            //  default of every caller but coupledFoam). rBeta_P V_P/dt_P
+            //  goes on the p-p diagonal of the increment system AFTER the
+            //  residual is formed, so it limits the pressure step without
+            //  moving the converged solution.
+            void assembleContinuity
+            (
+                const scalarField& rDeltaTV,
+                const scalarField& rBeta = scalarField()
+            );
 
 
         // Diagnostics

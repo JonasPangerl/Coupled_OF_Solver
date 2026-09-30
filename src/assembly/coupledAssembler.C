@@ -485,7 +485,11 @@ void Foam::coupledAssembler::assembleMomentum
 }
 
 
-void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
+void Foam::coupledAssembler::assembleContinuity
+(
+    const scalarField& rDeltaTV,
+    const scalarField& rBeta
+)
 {
     const doubleScalar tStart = (timing_ ? diagnostics::clock() : 0);
 
@@ -793,6 +797,37 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
         b_[c*blockDim + blockP] = d*pRefValue_;
     }
 
+    // --- Continuity pseudo-time term (D-075), added to the p-p diagonal
+    //     only AFTER that diagonal has entered A x below, exactly like the
+    //     momentum PTC term (which is added after the momentum residual):
+    //     it multiplies p - p_old, which is 0 at the linearisation point,
+    //     so it belongs to the increment operator and not to the residual.
+    //     The converged solution is therefore independent of it.
+    //
+    //     Why it is needed: without it the pseudo-time step regularises
+    //     only U. p is solved as the instantaneous constraint, and a cell
+    //     with a mass defect gets dp ~ defect/D_f with D_f ~ dtau (the PTC
+    //     term is part of abar), i.e. dp ~ 1/dtau. Every CFL cut of the
+    //     sentinel then made the pressure step in the offending cells
+    //     LARGER, and their 4x4 blocks went singular (V/dtau against dtau):
+    //     F1 half-car, rejected min p -78e3 at CFL 6, -796e3 at CFL 0.05,
+    //     13772 block-ILU pivot fallbacks.
+    //
+    //     Why only in the remediation cells (rBeta_P = 0 elsewhere): on
+    //     every cell it is artificial compressibility, and although it is
+    //     ~1/(2 CFL) of a cell's Rhie-Chow diagonal (0.1 % at CFL 500), the
+    //     smoothest pressure modes see a Laplacian ~N^2 weaker than that
+    //     diagonal - so the term dominated them and slowed every global
+    //     pressure correction: T0 Re 100 went from 68 outer iterations to
+    //     > 300, with a contraction of 0.98 per iteration at CFL 500. On
+    //     the cells the solver already treats (static: bad geometry;
+    //     dynamic: flagged by the classification or the sentinel) it acts
+    //     where the 1/dtau growth was measured, and a set of that size
+    //     (F1: ~0.04 % of the cells) does not carry the global modes.
+    //     Not on the replaced row of the pressure reference cell.
+    const label refCellLocal = (needRef_ && pRefCell_ >= 0 ? pRefCell_ : -1);
+    const bool continuityPtc = (rBeta.size() == nCells);
+
     // --- Row 3 diagonal contribution to A x
     if constexpr (zeroCopy)
     {
@@ -809,6 +844,12 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
                 s += Dd[di(celli, blockP, c)]*x[c];
             }
             Ax_[celli*blockDim + blockP] += s;
+
+            if (continuityPtc && rBeta[celli] > 0 && celli != refCellLocal)
+            {
+                Dd[di(celli, blockP, blockP)] +=
+                    diagScalar(doubleScalar(rBeta[celli])*rDeltaTV[celli]);
+            }
 
             diagScalar* __restrict__ blk = Dd + celli*blockSize;
             for (label k = 0; k < blockP*blockDim; ++k)
@@ -833,6 +874,12 @@ void Foam::coupledAssembler::assembleContinuity(const scalarField& rDeltaTV)
                 s += Dd[di(celli, blockP, c)]*x[c];
             }
             Ax_[celli*blockDim + blockP] += s;
+
+            if (continuityPtc && rBeta[celli] > 0 && celli != refCellLocal)
+            {
+                Dd[di(celli, blockP, blockP)] +=
+                    diagScalar(doubleScalar(rBeta[celli])*rDeltaTV[celli]);
+            }
         }
 
         // --- Narrow the diagonal blocks (row 3 scaled by s_p in double)

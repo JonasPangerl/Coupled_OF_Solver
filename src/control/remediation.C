@@ -1144,6 +1144,79 @@ void Foam::remediation::markDynamic(const labelUList& cells)
 }
 
 
+Foam::label Foam::remediation::activatePending(const label extraLayers)
+{
+    // D-076. Before this existed, a rollback only set pending_, and pending_
+    // is consumed by updateDynamic - which runs after an ACCEPTED step, and
+    // not at all during a start-up with startupReference exclude. In a
+    // cascade of rollbacks no step is accepted, so the cells the sentinel
+    // had just named were never treated, and every retry was assembled
+    // exactly like the step that had failed (F1 half-car 2026-09-30: nDyn=0
+    // through five consecutive rollbacks).
+    if (!dynamicEnabled_)
+    {
+        pending_ = false;
+        return 0;
+    }
+
+    boolList mark(pending_);
+    pending_ = false;
+
+    // Collective: the layer count is the same on every rank (the rollback
+    // decision and the consecutive-rollback count are global)
+    const label nLayers = nLayers_ + max(extraLayers, label(0));
+    for (label layer = 0; layer < nLayers; ++layer)
+    {
+        growLayer(mark);
+    }
+
+    label nEntered = 0;
+    bool changed = false;
+    nDynamic_ = 0;
+    nSticky_ = 0;
+    nRamping_ = 0;
+    forAll(age_, celli)
+    {
+        if (mark[celli])
+        {
+            if (age_[celli] < 0)
+            {
+                ++entries_[celli];
+                ++nEntered;
+                changed = true;
+            }
+            if (rampLeft_[celli] > 0)
+            {
+                // Leaves its release ramp: beta and dt change
+                changed = true;
+            }
+            // A member restarts its quiet count; other cells do not age,
+            // no step was accepted
+            age_[celli] = 0;
+            rampLeft_[celli] = 0;
+        }
+        const bool isIn = (age_[celli] >= 0);
+        const bool sticky =
+            (stickyAfter_ > 0 && entries_[celli] >= stickyAfter_);
+        nDynamic_ += isIn;
+        nSticky_ += (isIn && sticky);
+        nRamping_ += (rampLeft_[celli] > 0);
+    }
+
+    reduce(nDynamic_, sumOp<label>());
+    reduce(nSticky_, sumOp<label>());
+    reduce(nRamping_, sumOp<label>());
+    reduce(nEntered, sumOp<label>());
+
+    if (returnReduceOr(changed))
+    {
+        ++dynamicVersion_;
+    }
+
+    return nEntered;
+}
+
+
 void Foam::remediation::updateDynamic
 (
     const volVectorField& U,

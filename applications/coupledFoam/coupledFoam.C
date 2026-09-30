@@ -144,6 +144,24 @@ int main(int argc, char *argv[])
             << "coupled.potentialClip must be 0 (off) or a factor >= 1 of"
             << " Uref, got " << potentialClip << exit(FatalIOError);
     }
+    // D-077: pressure of the potential-flow start. potentialFoam without
+    // -writep leaves p as it was (uniform), which is not the pressure of the
+    // velocity field it wrote. bernoulli: p = H - |U|^2/2 in every cell,
+    // after the clip, with H from the fixed-pressure boundary - the exact
+    // pressure of a potential flow. keep: p as read (the behaviour up to
+    // 2026-09-30).
+    const word potentialPressure =
+        coupledDict.getOrDefault<word>
+        (
+            "potentialPressure",
+            word(coupledDefaults::potentialPressure)
+        );
+    if (potentialPressure != "keep" && potentialPressure != "bernoulli")
+    {
+        FatalIOErrorInFunction(coupledDict)
+            << "coupled.potentialPressure must be keep or bernoulli, got "
+            << potentialPressure << exit(FatalIOError);
+    }
     const bool ftz =
         coupledDict.getOrDefault<bool>("ftz", coupledDefaults::ftz);
 
@@ -325,6 +343,7 @@ int main(int argc, char *argv[])
         eff.add("maxIter", maxIter);
         eff.add("potentialInit", potentialInit);
         eff.add("potentialClip", potentialClip);
+        eff.add("potentialPressure", potentialPressure);
         startup.writeSettings(eff);
         eff.add("nonOrthLimiter", assembler.noc().limiter());
         ptc.writeSettings(eff);
@@ -809,38 +828,117 @@ int main(int argc, char *argv[])
                 << ", mode " << ls.UrefMode() << "), pref " << ls.pref()
                 << endl;
 
-            // D-057: the potential-flow peaks at sharp edges are singular;
-            // clip |U| to potentialClip Uref, keep the total head in p
-            if (potentialInit && !restarted && potentialClip > 0)
+            // Potential-flow start of a fresh potentialInit run
+            if (potentialInit && !restarted)
             {
-                const scalar Umax = potentialClip*ls.Uref();
                 vectorField& Ui = U.primitiveFieldRef();
-                scalarField& pi = p.primitiveFieldRef();
-                label nClip = 0;
-                scalar Upeak = 0;
-                forAll(Ui, celli)
+
+                // D-057: the peaks at sharp edges are singular in potential
+                // flow; clip |U| to potentialClip Uref, direction kept. U
+                // only (D-077): the former head-keeping shift of p in the
+                // clipped cells created isolated spikes on a uniform p.
+                if (potentialClip > 0)
                 {
-                    const scalar mu = mag(Ui[celli]);
-                    Upeak = max(Upeak, mu);
-                    if (mu > Umax)
+                    const scalar Umax = potentialClip*ls.Uref();
+                    label nClip = 0;
+                    scalar Upeak = 0;
+                    DynamicList<label> clipped;
+                    forAll(Ui, celli)
                     {
-                        // GUARD: mu > Umax > 0
-                        Ui[celli] *= Umax/mu;
-                        pi[celli] += scalar(0.5*(sqr(mu) - sqr(Umax)));
-                        ++nClip;
+                        const scalar mu = mag(Ui[celli]);
+                        Upeak = max(Upeak, mu);
+                        if (mu > Umax)
+                        {
+                            // GUARD: mu > Umax > 0
+                            Ui[celli] *= Umax/mu;
+                            clipped.append(celli);
+                            ++nClip;
+                        }
+                    }
+                    reduce(nClip, sumOp<label>());
+                    reduce(Upeak, maxOp<scalar>());
+                    // D-082: the clipped cells are the singular points of the
+                    // potential start - known before the first step. They
+                    // start under dynamic treatment (with its halo) instead
+                    // of being found by the sentinel: on the F1 half-car
+                    // iteration 1 was rolled back every time (p -66e3 in the
+                    // cells the full step overshot), which cut the CFL from
+                    // 5 to 1.25 and held it for nHold iterations.
+                    rem.markDynamic(clipped);
+                    const label nStartDyn = rem.activatePending();
+                    Info<< "coupledFoam: " << nStartDyn << " cells (clipped"
+                        << " cells and halo) start in the dynamic set" << endl;
+                    if (nClip)
+                    {
+                        U.correctBoundaryConditions();
+                    }
+                    ls.setFieldScale(U);
+                    Info<< "coupledFoam: potentialClip " << potentialClip
+                        << ": " << nClip << " cells clipped to |U| = "
+                        << Umax << " (peak " << Upeak << ")" << endl;
+                }
+
+                // D-077: the pressure that belongs to this velocity field.
+                // For a potential flow U.grad(U) = grad(|U|^2/2), so
+                // p = H - |U|^2/2 balances the convective acceleration
+                // exactly and the first coupled step starts from an
+                // inviscid equilibrium instead of from p = const.
+                if (potentialPressure == "bernoulli")
+                {
+                    // Total head H: area-weighted mean of p + |U|^2/2 over
+                    // the faces where p is prescribed (a mixed p with its
+                    // valueFraction as weight). totalPressure gives H = p0
+                    // exactly; a fixedValue outlet gives p_out + |U_out|^2/2.
+                    doubleScalar sumH = 0, sumA = 0;
+                    forAll(p.boundaryField(), patchi)
+                    {
+                        const fvPatchScalarField& pp = p.boundaryField()[patchi];
+                        if (pp.coupled() || !pp.fixesValue())
+                        {
+                            continue;
+                        }
+                        const fvPatchVectorField& Up = U.boundaryField()[patchi];
+                        const scalarField& A =
+                            mesh.magSf().boundaryField()[patchi];
+                        const auto* mp = isA<mixedFvPatchScalarField>(pp);
+                        forAll(pp, pf)
+                        {
+                            const doubleScalar w =
+                                A[pf]*(mp ? mp->valueFraction()[pf] : 1);
+                            sumH += w*(pp[pf] + 0.5*magSqr(Up[pf]));
+                            sumA += w;
+                        }
+                    }
+                    reduce(sumH, sumOp<doubleScalar>());
+                    reduce(sumA, sumOp<doubleScalar>());
+                    const bool fromBoundary = (sumA > 0);
+                    const scalar H =
+                        fromBoundary
+                      ? scalar(sumH/sumA)                           // GUARD
+                      : scalar(0.5*sqr(ls.Uref()));
+
+                    scalarField& pi = p.primitiveFieldRef();
+                    forAll(pi, celli)
+                    {
+                        pi[celli] = H - scalar(0.5*magSqr(Ui[celli]));
+                    }
+                    p.correctBoundaryConditions();
+
+                    Info<< "coupledFoam: potentialPressure bernoulli:"
+                        << " p = H - |U|^2/2, H " << H << " ("
+                        << (fromBoundary
+                            ? "fixed-pressure boundary"
+                            : "Uref^2/2, no fixed-pressure boundary")
+                        << "), p in [" << gMin(pi) << ", " << gMax(pi)
+                        << "]" << endl;
+                    if (potentialClip == 0)
+                    {
+                        WarningInFunction
+                            << "potentialPressure bernoulli without"
+                            << " potentialClip: the singular peaks of the"
+                            << " potential start enter p unclipped" << endl;
                     }
                 }
-                reduce(nClip, sumOp<label>());
-                reduce(Upeak, maxOp<scalar>());
-                if (nClip)
-                {
-                    U.correctBoundaryConditions();
-                    p.correctBoundaryConditions();
-                }
-                ls.setFieldScale(U);
-                Info<< "coupledFoam: potentialClip " << potentialClip
-                    << ": " << nClip << " cells clipped to |U| = " << Umax
-                    << " (peak " << Upeak << ")" << endl;
             }
             Info<< "coupledFoam: Ustep " << ls.UstepBase() << " (mode "
                 << ls.stepMode() << ", Ufield0 " << ls.Ufield0()
@@ -902,6 +1000,7 @@ int main(int argc, char *argv[])
         doubleScalar omega = 1;
         label cuts = 0;
         label nLocLim = 0;
+        label nLocStep = 0;     // cells shortened by the local step control
         doubleScalar Rraw = 0;
         doubleScalar eta = 0;
         bool skipStep = false;
@@ -940,7 +1039,32 @@ int main(int argc, char *argv[])
                 (diag.active(3) ? &locRatio : nullptr)
             );
             dfields.record(rDTV, cflF, beta);                   // C6
-            assembler.assembleContinuity(rDTV);
+            // Continuity pseudo-time term c V/(dtau Uref^2) (D-075) on the
+            // remediation cells only (static or dynamic; see the assembler
+            // for why not on all cells), with the same local dtau as the
+            // momentum PTC (incl. the local limit and the remediation
+            // cflFactor). Rebuilt every iteration: a sentinel rollback puts
+            // cells into the dynamic set for the retry (D-076).
+            scalarField rBetaAC;
+            if (ptc.continuityFactor() > 0)
+            {
+                const scalar rb = scalar
+                (
+                    ptc.continuityFactor()
+                   /max(sqr(ls.Uref()), cfVSmall<scalar>())     // GUARD
+                );
+                const boolList& isStat = rem.isStatic();
+                const labelList& age = rem.age();
+                rBetaAC.resize(mesh.nCells(), Zero);
+                forAll(rBetaAC, celli)
+                {
+                    if (isStat[celli] || age[celli] >= 0)
+                    {
+                        rBetaAC[celli] = rb;
+                    }
+                }
+            }
+            assembler.assembleContinuity(rDTV, rBetaAC);
             tAsm += ta.elapsedTime();
             if (sfd.active())
             {
@@ -1094,31 +1218,39 @@ int main(int argc, char *argv[])
 
             omega = (solveFailed ? 0 : ls.omega(dx));
 
-            if (diag.active(1))
+            // D-079 local step control: when only a few cells violate the
+            // fU/fp bound, take the FULL Newton step everywhere and put
+            // those cells into the dynamic set for the next iteration
+            // (dynamic cflFactor, continuity pseudo-time term: a locally
+            // smaller step from then on) - instead of one omega, the
+            // smallest over all cells, which on the F1 half-car (20.6 M
+            // cells) held 99 % of the steps below 1 and cut the global CFL
+            // each time omega fell under omegaMin. The step itself is not
+            // shortened cell by cell: a first version did that, and the
+            // clipped pressure increments broke continuity locally (rp grew
+            // twenty-fold over 15 iterations, then Cd jumped). A cell whose
+            // full step goes unphysical is the sentinel's (D-076). More
+            // limited cells than localFraction: the step is too big
+            // globally, and the global path below applies unchanged.
+            //
+            // Second version (quantile): the full step with up to 1 % of the
+            // cells unbounded let 162 091 cells take an unlimited step on the
+            // F1 case (iteration 24: Cl -2.6 -> -7.6). Now omega is the
+            // quantile at which at most localFraction (default 0.05 %) of the
+            // cells violate the bounds; those few go into the dynamic set,
+            // every other cell keeps the bounds, and a handful of cells no
+            // longer set the step for 20 M.
+            nLocStep = 0;
+            if (!solveFailed && ls.localMode() && omega < 1)
             {
-                const doubleScalar t0 = diagnostics::clock();
-                trialsJ.beginObject();
-                trialsJ.add("CFL", doubleScalar(ptc.CFL()));
-                trialsJ.add("eta", doubleScalar(eta));
-                trialsJ.add("linIts", perf.nIterations);
-                trialsJ.add("linConverged", perf.converged);
-                trialsJ.add("linFinal", doubleScalar(perf.finalResidual));
-                trialsJ.add("failed", solveFailed);
-                trialsJ.add("omega", doubleScalar(omega));
-                if (diag.active(3) && !solveFailed)
+                labelList viol;
+                const doubleScalar omQ = ls.omegaQuantile(dx, viol);
+                if (omQ >= ls.omegaMin())
                 {
-                    // Physicality violations (rank-local) at the full step
-                    // and at the line-search omega
-                    label nU = 0, np = 0;
-                    ls.countViolations(dx, 1, nU, np);
-                    trialsJ.add("violU", nU);
-                    trialsJ.add("violP", np);
-                    ls.countViolations(dx, omega, nU, np);
-                    trialsJ.add("violUAtOmega", nU);
-                    trialsJ.add("violPAtOmega", np);
+                    rem.markDynamic(viol);
+                    nLocStep = returnReduce(viol.size(), sumOp<label>());
+                    omega = max(omega, omQ);
                 }
-                trialsJ.endObject();
-                tDiagMain += diagnostics::clock() - t0;
             }
 
             if
@@ -1133,7 +1265,16 @@ int main(int argc, char *argv[])
                 // hold of the cut, take the step with omegaMin. A failed
                 // solve still repeats (B4 counting unchanged).
                 const bool atCflMin = (ptc.CFL() <= ptc.CFLmin());
-                ptc.decrease(ls.kappa());
+                if (solveFailed)
+                {
+                    // D-081: remember where the linear solver failed
+                    ptc.linearFailure();
+                }
+                ptc.decrease
+                (
+                    ls.kappa(),
+                    solveFailed ? "cut:linearSolverFailed" : "cut:lineSearchOmega"
+                );
                 ++cuts;
                 ++nCflCutsTotal;
                 if (solveFailed || !atCflMin)
@@ -1206,7 +1347,7 @@ int main(int argc, char *argv[])
 
         if (skipStep)
         {
-            ptc.decrease(sen.cflFactor());
+            ptc.decrease(sen.cflFactor(), "cut:linearSolverFailed");
             Info<< "coupledFoam: linear solve failed after " << cuts
                 << " CFL cuts at iteration " << iter
                 << ", step skipped, CFL -> " << ptc.CFL() << endl;
@@ -1309,14 +1450,27 @@ int main(int argc, char *argv[])
         {
             sen.restore(U, p, phi, kPtr, omegaPtr, nutPtr);
             flushHistory("rollback");
-            ptc.decrease(sen.cflFactor());
+            // D-081: a rejected step also marks the CFL it was taken at,
+            // like a failed linear solve (F1 half-car: rollback at CFL 28.5,
+            // iteration 102, after which EXP grew straight back)
+            ptc.linearFailure();
+            ptc.decrease(sen.cflFactor(), "cut:sentinelRollback");
             rem.markDynamic(chk.offending);
+            // D-076: the retry is assembled with the offending cells already
+            // under dynamic treatment (upwind, dynamic cflFactor, increment
+            // clipping), and every further consecutive rollback widens that
+            // region by one layer - so no retry repeats the step that failed,
+            // even with the global CFL on its floor
+            const label extraLayers = sen.consecutive() - 1;
+            const label nEntered = rem.activatePending(extraLayers);
             rolledBack = true;
 
             Info<< "coupledFoam: sentinel rollback at iteration " << iter
                 << " (nonFinite " << chk.nNonFinite << ", max|U| "
                 << chk.maxMagU << ", p [" << chk.minP << ", " << chk.maxP
-                << "]), CFL -> " << ptc.CFL() << endl;
+                << "]), CFL -> " << ptc.CFL() << ", " << nEntered
+                << " cells into the dynamic set (nDyn " << rem.nDynamic()
+                << ", +" << extraLayers << " layers)" << endl;
 
             if (sen.exhausted())
             {
@@ -1353,6 +1507,14 @@ int main(int argc, char *argv[])
         if (!rolledBack)
         {
             const label dynVersion = rem.dynamicVersion();
+            // D-079: the cells the local step control shortened enter the
+            // dynamic set now, also during startupReference exclude - like
+            // the sentinel's cells (D-076), they are measured misbehaviour,
+            // not the field classification that exclude is about
+            if (nLocStep > 0)
+            {
+                rem.activatePending();
+            }
             // startupReference exclude (D-057): no dynamic marking before
             // the start-up ramp ends (rollback marking stays active)
             if (!ls.excludeDynamic())
@@ -1473,6 +1635,12 @@ int main(int argc, char *argv[])
         }
 
         // --- Log line (12.1)
+        // D-083: the wall time of a clean iteration feeds the EFF CFL rule
+        if (!rolledBack && !skipStep && cuts == 0)
+        {
+            ptc.recordCost(iterTimer.elapsedTime(), perf.nIterations, tSolve);
+        }
+
         Info<< "CF| iter=" << iter
             << " CFL=" << ptc.CFL()
             << " omega=" << omega
@@ -1490,6 +1658,11 @@ int main(int argc, char *argv[])
             << " nStat=" << rem.nStatic()
             << " nDyn=" << rem.nDynamic()
             << " nLocLim=" << nLocLim
+            << " nLocStep=" << nLocStep
+            << " ceil=" << ptc.ceiling()
+            << " eff=" << ptc.efficiency()
+            << " solveShare=" << ptc.solveShare()
+            << " cflWhy=" << (ptc.reason().empty() ? word("keep") : ptc.reason())
             << " nRollback=" << sen.nRollbacks()
             << " nClamped=" << nClamped
             << " eta=" << eta
@@ -2033,6 +2206,7 @@ int main(int argc, char *argv[])
         j.add("Ufield0", ls.Ufield0());
         j.add("startupReference", ls.startupReference());
         j.add("potentialClip", potentialClip);
+        j.add("potentialPressure", potentialPressure);
         j.add("iterations", iter);
         j.add("converged", converged);
         j.add("finalR", lastR);

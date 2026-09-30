@@ -37,6 +37,12 @@ constexpr doubleScalar relTol = 0.05;
 constexpr label maxIter = 200;
 constexpr label minIter = 1;                     // B1: never a zero increment
 constexpr label restart = 10;                    // B1: FGMRES/GMRES restart
+// FGMRES stagnation stop (D-080): after a restart cycle, give up when the
+// true residual has not dropped below stagnationRatio x its value at the end
+// of the previous cycle; 0 = off (maxIter only, the behaviour up to
+// 2026-09-30). A solve that does not converge then costs a few cycles
+// instead of maxIter iterations (F1 half-car: 262 s per failed solve).
+constexpr doubleScalar stagnationRatio = 0;
 // B7: restart restartLarge above restartLargeCells cells unless restart is
 // given (solvers.coupled.restartLarge, restartLargeCells; D-066)
 constexpr label restartLarge = 6;
@@ -182,7 +188,7 @@ constexpr doubleScalar iluPivotGrowthLimit = 20;
 constexpr doubleScalar orthogonalityTolerance = 0;
 
 // PTC (spec 7.1)
-constexpr const char* cflStrategy = "mRDM";      // mRDM | EXP | SER
+constexpr const char* cflStrategy = "mRDM";      // mRDM | EXP | SER | EFF
 constexpr doubleScalar CFL0 = 5;
 constexpr doubleScalar CFLmin = 1;
 constexpr doubleScalar CFLmax = 500;
@@ -190,6 +196,36 @@ constexpr doubleScalar ptcGamma = 1;
 constexpr doubleScalar betaMax = 1.5;
 constexpr doubleScalar betaExp = 1.1;
 constexpr label nHold = 10;
+// Pseudo-time term of the continuity equation (D-075): c V/(dtau Uref^2)
+// on the p-p diagonal of the increment system in the remediation cells
+// (static or dynamic), 0 = off (the behaviour up to 2026-09-30). With it a
+// smaller pseudo-time step also shrinks the pressure update there, instead
+// of growing it like 1/dtau. Not on all cells: there it slows the global
+// pressure modes (T0 Re 100: 68 -> > 300 iterations).
+constexpr doubleScalar ptcContinuityFactor = 1;
+// CFL ceiling after a failed linear solve (D-081): the CFL may not grow back
+// above ptcFailCeiling x the CFL of the failed attempt; the ceiling rises by
+// ptcCeilingRelax per accepted iteration. 0 = off (the behaviour up to
+// 2026-09-30: a failed solve halves the CFL, which then climbs back to the
+// same failing value - F1 half-car: failures at CFL 15.8, 22.8, 18.5).
+constexpr doubleScalar ptcFailCeiling = 0;
+constexpr doubleScalar ptcCeilingRelax = 1.02;
+// EFF strategy (D-083): hill climbing on the pseudo-time advanced per second
+// of wall time, CFL / seconds per iteration; a step that lowers it by more
+// than ptcEffTol reverses the direction.
+constexpr doubleScalar ptcEffTol = 0.02;
+// EFF target share of the linear solve in the wall time of an iteration: if
+// the solve cost grows like CFL^b, the pseudo-time per second is largest
+// where that share is 1/b. F1 half-car: optimum CFL ~43 at a share of 62 %
+// (42 % at CFL 23, 73 % at 55).
+constexpr doubleScalar ptcEffSolveShare = 0.6;
+// EFF measurement window (user, 2026-09-30: decide on an average, not on one
+// noisy iteration): after a CFL change the first iteration is skipped, then
+// ptcEffWindow iterations at that CFL are averaged before the next decision.
+// The step then aims at the target share with solve cost ~ CFL^ptcEffExponent
+// (clamped to x0.5..x2 per decision).
+constexpr label ptcEffWindow = 4;
+constexpr doubleScalar ptcEffExponent = 1.6;
 constexpr label maxLinFails = 3;                 // B4
 // B4 failure definition (linFailPolicy): "strict" = not converged to eta within
 // maxIter is a failure; "reduction" = accepted if finite and the true
@@ -239,10 +275,24 @@ constexpr const char* startupReference = "exclude";   // none | ramp | exclude
 
 // Potential-flow start (coupled.potentialClip, D-057): before the first
 // coupled step of a fresh potentialInit start, |U| is clipped to
-// potentialClip Uref and p is shifted by (|U|^2 - |Uclip|^2)/2 (the total
-// head of the potential solution is kept). The peaks at sharp edges are
-// singular in potential flow (T4a 4.3, T4b 8.8 U_inf). 0 = off.
+// potentialClip Uref. The peaks at sharp edges are singular in potential
+// flow (T4a 4.3, T4b 8.8, F1 half-car 19.2 U_inf). 0 = off.
+// Until 2026-09-30 the clip also shifted p by (|U|^2 - |Uclip|^2)/2 in the
+// clipped cells only, "to keep the total head". But potentialFoam without
+// -writep leaves p uniform, so there was no head to keep: the shift put
+// isolated spikes of up to 4.4e5 next to p = 0 and the first assembly died
+// of an overflow (D-077). The clip now changes U only; a consistent
+// pressure is potentialPressure's job.
 constexpr doubleScalar potentialClip = 0;
+
+// Pressure of the potential-flow start (coupled.potentialPressure, D-077):
+// keep = p as read; bernoulli = p = H - |U|^2/2 in every cell after the
+// clip, H the area-weighted mean of p + |U|^2/2 over the fixed-pressure
+// boundary faces (1/2 Uref^2 without one). For a potential flow that is
+// the exact pressure: the pressure gradient balances the convective
+// acceleration from the first step on. Use it together with potentialClip,
+// or the singular peaks enter p unclipped.
+constexpr const char* potentialPressure = "keep";   // keep | bernoulli
 
 // Line search (spec 7.2)
 constexpr doubleScalar fU = 0.3;
@@ -251,6 +301,13 @@ constexpr doubleScalar omegaMin = 0.1;
 constexpr doubleScalar kappa = 0.5;
 constexpr label maxCflCuts = 3;
 constexpr doubleScalar lineSearchBeta = 1.0;
+// Local step control (D-079): global = one omega for all cells, the smallest
+// (the behaviour up to 2026-09-30); local = omega is the quantile at which at
+// most lineSearchLocalFraction of the cells violate the fU/fp bounds; those
+// cells go into the dynamic set, the others keep the bounds. Below omegaMin
+// the global path (CFL cut) applies as before.
+constexpr const char* lineSearchMode = "global";     // global | local
+constexpr doubleScalar lineSearchLocalFraction = 0.0005;
 
 // Local limit (spec 7.3)
 constexpr bool localLimitEnabled = true;

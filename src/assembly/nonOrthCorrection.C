@@ -154,18 +154,27 @@ Foam::nonOrthCorrection::correctionFromGrad
     const surfaceScalarField& sn = tsn();
 
     // Native limitedSnGrad limiter, lambda per face (static faces use the
-    // static limiter)
+    // static limiter):
+    //     l = min(lambda |sn| / ((1 - lambda) |c|), 1),   c *= l
+    // Evaluated as a comparison first, so that the quotient is only formed
+    // when it is < 1. The previous form divided by (1 - lambda)|c| +
+    // cfVSmall: on every orthogonal face c is exactly 0, the quotient became
+    // lambda |sn| * 1e300 and overflowed to inf once |sn| > ~1.8e8/lambda.
+    // min(inf, 1) = 1 and 0*1 = 0 would have been harmless, but the overflow
+    // itself raises SIGFPE under FOAM_SIGFPE. That is how a pressure
+    // gradient of 4.4e8 (potentialClip on the F1 case, 2026-09-30) killed
+    // the first assembly. Wherever the old form did not overflow, this one
+    // gives the same bits: 1e-300 is below the rounding unit of any
+    // denominator it was added to, and for c = 0 both give c = 0.
     auto limit = [](const scalar lambda, const scalar snf, scalar& cf)
     {
-        // GUARD: denominator >= cfVSmall (native limitedSnGrad uses the
-        // precision-dependent small constant, D3)
-        const scalar l =
-            min
-            (
-                lambda*mag(snf)/((1 - lambda)*mag(cf) + cfVSmall<scalar>()),
-                scalar(1)
-            );
-        cf *= l;
+        const scalar num = lambda*mag(snf);
+        const scalar den = (1 - lambda)*mag(cf);
+        if (num < den)
+        {
+            // GUARD: den > num >= 0, so den > 0 and the quotient is < 1
+            cf *= num/den;
+        }
     };
 
     scalarField& ci = c.primitiveFieldRef();

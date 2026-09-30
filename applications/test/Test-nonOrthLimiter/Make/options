@@ -1,0 +1,16 @@
+COUPLEDFOAM_MARCH ?= -march=native
+WM_OSTYPE ?= POSIX
+
+EXE_INC = \
+    -Wfloat-conversion -Werror -fno-math-errno -fopenmp-simd $(COUPLEDFOAM_MARCH) \
+    -I../../../src/lnInclude \
+    -I../common \
+    -isystem $(LIB_SRC)/OpenFOAM/lnInclude \
+    -isystem $(LIB_SRC)/OSspecific/$(WM_OSTYPE)/lnInclude \
+    -isystem $(LIB_SRC)/finiteVolume/lnInclude \
+    -isystem $(LIB_SRC)/meshTools/lnInclude
+
+EXE_LIBS = \
+    -L$(FOAM_USER_LIBBIN) -lcoupledFoam \
+    -lfiniteVolume \
+    -lmeshTools

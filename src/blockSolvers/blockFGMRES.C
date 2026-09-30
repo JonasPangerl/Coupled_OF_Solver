@@ -41,8 +41,24 @@ Foam::blockFGMRES::blockFGMRES
                 dict.getOrDefault<label>("gmresRestart", coupledDefaults::restart)
             )
         )
+    ),
+    stagnationRatio_
+    (
+        dict.getOrDefault<doubleScalar>
+        (
+            "stagnationRatio",
+            coupledDefaults::stagnationRatio
+        )
     )
-{}
+{
+    // Negated comparison also rejects non-finite input
+    if (!(stagnationRatio_ >= 0 && stagnationRatio_ < 1))
+    {
+        FatalIOErrorInFunction(dict)
+            << "stagnationRatio must be in [0, 1) (0 = off), got "
+            << stagnationRatio_ << exit(FatalIOError);
+    }
+}
 
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
@@ -116,6 +132,9 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
         perf.converged = true;
         return perf;
     }
+
+    // True residual at the end of the previous restart cycle (D-080)
+    doubleScalar cyclePrev = perf.initialResidual;
 
     while (perf.nIterations < maxIter_)
     {
@@ -340,6 +359,26 @@ Foam::blockSolverPerformance Foam::blockFGMRES::solve
             break;
         }
 
+        // D-080: a full cycle that did not reduce the true residual below
+        // stagnationRatio x the previous cycle's will not converge within
+        // maxIter either; stop it now, unconverged, so that the caller cuts
+        // the CFL after a few cycles instead of after maxIter iterations
+        if
+        (
+            stagnationRatio_ > 0
+         && perf.finalResidual > stagnationRatio_*cyclePrev
+        )
+        {
+            if (debug)
+            {
+                Info<< typeName << ": stagnation after " << perf.nIterations
+                    << " iterations (" << perf.finalResidual << " > "
+                    << stagnationRatio_ << " x " << cyclePrev << ")" << endl;
+            }
+            break;
+        }
+        cyclePrev = perf.finalResidual;
+
         ++perf.nRestarts;
     }
 
@@ -354,6 +393,7 @@ void Foam::blockFGMRES::writeSettings(dictionary& dict) const
 {
     blockSolver::writeSettings(dict);
     dict.add("restart", restart_);
+    dict.add("stagnationRatio", stagnationRatio_);
 }
 
 

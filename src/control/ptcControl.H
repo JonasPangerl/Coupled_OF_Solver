@@ -71,7 +71,7 @@ class ptcControl
 {
 public:
 
-    enum class strategy { mRDM, EXP, SER };
+    enum class strategy { mRDM, EXP, SER, EFF };
 
 private:
 
@@ -88,6 +88,15 @@ private:
         doubleScalar betaMax_;
         doubleScalar betaExp_;
         label nHold_;
+
+        //- Factor of the continuity pseudo-time term (D-075), 0 = off
+        doubleScalar continuityFactor_;
+
+        //- CFL ceiling after a failed linear solve (D-081): factor (0 =
+        //  off), relaxation per accepted iteration, current ceiling
+        doubleScalar failCeiling_;
+        doubleScalar ceilingRelax_;
+        doubleScalar ceiling_;
 
         bool localLimit_;
         scalar fLoc_;
@@ -109,6 +118,42 @@ private:
 
             //- Iterations left in the hold
             label holdRemaining_;
+
+            //- EFF (D-083): CFL of the last accepted iteration, the (CFL,
+            //  seconds) sample of the last clean iteration, the previous
+            //  efficiency, search direction, step factor and streak
+            doubleScalar pendingCFL_;
+            doubleScalar sampleCFL_;
+            doubleScalar sampleCost_;
+            bool haveSample_;
+            doubleScalar effPrev_;
+            doubleScalar effPrevCFL_;
+            //- Best efficiency since the last reversal: the reference of
+            //  the reversal test (D-083)
+            doubleScalar effBest_;
+            label sampleLin_;
+            doubleScalar sampleSolve_;
+            doubleScalar effShare_;
+            doubleScalar shareSm_;
+            label effWindow_;
+            doubleScalar effExponent_;
+            //- Samples of the current window: count (-1 = skip the next,
+            //  the first after a change), CFL, sums of share and cost
+            label winN_;
+            doubleScalar winCFL_;
+            doubleScalar winShare_;
+            doubleScalar winCost_;
+            label effPrevLin_;
+            doubleScalar effTol_;
+            label effDir_;
+            doubleScalar effStep_;
+            label effStreak_;
+
+            //- Why the CFL changed in this iteration (D-083 log): cut and
+            //  update reasons, joined by '+'; reset by beginIteration()
+            word reason_;
+            //- Last measured efficiency CFL/seconds (EFF), -1 before
+            doubleScalar effLast_;
 
             //- Cells limited by 7.3 in the last call (global)
             label nLocalLimited_;
@@ -148,6 +193,47 @@ public:
 
         doubleScalar CFL() const noexcept { return CFL_; }
         doubleScalar CFLmin() const noexcept { return CFLmin_; }
+
+        //- Current CFL ceiling (D-081); CFLmax while none is set
+        doubleScalar ceiling() const noexcept { return ceiling_; }
+
+        //- A linear solve failed, or the sentinel rejected the step, at
+        //  the current CFL (D-081): set the ceiling to failCeiling x CFL
+        //  (no-op when failCeiling is 0). Call before decrease().
+        void linearFailure();
+
+        //- EFF (D-083): wall-clock seconds of the iteration just finished,
+        //  for a clean iteration only (accepted, no CFL cut, no rollback);
+        //  pairs with the CFL that iteration was accepted at
+        void recordCost
+        (
+            const doubleScalar seconds,
+            const label linIters,
+            const doubleScalar solveSeconds
+        );
+
+        //- EFF: smoothed share of the linear solve in the iteration, -1 before
+        doubleScalar solveShare() const noexcept { return shareSm_; }
+
+        //- Why the CFL changed in this iteration (CF| line)
+        const word& reason() const noexcept { return reason_; }
+
+        //- Last measured CFL per wall-clock second (EFF), -1 before
+        doubleScalar efficiency() const noexcept { return effLast_; }
+
+        //- Cut the CFL by factor with a hold, recording why (D-083 log)
+        void decrease(const doubleScalar factor, const word& why);
+
+        //- EFF: current step factor and direction (diagnostics)
+        doubleScalar effStep() const noexcept { return effStep_; }
+        label effDir() const noexcept { return effDir_; }
+
+        //- Factor c of the continuity pseudo-time term
+        //  c V/(dtau Uref^2) in the remediation cells (D-075); 0 = off
+        doubleScalar continuityFactor() const noexcept
+        {
+            return continuityFactor_;
+        }
         doubleScalar Rprev() const noexcept { return Rprev_; }
         label holdRemaining() const noexcept { return holdRemaining_; }
         label nHold() const noexcept { return nHold_; }

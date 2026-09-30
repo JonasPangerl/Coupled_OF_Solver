@@ -355,6 +355,17 @@ public:
         //- Mark cells for the dynamic set at the next update
         void markDynamic(const labelUList& cells);
 
+        //- Put the marked cells into the dynamic set NOW, with nLayers +
+        //  extraLayers halo layers, without ageing any other cell (no step
+        //  was accepted). For the sentinel rollback (D-076): the retry has
+        //  to be assembled with the offending cells already treated, and
+        //  updateDynamic only runs after an accepted step, i.e. never in a
+        //  rollback cascade. Independent of startupReference exclude, which
+        //  concerns the field classification, not cells the sentinel has
+        //  caught. Returns the number of cells that entered (global).
+        //  Collective.
+        label activatePending(const label extraLayers = 0);
+
         //- Dynamic update (8.2) at the end of an outer iteration
         void updateDynamic
         (
