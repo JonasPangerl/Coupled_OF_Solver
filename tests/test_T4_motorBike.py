@@ -1,5 +1,5 @@
 """T4 - motorBike, kOmegaSST, snappyHexMesh (spec 13). Heavy,
-CF_HEAVY_NP ranks (default 10, D-031).
+CF_HEAVY_NP ranks (default 48, D-073).
 
 Two meshes: (a) tutorial refinement (~350 k cells), (b) surface level
 (6 6), features 7, refinementBox 5 (target 1-2 M cells, D-031; the
@@ -53,8 +53,8 @@ sys.path.insert(0, str(cfenv.REPO / "bench"))
 import run_bench  # noqa: E402  (harness criterion, rank timing)
 
 TEMPLATE = "T4_motorBike"
-# Ranks of the heavy cases (the user caps this machine at 10 cores, D-031)
-NP = int(os.environ.get("CF_HEAVY_NP", "10"))
+# Ranks of the heavy cases (user cap: 48 of the 64 cores, D-073)
+NP = int(os.environ.get("CF_HEAVY_NP", "48"))
 WINDOW = run_bench.WINDOW           # 100
 TOL = run_bench.TOL                 # 0.002
 TOL_CD = 0.01

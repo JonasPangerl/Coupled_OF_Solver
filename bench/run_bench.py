@@ -138,8 +138,8 @@ from cflib import logs, post, precision, results   # noqa: E402
 
 WRAPPER = REPO / "bench" / "rank_wrapper.sh"
 
-# Ranks of the heavy benchmark cases (user cap: 10 cores, D-031)
-HEAVY_NP = int(os.environ.get("CF_HEAVY_NP", "10"))
+# Ranks of the heavy benchmark cases (user cap: 48 of the 64 cores, D-073)
+HEAVY_NP = int(os.environ.get("CF_HEAVY_NP", "48"))
 
 # Case table: template, extra Allrun args, monitor, iteration budgets, ranks
 CASES = {

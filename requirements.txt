@@ -4,3 +4,5 @@ matplotlib
 pytest
 pyyaml
 numpy-stl
+scipy
+vtk

@@ -40,10 +40,11 @@ Native solvers (`simpleFoam`) stay untouched and serve as the reference.
 | Compiler | GCC >= 13 | |
 | MPI | OpenMPI >= 4.1 (`FOAM_MPI=sys-openmpi`) | |
 | Decomposition | `scotch-system` | see the Scotch pitfall in section 8 |
-| Python | 3.12 in a venv | numpy 1.26, matplotlib 3.6, pytest 9.1, vtk 9.2, pandas, pyyaml, numpy-stl |
+| Python | 3.12 in a venv | `requirements.txt`: numpy, pandas, matplotlib, pytest, pyyaml, numpy-stl, scipy, vtk |
 | ParaView | `pvbatch` (system package) | only for the 3D report figures |
 | LaTeX | `pdflatex` + `latexmk` | only for the report PDFs |
-| Hardware here | 16 physical / 32 logical cores, 94 GB RAM | T4a needs ~10 ranks, T4b ~1.7 M cells |
+| Hardware (original) | 16 physical / 32 logical cores, 94 GB RAM | every result of `campaign-20260923` was measured here with 10 ranks |
+| Hardware (since 2026-09-29) | AWS EC2 `c7a.16xlarge`: 64 physical cores (no SMT), 128 GB RAM | heavy runs use at most 48 ranks, D-073; timings are NOT comparable with the 10-rank campaign |
 
 Install OpenFOAM (Ubuntu):
 
@@ -64,7 +65,9 @@ never run `apt` on `openfoam*` while work is in progress.
 
     # 2. python venv (the harness, benchmark and report run from it)
     python3 -m venv ~/OF/venv
-    ~/OF/venv/bin/pip install numpy pandas matplotlib pytest pyyaml numpy-stl vtk
+    ~/OF/venv/bin/pip install -r ~/coupledFoam/requirements.txt
+    # = numpy pandas matplotlib pytest pyyaml numpy-stl scipy vtk
+    # scipy is needed by tests/test_unit.py (cKDTree, cross-rank matching)
 
     # 3. build (exactly one OpenFOAM environment sourced)
     source /usr/lib/openfoam/openfoam2606/etc/bashrc
@@ -191,6 +194,13 @@ residual control, so a fair SP-vs-DP benchmark is still open (D-070).
 5. `tests/test_unit.py::test_blockGAMG_cycles` fails (cycle iteration
    ordering) - pre-existing, recorded, not a regression.
 6. T4b and T5 have no results in the current campaign by user decision.
+7. On the 2026-09-29 workstation the git-ignored `results/` tree of the
+   campaign is absent, and LaTeX and ParaView are not installed: the
+   report PDFs cannot be rebuilt there until the result JSONs are
+   copied over (D-073 item 5).
+8. Section 10 below refers to `cases/T_mrf_mixerVessel2D`; that case is
+   not in the repository. MRF was verified on the `simpleFoam/
+   mixerVessel2D` tutorial (DECISIONS.md, line 142 area), set up ad hoc.
 
 ## 10. Running a different case (e.g. an external-aerodynamics half-car)
 

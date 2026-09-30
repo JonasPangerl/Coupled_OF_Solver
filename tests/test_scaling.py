@@ -4,8 +4,8 @@ CF_SCALING_MESH=a runs it on T4a instead, CF_SCALING_ITERS overrides the
 iteration count (final re-run budget of 12 h, user 2026-09-22: T4a, 150
 iterations, ranks 1,2,4,8,12,16 on physical cores).
 
-Ranks 1, 2, 4, 8 and NP = CF_HEAVY_NP (default 10; the spec's 16 is
-capped by the 10-core user directive D-031; CF_SCALING_RANKS overrides),
+Ranks 1, 2, 4, 8, 16 and NP = CF_HEAVY_NP (default 48: the user caps this
+machine at 48 of its 64 cores, D-073; CF_SCALING_RANKS overrides),
 300 iterations each,
 coupledFoam and simpleFoam (SIMPLEC), same mesh and decomposition method
 (scotch). Time per iteration is measured inside the solver loop from the
